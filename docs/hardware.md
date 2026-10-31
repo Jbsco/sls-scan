@@ -10,7 +10,7 @@ calibration board, coded targets, scale bars and surface preparation.
 | Final camera | 12 MP IMX477 class: Raspberry Pi HQ camera (on a Pi capture node) or a USB module, C/CS mount | $50 to $100 | Full-resolution static views |
 | Preview camera | 1 MP monochrome global shutter, OV9281 class, USB, with a hardware trigger input, 100 to 120 fps | $75 to $140 | The live path, synchronized to the projector |
 | Lens | 6 mm CS-mount, manual iris and focus | $25 | f ≈ 6 mm / 1.55 µm ≈ 3,870 px, field 1.05 × 0.78 m at 1 m |
-| Projector | Used 1080p DLP, 2,000 lumens or more, manual focus, HDMI | $80 to $150 | DLP, not LCD. Keystone off. Lamp hours checked |
+| Projector | Used DLP with a native 1920 × 1080 DMD, 2,000 ANSI lumens or more, manual focus reaching 1 m, HDMI, 120 Hz input a plus | $80 to $150 | Requirements below |
 | Bar | 40 × 40 aluminum extrusion, 0.6 m, with T-nuts, corner brackets and two camera plates | $40 | Rigidity holds the calibration |
 | Tripod | A photo tripod rated for 3 kg or more, with a 3/8″ or 1/4″ stud to the bar | $30 to $60 | |
 | Calibration board | ChArUco, A2, printed and mounted flat on foam board | $15 | The printed square size, measured with calipers, sets the scale |
@@ -21,6 +21,46 @@ calibration board, coded targets, scale bars and surface preparation.
 
 About $350 to $500 from nothing with both cameras. A tethered mirrorless camera through gphoto2 replaces
 the first two lines when optics and dynamic range matter more than cost.
+
+## Projector requirements
+
+- **DLP, native 1920 × 1080.** A digital micromirror device keeps a binary edge sharp
+  where LCD and LCoS panels blur and polarize it. "1080p supported" on a listing means
+  an input the unit downscales to a smaller DMD, so the specification sheet's native
+  resolution is what counts. The preview path's phase pitch and the final path's
+  0.5 mm lateral sampling assume the full 1920 columns.
+- **Brightness.** 2,000 ANSI lumens or more for a 1 m field in a dim room with a
+  short exposure. Brightness scales with field area: a 500 lumen LED pico unit covers
+  a 0.3 m field for small parts and nothing larger.
+- **Focus and throw.** Manual focus with a minimum projection distance at or under
+  1 m, and a throw ratio (distance over image width) of 1.2 to 1.5 so a 1 m field sits
+  at 1.2 to 1.5 m. Small parts at 0.3 to 0.5 m need a short-throw unit or one whose
+  minimum focus reaches that close.
+- **Refresh.** 60 Hz is the floor. A unit that accepts 1920 × 1080 at 120 Hz doubles
+  the preview rate. Its EDID has to offer the native mode so the host drives it pixel
+  for pixel.
+- **Temporal processing off.** Keystone, auto keystone, image shift, frame
+  interpolation, dynamic iris, eco or auto brightness, and any "brilliant color"
+  mode are disabled, because each one changes the pattern or its brightness over time.
+  A game or low-latency mode, where offered, shortens the input delay the sync has to
+  absorb.
+- **The color wheel.** A single-chip DLP shows red, green and blue in sequence through
+  a wheel at a multiple of the frame rate, so an exposure shorter than a frame catches
+  a fraction of the wheel and the brightness varies frame to frame. The camera
+  exposure is a whole number of projector frames (16.7 ms at 60 Hz), which integrates
+  a full wheel cycle, or the patterns are projected in one color and the exposure is
+  set by trial against a flat target until frames repeat within 1 %. LED and
+  laser-phosphor units have no lamp flicker and are the upgrade for the preview path.
+- **Gamma.** Every unit is non-linear. A ramp projected and captured gives the
+  response, and the phase-shift patterns are pre-compensated with its inverse, else
+  the decoded phase carries a periodic error.
+- **Sync output.** Consumer units have none, so the capture node times the trigger
+  from its own vertical blank. A DLP development kit (LightCrafter 4500 at 912 × 1140,
+  LightCrafter 6500 at 1920 × 1080, binary patterns above 2 kHz, trigger in and out) is
+  the Phase 10 candidate for a preview at the camera's frame rate.
+- **Used-market checks.** Lamp hours under half the rated life, no dead mirrors (a
+  white field shows them as fixed black dots), the fan noise acceptable for an hour of
+  scanning.
 
 ## Rig geometry
 

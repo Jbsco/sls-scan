@@ -90,7 +90,7 @@ YAML and PLY files with the application. `DESIGN.md` D11 has the reasoning.
 | Final camera | 12 MP, IMX477 class (Raspberry Pi HQ camera on a Pi capture node, or a USB module), 6 mm lens | Full-resolution static views; f ≈ 3,870 px, a 1.05 × 0.78 m field at 1 m |
 | Preview camera | 1 MP monochrome global shutter, OV9281 class, USB, hardware trigger | The live path at the projector rate; global shutter freezes each pattern |
 | GPU | Any Vulkan-capable card (AMD or NVIDIA on Linux), or Mesa lavapipe on the CPU | One set of WGSL kernels for preview, final processing and the scene |
-| Projector | Used 1080p DLP, 2,000 lumens or more, manual focus, keystone off | DLP keeps binary patterns sharp; the depth of field of about ±0.25 m sets the depth band per view |
+| Projector | Used DLP with a native 1920 × 1080 DMD, 2,000 ANSI lumens or more, manual focus to 1 m, temporal processing off | DLP keeps binary patterns sharp; `docs/hardware.md` lists the requirements |
 | Bar | 40 × 40 aluminum extrusion, camera and projector at a 0.35 m baseline toed in to cross at 1 m, on a tripod | The calibration holds only while the pair does not move relative to each other |
 | Calibration board | ChArUco, printed flat on foam board | One board calibrates the camera, the projector and the pair |
 | Targets and scale bars | Printed ArUco targets, two bars with targets at a caliper-measured spacing | Registration across views and an independent check of scale |
