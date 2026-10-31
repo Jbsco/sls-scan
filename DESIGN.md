@@ -90,3 +90,46 @@ renderer, Python, NumPy and pytest. Jobs run with that host account's access, wh
 a private repository of one's own equals running the gates locally. At a public flip the
 workflows go back to `ubuntu-latest` and the runner is removed, because a public
 repository's fork pull requests would otherwise execute on the host.
+
+## D11. Live scanning, the GPU and the languages (2026-10-31)
+
+The static pipeline of D5 is about 30 projector frames per view, half a second at
+60 Hz with the scene still, so a live scan is a different path and not a faster
+version of this one. The target is a preview at 10 to 30 depth frames per second,
+with the final object captured at full resolution and processed afterwards.
+
+- **Preview path.** Three- or four-step phase shift at one pitch, unwrapped against
+  the previous frame and the model instead of a Gray code sequence, from a global-shutter
+  camera at 1 MP synchronized to the projector. At 60 Hz that is 15 to 20 depth frames
+  per second, at 120 Hz 30 to 40. A one-shot pattern matched by stereo is the fallback
+  for coverage-only preview at camera rate. Frames are fused into a coarse TSDF volume
+  for display, with poses from the coded targets and ICP.
+- **Final path.** The full Gray code and phase shift sequence per view at the full
+  camera resolution, processed after capture on the GPU (seconds per view) or the CPU
+  (tens of seconds), then registered and meshed as in D7.
+- **GPU and fallback.** The kernels run through wgpu, the WebGPU API over Vulkan, which
+  serves both an AMD and an NVIDIA card on Linux through their Vulkan drivers, in WGSL
+  compute shaders that share buffers with the 3D view. The CPU fallback is Mesa's
+  software Vulkan implementation (lavapipe) running the same shaders unchanged, slower,
+  plus the reference implementation for the pure core, so no kernel exists twice.
+  Vendor-only paths (CUDA, ROCm, Accelerate's PTX backend) are out, because the two
+  machines carry different vendors.
+- **Languages.** The application (capture, synchronization, kernels, fusion, the panels
+  and the 3D scene) is Rust with wgpu and egui, chosen over C for memory safety at the
+  same speed and over Python for the live loop's latency and the single-binary
+  deployment. Python stays for the offline tooling where OpenCV has no equal: the
+  calibration solve, target detection development, and mesh post-processing with
+  Open3D, exchanging YAML and PLY files with the application. Haskell is the candidate
+  for the executable reference of the pure core (pattern codes, decoding arithmetic,
+  triangulation): it generates the vectors the kernels are checked against, as a second
+  implementation in a different language catches what a port of the same code repeats.
+  Haskell is not the kernel language, since Accelerate targets only NVIDIA through
+  PTX, and Futhark, which does target AMD and NVIDIA and a multicore CPU from one
+  source, is kept as the alternative kernel language if WGSL proves limiting.
+- **Modes and markers.** Static (view, reorient, view, registered on targets),
+  continuous (the rig moves slowly while the preview path runs and fuses), and keyed
+  (the operator names the target IDs that define the object's frame, so a scan aligns
+  to datums the way the job needs). The panels are configuration (devices, calibration,
+  pattern set, exposure), preview and processing (live view, coverage, capture, the
+  deferred queue), and the scene (the final mesh with its datums, scale bars and
+  residual report, and measurement tools).
