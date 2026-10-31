@@ -7,9 +7,11 @@ calibration board, coded targets, scale bars and surface preparation.
 
 | Item | Specification | Price | Notes |
 |---|---|---|---|
-| Final camera | 12 MP IMX477 class: Raspberry Pi HQ camera (on a Pi capture node) or a USB module, C/CS mount | $50 to $100 | Full-resolution static views |
-| Preview camera | 1 MP monochrome global shutter, OV9281 class, USB, with a hardware trigger input, 100 to 120 fps | $75 to $140 | The live path, synchronized to the projector |
-| Lens | 6 mm CS-mount, manual iris and focus | $25 | f ≈ 6 mm / 1.55 µm ≈ 3,870 px, field 1.05 × 0.78 m at 1 m |
+| Final camera | Raspberry Pi HQ camera, IMX477, 4056 × 3040, 1.55 µm pixels, C/CS mount, on the Pi capture node | $50 | Full-resolution static views at 10 fps, faster binned |
+| Preview camera | Raspberry Pi Global Shutter camera, IMX296, 1456 × 1088, 3.45 µm pixels, C/CS mount, external trigger input, on the Pi capture node | $50 | The live path at up to 60 fps, triggered per pattern |
+| Capture node | Raspberry Pi 5 with both CSI connectors used, HDMI to the projector, a GPIO line to the trigger input, gigabit Ethernet to the host | owned or $80 | Display timing, trigger and capture on one clock |
+| USB alternative | A 1 MP OV9281-class USB global-shutter camera with a trigger input ($75 to $140) and a 12 MP USB module, on the host | optional | The same capture interface without a Pi |
+| Lenses | 6 mm CS-mount, manual iris and focus, one per camera | $25 each | HQ: f ≈ 3,870 px, field 1.05 × 0.78 m at 1 m. GS: f ≈ 1,740 px, field 0.84 × 0.63 m at 1 m |
 | Projector | Used DLP with a native 1920 × 1080 DMD, 2,000 ANSI lumens or more, manual focus reaching 1 m, HDMI, 120 Hz input a plus | $80 to $150 | Requirements below |
 | Bar | 40 × 40 aluminum extrusion, 0.6 m, with T-nuts, corner brackets and two camera plates | $40 | Rigidity holds the calibration |
 | Tripod | A photo tripod rated for 3 kg or more, with a 3/8″ or 1/4″ stud to the bar | $30 to $60 | |
@@ -19,7 +21,7 @@ calibration board, coded targets, scale bars and surface preparation.
 | Spray | Matte scanning spray or dry developer | $15 to $25 | Gloss and black surfaces |
 | Host | A Linux machine with a Vulkan-capable GPU (AMD or NVIDIA), HDMI out for the projector, USB 3 for the cameras | owned | Mesa lavapipe runs the same kernels on the CPU without a card |
 
-About $350 to $500 from nothing with both cameras. A tethered mirrorless camera through gphoto2 replaces
+About $300 to $450 from nothing with both cameras and a Pi 5. A tethered mirrorless camera through gphoto2 replaces
 the first two lines when optics and dynamic range matter more than cost.
 
 ## Projector requirements
@@ -100,10 +102,16 @@ the first two lines when optics and dynamic range matter more than cost.
 
 ## Live path
 
-- **Synchronization.** The projector's frame is the clock. The preview camera is
-  triggered per frame, from the projector's sync output where the unit offers one, or
-  from the host's own frame timing with the exposure set shorter than the frame, and the
-  decode matches frames to patterns by their timestamps.
+- **Synchronization.** The projector's frame is the clock. The capture node flips
+  each pattern on the display's vertical blank and raises the trigger line in the same
+  handler, the Global Shutter camera exposes for a whole number of projector frames,
+  and the decode matches frames to patterns by their timestamps. The HQ camera, rolling
+  shutter, serves the final path, where each pattern is held until its frame is read
+  out in full.
+- **Preview dimensionality.** With the Global Shutter camera's 6 mm lens (f ≈ 1,740 px)
+  on the 0.35 m baseline at 1 m, δz = z²·δp/(f·b) is 0.16 mm at δp = 0.1 px and 0.5 mm
+  at 0.3 px, with 0.58 mm lateral sampling: coarser than the final path by the ratio
+  of the two sensors' pixel counts, and enough to show coverage and gaps.
 - **Rate.** A 60 Hz projector and a four-step cycle give 15 depth frames per second,
   a three-step cycle 20. A unit that accepts 120 Hz at 1080p doubles both. A DLP
   development kit with binary patterns above 2 kHz lifts the ceiling to the camera's

@@ -23,10 +23,12 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   vectors the kernels are later checked against. Acceptance: a flat plate fits a plane
   with an RMS under 0.2 mm over 0.5 m, and a scale bar measures within 0.2 mm in one
   view.
-- Phase 3, open. The application shell (Rust, wgpu, egui). Device discovery, the three
-  panels, calibration loading, pattern display on the projector output, triggered
-  capture from the global-shutter camera, frame timestamps. Acceptance: pattern frames
-  captured in order at the projector rate with no drops over a minute.
+- Phase 3, open. The application shell (Rust, wgpu, egui) and the capture node. The
+  three panels, calibration through the frontend (D12), the capture interface with its
+  two implementations (the Pi node of D13 streaming over Ethernet, USB cameras on the
+  host), pattern display flipped on the vertical blank, the trigger line, frame
+  timestamps. Acceptance: pattern frames captured in order at the projector rate with
+  no drops over a minute, and a calibration run end to end from the panel.
 - Phase 4, open. GPU decode and preview. WGSL kernels for phase decode, unwrapping,
   triangulation and the coarse TSDF, the live point cloud and volume in the scene,
   the CPU fallback through lavapipe. Acceptance: 15 depth frames per second at 1 MP
@@ -61,9 +63,6 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
 
 - The projector refresh the preview can rely on: 60 Hz is the floor for a used office
   DLP, 120 Hz doubles the preview rate if the unit accepts it at 1080p.
-- Whether the final path's camera is a 12 MP USB module on the application host or
-  the Raspberry Pi HQ camera on a Pi capture node, which decides the Phase 3 capture
-  interface.
 - The projector's gamma: measured per unit and linearized in the phase shift, or
   avoided with a binary-only decode at lower precision.
 - Which CAD import size holds the cab: decimation target in faces, measured on the

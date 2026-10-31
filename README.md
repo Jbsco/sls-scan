@@ -87,8 +87,9 @@ YAML and PLY files with the application. `DESIGN.md` D11 has the reasoning.
 
 | Part | Choice | Why |
 |---|---|---|
-| Final camera | 12 MP, IMX477 class (Raspberry Pi HQ camera on a Pi capture node, or a USB module), 6 mm lens | Full-resolution static views; f ≈ 3,870 px, a 1.05 × 0.78 m field at 1 m |
-| Preview camera | 1 MP monochrome global shutter, OV9281 class, USB, hardware trigger | The live path at the projector rate; global shutter freezes each pattern |
+| Final camera | Raspberry Pi HQ camera, IMX477, 12 MP, 6 mm lens, on the Pi capture node | Full-resolution static views; f ≈ 3,870 px, a 1.05 × 0.78 m field at 1 m |
+| Preview camera | Raspberry Pi Global Shutter camera, IMX296, 1456 × 1088, triggered per pattern, on the Pi capture node | The live path at the projector rate; the global shutter freezes each pattern |
+| Capture node | Raspberry Pi 5: both cameras, HDMI to the projector, a GPIO trigger line, gigabit Ethernet to the host | Display timing, trigger and capture on one clock; USB cameras on the host are the alternative |
 | GPU | Any Vulkan-capable card (AMD or NVIDIA on Linux), or Mesa lavapipe on the CPU | One set of WGSL kernels for preview, final processing and the scene |
 | Projector | Used DLP with a native 1920 × 1080 DMD, 2,000 ANSI lumens or more, manual focus to 1 m, temporal processing off | DLP keeps binary patterns sharp; `docs/hardware.md` lists the requirements |
 | Bar | 40 × 40 aluminum extrusion, camera and projector at a 0.35 m baseline toed in to cross at 1 m, on a tripod | The calibration holds only while the pair does not move relative to each other |
