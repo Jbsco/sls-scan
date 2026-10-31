@@ -142,3 +142,19 @@ coverage as they accumulate, runs the solve as a subprocess of the bundled tool,
 reports the reprojection errors against the Phase 1 limits, and loads the resulting
 YAML into the active rig. A failed or poor solve is reported with the poses that hurt
 it, so the operator recaptures those rather than everything.
+
+## D13. The capture node (2026-10-31)
+
+The Raspberry Pi cameras are CSI devices and attach only to a Pi, so a Pi 5 is the
+capture node: both cameras on its two CSI connectors (the HQ camera for the final
+path, the Global Shutter camera for the preview path), its HDMI output driving the
+projector, the patterns flipped on the display's vertical blank, and a GPIO line
+from the page-flip handler triggering the Global Shutter camera's external trigger
+input, so the pattern timing and the exposure share one clock. Frames stream to the
+host application over gigabit Ethernet: the preview at 1456 × 1088 mono and 30 fps is
+about 48 MB/s, binned 2 × 2 a quarter of that, and a final view of 30 full-resolution
+frames moves in a few seconds. A USB global-shutter camera and a USB 12 MP module on
+the host remain the alternative where no Pi is wanted, behind the same capture
+interface, with the host's own frame timing as the trigger source. The node keeps the
+real-time work (display timing, trigger, capture) on a machine made for it and leaves
+the GPU work and the panels on the host.
