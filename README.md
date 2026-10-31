@@ -21,10 +21,11 @@ static instead of swept, in the open, and under the operator's control end to en
 
 ## Status
 
-Phase 0 of `ROADMAP.md`: the scaffold. The pattern generator and its Gray code
-encode and decode are implemented and tested. Calibration, capture, decoding and the
-rest of the pipeline are planned in `docs/pipeline.md` and start with Phase 1 once the
-hardware in `docs/hardware.md` is on the bench.
+Phase 0 of `ROADMAP.md`, the scaffold, is complete: the pattern generator and its Gray
+code encode and decode are implemented and tested, and `verify.do` is green.
+Calibration, capture, decoding and the rest of the pipeline are planned in
+`docs/pipeline.md` and start with Phase 1 once the hardware in `docs/hardware.md` is on
+the bench.
 
 ## Applications
 
