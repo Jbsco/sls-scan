@@ -133,3 +133,12 @@ with the final object captured at full resolution and processed afterwards.
   pattern set, exposure), preview and processing (live view, coverage, capture, the
   deferred queue), and the scene (the final mesh with its datums, scale bars and
   residual report, and measurement tools).
+
+## D12. Calibration through the frontend (2026-10-31)
+
+The calibration solve stays in Python (D11), and the operator never runs it by hand.
+The configuration panel captures the board poses, shows the detection count and
+coverage as they accumulate, runs the solve as a subprocess of the bundled tool,
+reports the reprojection errors against the Phase 1 limits, and loads the resulting
+YAML into the active rig. A failed or poor solve is reported with the poses that hurt
+it, so the operator recaptures those rather than everything.
