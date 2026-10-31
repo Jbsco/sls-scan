@@ -7,7 +7,8 @@ calibration board, coded targets, scale bars and surface preparation.
 
 | Item | Specification | Price | Notes |
 |---|---|---|---|
-| Camera | Raspberry Pi HQ camera, IMX477, 4056 × 3040, 1.55 µm pixels, C/CS mount | $50 | 12 MP of static capture, scriptable from a Raspberry Pi or over USB |
+| Final camera | 12 MP IMX477 class: Raspberry Pi HQ camera (on a Pi capture node) or a USB module, C/CS mount | $50 to $100 | Full-resolution static views |
+| Preview camera | 1 MP monochrome global shutter, OV9281 class, USB, with a hardware trigger input, 100 to 120 fps | $75 to $140 | The live path, synchronized to the projector |
 | Lens | 6 mm CS-mount, manual iris and focus | $25 | f ≈ 6 mm / 1.55 µm ≈ 3,870 px, field 1.05 × 0.78 m at 1 m |
 | Projector | Used 1080p DLP, 2,000 lumens or more, manual focus, HDMI | $80 to $150 | DLP, not LCD. Keystone off. Lamp hours checked |
 | Bar | 40 × 40 aluminum extrusion, 0.6 m, with T-nuts, corner brackets and two camera plates | $40 | Rigidity holds the calibration |
@@ -16,9 +17,9 @@ calibration board, coded targets, scale bars and surface preparation.
 | Targets | ArUco markers printed on adhesive paper, 20 to 40 | $5 | Three or more per view, left in place for the whole scan |
 | Scale bars | Two bars with a target at each end, lengths measured with calipers | $10 | Different orientations in every scan |
 | Spray | Matte scanning spray or dry developer | $15 to $25 | Gloss and black surfaces |
-| Controller | A Raspberry Pi 4 or 5, or any Linux machine with HDMI out and a USB camera | owned | The projector is the second display |
+| Host | A Linux machine with a Vulkan-capable GPU (AMD or NVIDIA), HDMI out for the projector, USB 3 for the cameras | owned | Mesa lavapipe runs the same kernels on the CPU without a card |
 
-About $250 to $350 from nothing. A tethered mirrorless camera through gphoto2 replaces
+About $350 to $500 from nothing with both cameras. A tethered mirrorless camera through gphoto2 replaces
 the first two lines when optics and dynamic range matter more than cost.
 
 ## Rig geometry
@@ -56,3 +57,17 @@ the first two lines when optics and dynamic range matter more than cost.
   not needed for structured light, which carries its own texture in the patterns.
 - Doors closed or night work against ambient light. The patterns need contrast, and
   sunlight through a windshield washes them out.
+
+## Live path
+
+- **Synchronization.** The projector's frame is the clock. The preview camera is
+  triggered per frame, from the projector's sync output where the unit offers one, or
+  from the host's own frame timing with the exposure set shorter than the frame, and the
+  decode matches frames to patterns by their timestamps.
+- **Rate.** A 60 Hz projector and a four-step cycle give 15 depth frames per second,
+  a three-step cycle 20. A unit that accepts 120 Hz at 1080p doubles both. A DLP
+  development kit with binary patterns above 2 kHz lifts the ceiling to the camera's
+  frame rate, and is a candidate, not a requirement.
+- **Both cameras on the bar.** The preview and final cameras are calibrated to the
+  projector on the same board in one session, so the preview's coverage and the final's
+  views share the frame.

@@ -72,3 +72,23 @@ Open3D statistical outlier removal, normal estimation, Poisson or ball-pivot
 reconstruction, hole filling, quadric decimation to the face count CAD holds, and a
 rigid alignment to the datum points measured on the object. Export as PLY, OBJ and STL
 with a report of the scale bar lengths and the datum residuals.
+
+## Preview path
+
+The live path trades resolution and code length for rate. The projector cycles three or
+four phase-shifted sinusoids at one pitch, the global-shutter camera captures each
+at the projector rate, and every complete cycle gives a depth frame: phase decode,
+unwrapping against the previous frame and the fused model, triangulation, and TSDF
+integration at a coarse voxel size, all in WGSL kernels. Poses come from the coded
+targets seen in the camera frames, refined by ICP against the model. The scene draws
+the volume and the live cloud as the rig moves, which shows coverage and gaps. The
+preview is never the deliverable: it tells the operator where to point the rig.
+
+## Application
+
+The Rust application owns the devices and the loop: projector output as a fullscreen
+surface, triggered capture from the preview camera and sequenced capture from the
+final camera, timestamps per frame, the WGSL kernels, the fused volume, the deferred
+processing queue, and the three panels. Calibration YAML comes from the Python tools
+and goes back out with each scan. The final views are written as image stacks with a
+manifest for the deferred path, and the results as PLY, OBJ and STL with the report.
