@@ -78,3 +78,15 @@ rig flex, and is measured, never assumed, by the acceptance tests.
 Captures, calibrations and scan outputs are large and machine-specific and live under
 `data/`, which is ignored. Calibration results worth keeping are exported as small YAML
 files that a rig directory can track by choice.
+
+## D10. A self-hosted runner while the repository is private (2026-10-31)
+
+GitHub provides hosted runners to public repositories; a private one supplies its own,
+so the workflows run on a self-hosted runner, with `runs-on: [self-hosted, linux]`. The steps that only the hosted Ubuntu image needs
+(the apt install of the markdown renderer, the Python setup and the package install)
+are gated on `runner.environment == 'github-hosted'` rather than deleted, so a return
+to hosted runners is a one-line change per job. The runner's host supplies the
+renderer, Python, NumPy and pytest. Jobs run with that host account's access, which for
+a private repository of one's own equals running the gates locally. At a public flip the
+workflows go back to `ubuntu-latest` and the runner is removed, because a public
+repository's fork pull requests would otherwise execute on the host.
