@@ -411,3 +411,25 @@ second-order windows of 25 px by default, since one view is its result. `slscan 
 and `slscan sweep-bench` match every frame of a sweep, so they default to affine windows
 and take `--order 2`. Second-order matching on every frame waits on GPU kernels
 (Phase 4).
+
+## D29. Second-order refinement on the GPU (2026-11-02)
+
+The second-order refinement of D28 runs as WGSL compute kernels through wgpu
+(`app/src/refine.wgsl`), in single precision. A first pass takes Scharr gradients of
+the right image. A second pass runs one invocation per sample, which rebuilds the
+Gauss-Newton normal equations over its window, scales them by their diagonal and solves
+them by Cholesky. Window coordinates are scaled to ±1 so that single precision suffices.
+Sampling is bicubic with OpenCV's coefficients and zero outside the image. An exact
+bicubic of that form moved NumPy results by at most 0.00003 px against `cv2.remap`.
+
+`slscan stereo-vectors` writes a rectified view with its affine matches and their NumPy
+refinement, and `sls-scan refine-check` compares the kernel's output with it. On the
+virtual bench plate, a Radeon RX 7900 GRE refines 6296 samples with 25 px windows in
+302 ms with upload and readback. Kept flags agree on every sample, and refined points
+differ by at most 0.00012 px. NumPy spends about 8.8 s on this stage: 11.1 s for the
+view with second-order windows less 2.3 s with affine windows (D28).
+
+One invocation per sample runs its iterations serially, so the 296 samples of a sphere
+view take 234 ms. A workgroup per sample, sharing the window's pixels, is the next step
+toward 15 depth frames per second (Phase 4). Rectification, coarse disparity and the
+affine stage stay on the CPU.
