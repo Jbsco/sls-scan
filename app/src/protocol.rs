@@ -42,6 +42,9 @@ pub struct SequenceRequest {
     pub steps: u32,
     #[serde(default = "one")]
     pub frames: u32,
+    /// Trigger rate of a stereo set in pairs per second, or 0 for as fast as the node can.
+    #[serde(default)]
+    pub rate_hz: u32,
 }
 
 const fn one() -> u32 {
@@ -178,6 +181,7 @@ mod tests {
         let request: SequenceRequest =
             serde_json::from_str(r#"{"set":"scan","pitch":32,"steps":4}"#)?;
         assert_eq!(request.frames, 1);
+        assert_eq!(request.rate_hz, 0);
         Ok(())
     }
 

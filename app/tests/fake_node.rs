@@ -46,6 +46,7 @@ fn client_receives_a_full_scan_sequence() -> std::io::Result<()> {
         pitch: 16,
         steps: 4,
         frames: 1,
+        rate_hz: 0,
     };
     let mut received = Vec::new();
     let stats = capture(&address, &request, Duration::ZERO, |event| {
@@ -72,6 +73,7 @@ fn client_reports_missing_frames() -> std::io::Result<()> {
         pitch: 16,
         steps: 4,
         frames: 1,
+        rate_hz: 0,
     };
     let stats = capture(&address, &request, Duration::ZERO, |_| {})?;
     assert!(server.join().is_ok());
@@ -101,6 +103,7 @@ fn client_waits_for_a_late_node() -> std::io::Result<()> {
         pitch: 16,
         steps: 4,
         frames: 1,
+        rate_hz: 0,
     };
     let stats = capture(
         &address.to_string(),
@@ -121,6 +124,7 @@ fn client_without_wait_fails_fast() -> std::io::Result<()> {
         pitch: 16,
         steps: 4,
         frames: 1,
+        rate_hz: 0,
     };
     assert!(capture(&address.to_string(), &request, Duration::ZERO, |_| {}).is_err());
     Ok(())
