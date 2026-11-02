@@ -32,9 +32,8 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   the CPU fallback through lavapipe. Acceptance: 15 depth frames per second at 1.6 MP on either machine's
   GPU, 3 or more on the CPU fallback, and kernel outputs within tolerance of the Phase 2
   reference on recorded frames. Kernels for phase-shift decode (D22), rectification
-  (D31), block disparity (D35), second-order refinement (D29, D30) and direct matching
-  (D33) are in place, chained into a depth frame that takes 276 ms for a plate view
-  (D36).
+  (D31), block disparity (D35), refinement (D29, D30) and direct matching (D33) chain
+  into a depth frame of 61 ms for a plate view on a desktop GPU (D36, D38).
 - Phase 5, in progress. Continuous scanning. Pose tracking from geometry and from markers on the
   mat around the part, TSDF fusion of the depth stream, loop closure on revisited areas.
   Acceptance: a sweep around a part fuses to a model whose ball bar is within 0.05 mm and

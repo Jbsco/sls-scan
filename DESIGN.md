@@ -591,3 +591,30 @@ points still come back to the host, for sample selection and triangulation.
 On a Radeon RX 7900 GRE the sphere frame of D36 takes 42 ms, down from 46 ms, and the
 plate frame 272 ms, down from 276 ms. Refinement keeps almost all of the plate frame,
 at 262 ms, so its speed is the next step toward 66 ms.
+
+## D38. Refinement in registers and workgroup memory (2026-11-02)
+
+The refinement kernel of D30 kept its 119 normal-equation sums and its 14 × 14 solve in
+private arrays indexed by loop variables. RADV reported 80,896 bytes of scratch memory
+for it, which is where a compiler puts arrays it cannot keep in registers, and
+refinement took 262 ms of a plate frame (D37).
+
+Three changes remove the scratch. The solve runs in workgroup memory, with the Cholesky columns spread over 14 lanes. Each
+lane accumulates its pixels' sums in 3 × 3 matrices and vectors with fixed indices,
+which stay in registers, and writes them to workgroup memory once per iteration. The
+reduction runs in two halves, which cuts the workgroup memory to 17 KB and lets a
+compute unit run more workgroups at once.
+
+| Kernel state | Scratch | Workgroup memory | Plate direct set | Plate frame |
+|---|---|---|---|---|
+| D30 | 80,896 B | 11 KB | 260 ms | 272 ms |
+| Solve in workgroup memory | 0 | 32 KB | 203 ms | 215 ms |
+| Sums in registers | 0 | 32 KB | 64 ms | 74 ms |
+| Two-pass reduction | 0 | 17 KB | 48 ms | 61 ms |
+
+Results are unchanged: every check keeps the same samples and matches within
+0.00012 px. On a Radeon RX 7900 GRE a plate frame of 6374 points takes 61 ms, under the
+66 ms of 15 depth frames per second, a ball bar frame 23 ms and a sphere frame 19 ms.
+Samples take 13 to 14 Gauss-Newton iterations on average with the exit at 10⁻⁵ px. An
+exit at 10⁻⁴ px would save a quarter of them and move positions by under 0.001 px,
+which we keep in reserve for the CPU fallback.
