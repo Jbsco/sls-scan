@@ -151,6 +151,19 @@ Second-order fitted radii grow with the window while mean offsets stay within 1 
 Larger windows keep fewer samples near the sphere's rim, and it seems likely that the
 smaller cap lets the fit trade radius against centre position.
 
+## Metre head
+
+These results are the metre head of `DESIGN.md` D45 on the virtual bench. It has 6 mm
+lenses on a 0.35 m baseline crossing at 1 m, a calibration recovered from twelve poses of
+the A2 board, and direct matching with 21 px windows. Command: `slscan stereo-bench`, with
+`--seed` for other noise.
+
+| Test | Result | Phase 2 limit |
+|---|---|---|
+| Calibration | 0.091 and 0.082 px, baseline 350.13 mm | under 0.3 px |
+| Flat plate, 0.5 m, tilted | 0.041 mm RMS over 467 × 476 mm | 0.2 mm |
+| Scale bar, two 50.8 mm spheres 400 mm apart | +0.022, +0.070 and +0.040 mm on three seeds | 0.2 mm |
+
 ## Continuous sweep
 
 A synthetic sweep of 25 frames by the active stereo head, yawing ±25° and pitching ±8°
