@@ -11,7 +11,9 @@ axis, depth sensitivity to the decoded projector column follows the stereo relat
     δz = z² · δp / (f · b)
 
 with z the working distance, δp the precision of the decoded correspondence in camera
-pixels, f the camera focal length in pixels and b the baseline.
+pixels, f the camera focal length in pixels and b the baseline. Active stereo follows
+the same relation, with δp the disparity precision and b the distance between the two
+cameras.
 
 For the reference rig (`docs/hardware.md`), f ≈ 3,870 px and b = 0.35 m, at z = 1 m:
 
@@ -59,7 +61,7 @@ calibration and recorded with the scan.
   shape is visible in the residual map (a bowl means a distortion residual).
 - **Scale bar.** Two bars with targets at caliper-measured spacing, placed in different
   orientations. Each measures within 0.2 mm in a single view (Phase 2) and within
-  0.5 mm after a multi-view scan (Phase 5).
+  0.5 mm after a multi-view scan (Phase 6).
 - **Sphere.** A bearing ball or a sprayed sphere of known diameter, scanned from four
   sides. The merged cloud fits its diameter within 0.3 mm, which tests registration as
   well as the views.
