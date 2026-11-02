@@ -180,3 +180,22 @@ the Style and Tests checks green on its final commit. Branches start from `origi
 and rebase onto it before the merge. A ruleset on `main` requires signatures, the pull
 request path and green checks, and refuses deletion and force pushes.
 `.github/CODEOWNERS` routes review to the owner.
+
+## D15. Synthetic views verify the calibration (2026-11-01)
+
+The calibration tooling exists before the rig, so we test it against a virtual camera
+and projector with known parameters. `slscan/synthetic.py` renders a board print in a
+known pose through a pinhole camera. It renders each projector pattern onto the same
+plane as the camera sees it, with print albedo, ambient light and sensor noise. The
+tests require focal lengths, principal points, rotation and baseline recovered from
+these views within stated tolerances.
+
+A synthetic pass checks the arithmetic only. Phase 1 acceptance still needs the real
+board, lens and projector on the bench. The same renderer will produce decode and
+triangulation vectors for Phase 2.
+
+Projector corners follow the local homography method of Moreno and Taubin ("Simple,
+Accurate, and Robust Projector-Camera Calibration", 3DIMPVT 2012). Decoded columns and
+rows in a window around each camera corner fit a homography, which maps the corner
+into the projector at a fraction of a pixel. A RANSAC fit drops pixels decoded wrongly
+at stripe edges.
