@@ -119,3 +119,12 @@ def test_stereo_calibration_and_fuse_over_the_protocol(stand_in, tmp_path):
     assert cli.main(["fuse", str(tmp_path / "sweep"), "--calibration", cal, "--step", "16",
                      "--out", model]) == 0
     assert len(geometry.read_ply(model)) > 3000
+
+
+def test_paced_stereo_stream_keeps_pairs_in_step(stand_in, tmp_path):
+    host, port = stand_in
+    result = node.capture(host, port, "stereo", str(tmp_path / "paced"), frames=6, rate_hz=5.0)
+    assert result["missing"] == [] and result["frames"] == 12
+    stamps = result["timestamps_ns"]
+    assert all(stamps[2 * k] == stamps[2 * k + 1] for k in range(6))
+    assert np.allclose(np.diff(stamps[::2]), 200_000_000, atol=1)
