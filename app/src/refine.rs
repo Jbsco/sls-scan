@@ -1,7 +1,7 @@
 //! Second-order refinement of stereo matches on the GPU: one WGSL workgroup per sample,
 //! following the NumPy reference `second_order_matches` in `slscan/stereo.py`.
 
-use crate::gpu::{open, read, words};
+use crate::gpu::{read, words, Gpu};
 use eframe::wgpu;
 use eframe::wgpu::util::DeviceExt;
 
@@ -48,7 +48,12 @@ fn groups(n: usize) -> Result<(u32, u32), String> {
 impl Refiner {
     /// Open the first adapter wgpu offers, or a software one when `fallback` is set.
     pub fn new(fallback: bool) -> Result<Self, String> {
-        let (device, queue, adapter) = open(fallback, "refine")?;
+        Ok(Self::with(&Gpu::open(fallback)?))
+    }
+
+    /// Build the kernels on a shared device.
+    pub fn with(gpu: &Gpu) -> Self {
+        let device = gpu.device.clone();
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("refine"),
             source: wgpu::ShaderSource::Wgsl(include_str!("refine.wgsl").into()),
@@ -65,13 +70,13 @@ impl Refiner {
         };
         let gradients = pipeline("gradients");
         let refine = pipeline("refine");
-        Ok(Self {
+        Self {
             device,
-            queue,
+            queue: gpu.queue.clone(),
             gradients,
             refine,
-            adapter,
-        })
+            adapter: gpu.adapter.clone(),
+        }
     }
 
     /// Run refinement stages in order, each starting from the right points of the one before

@@ -35,26 +35,77 @@ pub fn words(bytes: &[u8]) -> Vec<u8> {
     padded
 }
 
-/// Open the first adapter wgpu offers, or a software one when `fallback` is set. Returns
-/// the device, its queue and a description of the adapter.
-pub fn open(fallback: bool, label: &str) -> Result<(wgpu::Device, wgpu::Queue, String), String> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        force_fallback_adapter: fallback,
-        compatible_surface: None,
-    }))
-    .map_err(|e| e.to_string())?;
-    let info = adapter.get_info();
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+/// A device on the first adapter wgpu offers, or on a software one when `fallback` is set,
+/// shared by every kernel built from it.
+pub struct Gpu {
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+    pub adapter: String,
+}
+
+impl Gpu {
+    pub fn open(fallback: bool) -> Result<Self, String> {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: fallback,
+            compatible_surface: None,
+        }))
+        .map_err(|e| e.to_string())?;
+        let info = adapter.get_info();
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("sls-scan"),
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .map_err(|e| e.to_string())?;
+        Ok(Self {
+            device,
+            queue,
+            adapter: format!("{} ({:?}, {:?})", info.name, info.backend, info.device_type),
+        })
+    }
+
+    /// Upload an 8-bit image as a storage buffer of packed words.
+    pub fn upload(&self, label: &str, bytes: &[u8]) -> wgpu::Buffer {
+        upload(&self.device, label, bytes)
+    }
+
+    /// Copy the first `size` bytes of a buffer the kernels wrote to host memory.
+    pub fn download(&self, buffer: &wgpu::Buffer, size: u64) -> Result<Vec<u8>, String> {
+        download(&self.device, &self.queue, buffer, size)
+    }
+}
+
+/// Upload an 8-bit image as a storage buffer of packed words.
+pub fn upload(device: &wgpu::Device, label: &str, bytes: &[u8]) -> wgpu::Buffer {
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(label),
-        required_limits: adapter.limits(),
-        ..Default::default()
-    }))
-    .map_err(|e| e.to_string())?;
-    let name = format!("{} ({:?}, {:?})", info.name, info.backend, info.device_type);
-    Ok((device, queue, name))
+        contents: &words(bytes),
+        usage: wgpu::BufferUsages::STORAGE,
+    })
+}
+
+/// Copy the first `size` bytes of a buffer the kernels wrote to host memory.
+pub fn download(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    buffer: &wgpu::Buffer,
+    size: u64,
+) -> Result<Vec<u8>, String> {
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("readback"),
+        size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("readback"),
+    });
+    encoder.copy_buffer_to_buffer(buffer, 0, &readback, 0, size);
+    queue.submit([encoder.finish()]);
+    read(device, &readback)
 }
 
 /// Map a readback buffer after the queue's work and copy its contents to host memory.
@@ -77,7 +128,12 @@ pub fn read(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Result<Vec<u8>, Str
 impl Decoder {
     /// Open the first adapter wgpu offers, or a software one when `fallback` is set.
     pub fn new(fallback: bool) -> Result<Self, String> {
-        let (device, queue, adapter) = open(fallback, "decode")?;
+        Ok(Self::with(&Gpu::open(fallback)?))
+    }
+
+    /// Build the kernel on a shared device.
+    pub fn with(gpu: &Gpu) -> Self {
+        let device = gpu.device.clone();
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("decode"),
             source: wgpu::ShaderSource::Wgsl(include_str!("decode.wgsl").into()),
@@ -90,12 +146,12 @@ impl Decoder {
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         });
-        Ok(Self {
+        Self {
             device,
-            queue,
+            queue: gpu.queue.clone(),
             pipeline,
-            adapter,
-        })
+            adapter: gpu.adapter.clone(),
+        }
     }
 
     /// Decode stacks laid out as in `slscan`: plane-major, then rows, then columns.

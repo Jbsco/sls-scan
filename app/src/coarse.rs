@@ -1,7 +1,7 @@
 //! Coarse disparity on the GPU: block matching by normalized cross-correlation at reduced
 //! resolution, following the NumPy reference `block_disparity_small` in `slscan/stereo.py`.
 
-use crate::gpu::{open, read, words};
+use crate::gpu::{read, words, Gpu};
 use eframe::wgpu;
 use eframe::wgpu::util::DeviceExt;
 
@@ -45,7 +45,12 @@ fn dispatch(n: usize) -> Result<(u32, u32), String> {
 impl BlockMatcher {
     /// Open the first adapter wgpu offers, or a software one when `fallback` is set.
     pub fn new(fallback: bool) -> Result<Self, String> {
-        let (device, queue, adapter) = open(fallback, "coarse")?;
+        Ok(Self::with(&Gpu::open(fallback)?))
+    }
+
+    /// Build the kernels on a shared device.
+    pub fn with(gpu: &Gpu) -> Self {
+        let device = gpu.device.clone();
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("coarse"),
             source: wgpu::ShaderSource::Wgsl(include_str!("coarse.wgsl").into()),
@@ -66,15 +71,15 @@ impl BlockMatcher {
             pipeline("choose"),
             pipeline("fill"),
         );
-        Ok(Self {
+        Self {
             device,
-            queue,
+            queue: gpu.queue.clone(),
             downsample,
             correlate,
             choose,
             fill,
-            adapter,
-        })
+            adapter: gpu.adapter.clone(),
+        }
     }
 
     /// Match a rectified pair of row-major 8-bit images. Returns the disparity of each
