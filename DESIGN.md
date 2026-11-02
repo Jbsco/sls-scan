@@ -331,3 +331,31 @@ the preview at 15 depth frames per second and fused into the model. Full-resolut
 static views stay available where a single view must carry the measurement. A 120 Hz
 projector halves the motion error only with a camera that keeps pace, and the Global
 Shutter camera stops at 60 fps, so that step needs a faster global-shutter camera.
+
+## D25. Active stereo as the main measurement (2026-11-01)
+
+Two synchronized Global Shutter cameras measure depth by matching a fixed random pattern
+that a light throws onto the part. Uncoated parts scan this way, and the scanner can move
+continuously, since each depth frame is one exposure of both cameras. We chose this over
+the calibrated projector of D11, D13 and D23, because a projector that has to focus,
+refresh and trigger at measurement grade was the hardest part to source. Here the light
+is neither calibrated nor synchronized: any LED projector showing one random-dot image,
+or a slide projector, serves.
+
+Matching runs on rectified images. Semi-global matching at quarter resolution gives a
+coarse disparity, Lucas-Kanade tracks each sample, and an affine window fitted with ECC
+refines it, which follows the different foreshortening each camera sees on a slanted
+surface. A sample is kept when its window lies on lit, matched surface, correlates at
+0.95 or better, and lands within 3 px of its guess.
+
+On the virtual bench, with uncoated artifacts and a calibration recovered from synthetic
+board views, an 80 mm plate measures 8 µm RMS and a ball bar's spacing lands within
+0.02 mm. Windows average the surface, so curved surfaces read slightly inside. A 21 px
+window spans 2.3 mm at 0.5 m and puts points on a 25 mm sphere 42 µm inside it, which
+shortens its fitted radius by about 0.1 mm. Smaller windows trade that bias for noise.
+Second-order matching windows or a curvature correction are the remedy we plan.
+
+This supersedes the projector parts of D13 and D23. The capture node takes two Global
+Shutter cameras on its two connectors, fired by one trigger pulse. The motion limits of
+D24 apply to the phase-shift path only. That path and its code stay, as an option for
+edge-sharp static scans with a calibrated projector.
