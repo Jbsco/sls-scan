@@ -10,11 +10,12 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
 - Phase 0, complete 2026-10-31. Scaffold. License, gates, design ledger, roadmap, docs,
   package skeleton with a tested pattern generator (Gray code encode and decode, phase
   shift images). Acceptance: `verify.do` green, locally and in CI (D14).
-- Phase 1, open. Calibration (Python tooling). Camera intrinsics from a ChArUco board,
+- Phase 1, in progress. Calibration (Python tooling). Camera intrinsics from a ChArUco board,
   the projector as an inverse camera through projected Gray codes, stereo extrinsics,
   results saved as YAML with the board's square size as the scale. Acceptance:
   reprojection error under 0.3 px for the camera and under 0.5 px for the projector,
-  repeated calibrations within 0.1 % in focal length.
+  repeated calibrations within 0.1 % in focal length. Tooling is in place and verified
+  on synthetic views (D15). Bench acceptance waits on the rig.
 - Phase 2, open. One static view (Python reference pipeline). Pattern display,
   synchronized capture at one or more exposures, Gray code decode, phase shift
   refinement, triangulation, filtering. This is the reference implementation whose

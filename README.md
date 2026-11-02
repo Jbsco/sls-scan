@@ -28,11 +28,11 @@ acceptance tests in `docs/accuracy.md` pass on it, use anything here at your own
 
 ## Status
 
-Phase 0 of `ROADMAP.md`, the scaffold, is complete: the pattern generator with its Gray
-code encode and decode is implemented and tested, and `verify.do` is green. Calibration
-tooling and the static reference pipeline (Phases 1 and 2, Python) come first, then the
-application with its GPU preview (Phases 3 and 4, Rust), once the hardware in
-`docs/hardware.md` is on the bench.
+Phase 0 of `ROADMAP.md`, the scaffold, is complete. Phase 1 calibration tooling is
+implemented and verified against synthetic views with known parameters (`DESIGN.md`
+D15). The static reference pipeline (Phase 2, Python) is next, then the application
+with its GPU preview (Phases 3 and 4, Rust). Bench acceptance of each phase waits on
+the hardware in `docs/hardware.md`.
 
 ## Applications
 
@@ -123,9 +123,9 @@ acceptance tests: a flat plate, a sphere and the scale bars.
 
 | Path | Contents |
 |---|---|
-| `slscan/` | Python package: pattern codes now, calibration and the reference pipeline next, `cli.py` for the commands |
+| `slscan/` | Python package: pattern codes, calibration, synthetic test views and the commands in `cli.py`, with the reference pipeline next |
 | `app/` | Rust application, from Phase 3 |
-| `tests/` | pytest tests of the pure functions, the pattern codes first |
+| `tests/` | pytest tests of the pure functions and of calibration on synthetic views |
 | `docs/hardware.md` | Bill of materials, rig geometry and build notes |
 | `docs/accuracy.md` | Error model and acceptance tests |
 | `docs/pipeline.md` | Each stage with its inputs, outputs and file formats |
