@@ -24,10 +24,15 @@ pub struct Stats {
     pub missing: Vec<usize>,
     pub in_order: bool,
     pub mean_interval_ns: Option<f64>,
+    /// Largest step between consecutive distinct timestamps.
+    pub largest_gap_ns: Option<f64>,
+    /// Whether both frames of every received pair carry one timestamp; true for sets
+    /// without pairs.
+    pub in_step: bool,
 }
 
 impl Stats {
-    fn from_frames(expected: usize, indices: &[u32], stamps: &[i64]) -> Self {
+    fn from_frames(expected: usize, indices: &[u32], stamps: &[i64], paired: bool) -> Self {
         let mut seen = vec![false; expected];
         for &i in indices {
             if let Some(slot) = seen.get_mut(i as usize) {
@@ -47,11 +52,27 @@ impl Stats {
             }
             _ => None,
         };
+        let largest_gap_ns = distinct
+            .windows(2)
+            .map(|w| (w[1] - w[0]) as f64)
+            .reduce(f64::max);
+        let stamp_of: std::collections::HashMap<u32, i64> = indices
+            .iter()
+            .copied()
+            .zip(stamps.iter().copied())
+            .collect();
+        let in_step = !paired
+            || stamp_of
+                .iter()
+                .filter(|(i, _)| *i % 2 == 0)
+                .all(|(i, s)| stamp_of.get(&(i + 1)).is_none_or(|r| r == s));
         Self {
             frames: indices.len(),
             missing,
             in_order: indices.windows(2).all(|w| w[0] < w[1]),
             mean_interval_ns,
+            largest_gap_ns,
+            in_step,
         }
     }
 }
@@ -136,7 +157,7 @@ pub fn capture(
             }
         }
     }
-    let stats = Stats::from_frames(names.len(), &indices, &stamps);
+    let stats = Stats::from_frames(names.len(), &indices, &stamps, request.set == "stereo");
     on_event(Event::Finished(stats.clone()));
     Ok(stats)
 }
@@ -147,12 +168,15 @@ mod tests {
 
     #[test]
     fn stats_report_missing_and_order() {
-        let stats = Stats::from_frames(4, &[0, 1, 3], &[0, 10, 30]);
+        let stats = Stats::from_frames(4, &[0, 1, 3], &[0, 10, 30], false);
         assert_eq!(stats.missing, vec![2]);
         assert!(stats.in_order);
         assert_eq!(stats.mean_interval_ns, Some(15.0));
-        assert!(!Stats::from_frames(2, &[1, 0], &[0, 1]).in_order);
-        let pairs = Stats::from_frames(4, &[0, 1, 2, 3], &[0, 0, 30, 30]);
+        assert_eq!(stats.largest_gap_ns, Some(20.0));
+        assert!(!Stats::from_frames(2, &[1, 0], &[0, 1], false).in_order);
+        let pairs = Stats::from_frames(4, &[0, 1, 2, 3], &[0, 0, 30, 30], true);
         assert_eq!(pairs.mean_interval_ns, Some(30.0));
+        assert!(pairs.in_step);
+        assert!(!Stats::from_frames(4, &[0, 1, 2, 3], &[0, 0, 30, 31], true).in_step);
     }
 }
