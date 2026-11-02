@@ -28,8 +28,9 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   Global Shutter cameras on the Pi 5 fired by one trigger pulse, frame pairs streamed over
   Ethernet, stereo calibration from the configuration panel. In place: capture protocol
   with stereo sets (D18, D27), stand-in node (D17), application shell (D20) and
-  calibration runs from the panel for both heads (D21, D41). Acceptance: frame pairs captured in step at 30 fps with no drops over a minute,
-  and a calibration run end to end from the panel.
+  calibration runs from the panel for both heads (D21, D41). Acceptance: frame pairs
+  captured in step at 30 fps with no drops over a minute, and a calibration run end to
+  end from the panel. A minute of paced pairs from the stand-in passes (D46).
 - Phase 4, in progress. GPU matching and preview. WGSL kernels for rectification, coarse
   disparity, refinement, triangulation and a coarse TSDF, with the CPU fallback through
   lavapipe. Acceptance: 15 depth frames per second at 1.6 MP on either machine's GPU, 3
