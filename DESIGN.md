@@ -578,3 +578,16 @@ precision and settle slightly differently. Refinement takes almost all of a plat
 which runs four times over the 66 ms that 15 depth frames per second allow (Phase 4).
 Each kernel also opens its own device and reads its output back, which a shared device
 would avoid.
+
+## D37. One device for every kernel (2026-11-02)
+
+`app/src/gpu.rs` opens one wgpu device, and each kernel is built on it. Each kernel keeps
+its byte-slice entry point for the checks and gains one that takes storage buffers. A
+depth frame uploads the raw pair once and rectifies into buffers that block matching
+and refinement read in place. The right image's gradients are computed once for both
+refinement stages. The rectified left image, the reduced disparity and the refined
+points still come back to the host, for sample selection and triangulation.
+
+On a Radeon RX 7900 GRE the sphere frame of D36 takes 42 ms, down from 46 ms, and the
+plate frame 272 ms, down from 276 ms. Refinement keeps almost all of the plate frame,
+at 262 ms, so its speed is the next step toward 66 ms.
