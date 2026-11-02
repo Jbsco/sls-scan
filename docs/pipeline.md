@@ -190,3 +190,8 @@ node, timestamps per pair, WGSL kernels, the fused volume, the deferred processi
 and the three panels. Calibration YAML comes from the Python tools and goes back out with
 each scan. Selected frame pairs are written for the deferred path, and results as PLY,
 OBJ and STL with the report.
+
+A stereo run sends each frame pair through the depth frame on a worker thread, and the
+scene panel draws the latest frame's points (`DESIGN.md` D40). `slscan depth-params`
+writes the parameters it needs for a calibration, and `sls-scan depth` runs the same
+path without the window.

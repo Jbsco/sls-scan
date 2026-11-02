@@ -6,6 +6,8 @@ use crate::coarse::{BlockMatcher, CoarseParams};
 use crate::gpu::Gpu;
 use crate::rectify::{Rectifier, RectifyParams};
 use crate::refine::{RefineParams, Refiner, SAMPLE_FLOATS};
+use std::io::{self, Write};
+use std::path::Path;
 use std::time::Instant;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -23,6 +25,94 @@ pub struct DepthParams {
     pub min_correlation: f32,
     pub near_m: f64,
     pub far_m: f64,
+}
+
+/// Block matching search and settings, as `slscan depth-params` writes them.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct CoarseSetup {
+    pub scale: u32,
+    pub block: u32,
+    pub lo: i32,
+    pub count: u32,
+    pub min_correlation: f32,
+    pub margin: f32,
+    pub fill: u32,
+}
+
+/// Depth bounds and sampling, as `slscan depth-params` writes them.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct DepthSection {
+    pub near: f64,
+    pub far: f64,
+    pub step: u32,
+    pub min_level: f32,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct Cameras {
+    pub left: RectifyParams,
+    pub right: RectifyParams,
+}
+
+/// Everything a depth frame takes for one calibration, as `slscan depth-params` writes it.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct DepthSetup {
+    pub width: u32,
+    pub height: u32,
+    pub window: u32,
+    pub iterations: u32,
+    pub max_move: f32,
+    pub min_correlation: f32,
+    pub coarse: CoarseSetup,
+    pub depth: DepthSection,
+    pub cameras: Cameras,
+}
+
+impl DepthSetup {
+    pub fn load(path: &Path) -> Result<Self, String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    pub fn params(&self) -> DepthParams {
+        DepthParams {
+            coarse: CoarseParams {
+                width: self.width,
+                height: self.height,
+                scale: self.coarse.scale,
+                block: self.coarse.block,
+                lo: self.coarse.lo,
+                count: self.coarse.count,
+                min_correlation: self.coarse.min_correlation,
+                margin: self.coarse.margin,
+                fill: self.coarse.fill,
+            },
+            step: self.depth.step,
+            window: self.window,
+            iterations: self.iterations,
+            min_level: self.depth.min_level,
+            max_move: self.max_move,
+            min_correlation: self.min_correlation,
+            near_m: self.depth.near,
+            far_m: self.depth.far,
+        }
+    }
+}
+
+/// Write points as a binary little-endian PLY file of float vertices, as `slscan` does.
+pub fn write_ply(path: &Path, points: &[[f64; 3]]) -> io::Result<()> {
+    let mut file = io::BufWriter::new(std::fs::File::create(path)?);
+    write!(
+        file,
+        "ply\nformat binary_little_endian 1.0\nelement vertex {}\nproperty float x\nproperty float y\nproperty float z\nend_header\n",
+        points.len()
+    )?;
+    for p in points {
+        for v in p {
+            file.write_all(&(*v as f32).to_le_bytes())?;
+        }
+    }
+    file.flush()
 }
 
 pub struct DepthResult {

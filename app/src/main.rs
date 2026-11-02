@@ -89,6 +89,128 @@ fn headless_capture(args: &[String]) -> ExitCode {
     }
 }
 
+fn headless_depth(args: &[String]) -> ExitCode {
+    let mut node = "127.0.0.1:5600".to_owned();
+    let mut wait = Duration::ZERO;
+    let mut frames = 1u32;
+    let mut params = PathBuf::from("data/depth.json");
+    let mut out: Option<PathBuf> = None;
+    for pair in args.chunks(2) {
+        let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
+            eprintln!("arguments come in pairs: --node, --params, --frames, --wait, --out");
+            return ExitCode::FAILURE;
+        };
+        match key.as_str() {
+            "--node" => node.clone_from(value),
+            "--params" => params = PathBuf::from(value),
+            "--out" => out = Some(PathBuf::from(value)),
+            "--frames" => match value.parse() {
+                Ok(v) => frames = v,
+                Err(_) => {
+                    eprintln!("--frames takes a number");
+                    return ExitCode::FAILURE;
+                }
+            },
+            "--wait" => match value.parse::<f64>() {
+                Ok(seconds) if seconds >= 0.0 => wait = Duration::from_secs_f64(seconds),
+                _ => {
+                    eprintln!("--wait takes seconds");
+                    return ExitCode::FAILURE;
+                }
+            },
+            _ => {
+                eprintln!("unknown argument {key}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let setup = match depth::DepthSetup::load(&params) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("depth parameters: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let frame = match depth::DepthFrame::new(false) {
+        Ok(f) => f,
+        Err(e) if std::env::var_os("SLS_REQUIRE_GPU").is_none() => {
+            println!("no GPU adapter, depth frames skipped: {e}");
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            eprintln!("no GPU adapter: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!("adapter {}", frame.adapter);
+    let depth_params = setup.params();
+    let request = SequenceRequest {
+        set: "stereo".to_owned(),
+        pitch: 32,
+        steps: 4,
+        frames,
+    };
+    let mut left: Option<Vec<u8>> = None;
+    let mut results: Vec<(String, Result<depth::DepthResult, String>)> = Vec::new();
+    let captured = client::capture(&node, &request, wait, |event| match event {
+        Event::Connected(hello) => println!("connected to {} at {node}", hello.node),
+        Event::Frame { name, pixels, .. } => {
+            if name.ends_with("/left") {
+                left = Some(pixels);
+            } else if let Some(l) = left.take() {
+                let pair = name.trim_end_matches("/right").to_owned();
+                let cameras = (&setup.cameras.left, &setup.cameras.right);
+                results.push((pair, frame.depth(&depth_params, cameras, &l, &pixels)));
+            }
+        }
+        _ => {}
+    });
+    if let Err(e) = captured {
+        eprintln!("capture failed: {e}");
+        return ExitCode::FAILURE;
+    }
+    let mut ok = !results.is_empty();
+    let mut last = None;
+    for (pair, result) in &results {
+        match result {
+            Ok(d) => {
+                let total: f64 = d.timings.iter().map(|(_, ms)| ms).sum();
+                let stages: Vec<String> = d
+                    .timings
+                    .iter()
+                    .map(|(name, ms)| format!("{name} {ms:.1}"))
+                    .collect();
+                println!(
+                    "{pair}: {} points in {total:.1} ms ({} ms)",
+                    d.points.len(),
+                    stages.join(", ")
+                );
+                ok &= !d.points.is_empty();
+                last = Some(d);
+            }
+            Err(e) => {
+                println!("{pair}: depth failed: {e}");
+                ok = false;
+            }
+        }
+    }
+    if let (Some(path), Some(d)) = (&out, last) {
+        match depth::write_ply(path, &d.points) {
+            Ok(()) => println!("{} points written to {}", d.points.len(), path.display()),
+            Err(e) => {
+                eprintln!("{}: {e}", path.display());
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    println!("depth: {} pairs", results.len());
+    if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
 fn headless_calibrate(args: &[String]) -> ExitCode {
     let mut node = "127.0.0.1:5600".to_owned();
     let mut poses = 12u32;
@@ -847,6 +969,7 @@ fn main() -> ExitCode {
     match args.get(1).map(String::as_str) {
         Some("capture") => return headless_capture(&args[2..]),
         Some("calibrate") => return headless_calibrate(&args[2..]),
+        Some("depth") => return headless_depth(&args[2..]),
         Some("decode-check") => return decode_check(&args[2..]),
         Some("refine-check") => return refine_check(&args[2..]),
         Some("rectify-check") => return rectify_check(&args[2..]),

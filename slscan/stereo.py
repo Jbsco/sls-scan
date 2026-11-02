@@ -68,6 +68,33 @@ def disparity_at(rect: Rectification, depth_m: float) -> float:
     return pl[0, 2] - pr[0, 2] - pr[0, 3] / depth_m
 
 
+def search_range(d_min: float, d_max: float, scale: int = 4) -> tuple[int, int]:
+    """Return the lowest reduced disparity block matching searches for full-resolution
+    disparities from d_min to d_max, and how many it searches, with two steps of margin
+    at each end."""
+    lo = int(np.floor(d_min / scale)) - 2
+    hi = int(np.ceil(d_max / scale)) + 2
+    return lo, hi - lo + 1
+
+
+def depth_parameters(cal: StereoCalibration, near_m: float, far_m: float, step: int = 8,
+                     window: int = 25, iterations: int = 20, min_level: float = 6.0,
+                     max_move: float = 3.0, min_correlation: float = 0.95, scale: int = 4,
+                     block: int = 7, coarse_correlation: float = 0.6, margin: float = 0.05,
+                     fill: int = 2) -> dict:
+    """Return everything the application's depth frame takes for one calibration: image
+    size, matching settings, the block matching search and settings, the depth bounds
+    and sampling, and both cameras' rectification."""
+    rect = rectify(cal)
+    lo, count = search_range(disparity_at(rect, far_m), disparity_at(rect, near_m), scale)
+    return {"width": cal.left.width, "height": cal.left.height, "window": window,
+            "iterations": iterations, "max_move": max_move, "min_correlation": min_correlation,
+            "coarse": {"scale": scale, "block": block, "lo": lo, "count": count,
+                       "min_correlation": coarse_correlation, "margin": margin, "fill": fill},
+            "depth": {"near": near_m, "far": far_m, "step": step, "min_level": min_level},
+            "cameras": rectification_params(cal, rect)}
+
+
 def coarse_disparity(left: np.ndarray, right: np.ndarray, d_min: float, d_max: float,
                      scale: int = 4, block: int = 5) -> np.ndarray:
     """Semi-global matching at 1/scale resolution, returned at full resolution (NaN where
@@ -115,8 +142,8 @@ def block_disparity_small(left: np.ndarray, right: np.ndarray, d_min: float, d_m
     small = (left.shape[1] // scale, left.shape[0] // scale)
     ls = cv2.resize(left, small, interpolation=cv2.INTER_AREA).astype(np.float32)
     rs = cv2.resize(right, small, interpolation=cv2.INTER_AREA).astype(np.float32)
-    lo = int(np.floor(d_min / scale)) - 2
-    hi = int(np.ceil(d_max / scale)) + 2
+    lo, n = search_range(d_min, d_max, scale)
+    hi = lo + n - 1
     h, w = ls.shape
     box = (block, block)
     mean_l = cv2.boxFilter(ls, -1, box)
