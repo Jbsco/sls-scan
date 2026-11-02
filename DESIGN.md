@@ -166,3 +166,17 @@ A USB global-shutter camera and a USB 12 MP module on the host remain the altern
 where no Pi is wanted, behind the same capture interface, with the host's own frame
 timing as the trigger source. The node keeps real-time work (display timing, trigger,
 capture) on a machine made for it and leaves GPU work and the panels on the host.
+
+## D14. A public repository with pull requests only (2026-11-01)
+
+The repository is public from 2026-11-01. Its sanitization gate holds across the whole
+history (no local paths, no vehicle or sibling names), its license is in place, and its
+README says that nothing has run on hardware yet. A public repository gets hosted
+runners, so the workflows run on `ubuntu-latest` and the self-hosted runner of D10 is
+removed, which keeps fork pull requests off the host.
+
+`main` changes only through pull requests, each merged as one signed merge commit with
+the Style and Tests checks green on its final commit. Branches start from `origin/main`
+and rebase onto it before the merge. A ruleset on `main` requires signatures, the pull
+request path and green checks, and refuses deletion and force pushes.
+`.github/CODEOWNERS` routes review to the owner.
