@@ -199,3 +199,20 @@ Accurate, and Robust Projector-Camera Calibration", 3DIMPVT 2012). Decoded colum
 rows in a window around each camera corner fit a homography, which maps the corner
 into the projector at a fraction of a pixel. A RANSAC fit drops pixels decoded wrongly
 at stripe edges.
+
+## D16. Decode and triangulation in NumPy (2026-11-01)
+
+We decode with our own NumPy functions instead of OpenCV's `structured_light` module.
+The GPU kernels of Phase 4 are checked against this code, so it has to be a readable
+reference with vectors, and OpenCV's Python binding decodes one pixel per call.
+
+Gray code bits pick the period and the wrapped phase fixes the position inside it. The
+result is the phase column nearest the Gray code column, so a Gray code error under
+half a period does not move it. A pixel is dropped when a pair lacks contrast, the
+sinusoid lacks modulation, or the two columns disagree by more than a pixel.
+
+Each camera ray meets the plane of its projector column. Projector distortion bends
+those planes, so the plane comes from the undistorted projector point at the row
+where the previous estimate lands, refined over three iterations. Calibration stays
+in OpenCV.
+
