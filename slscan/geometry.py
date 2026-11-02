@@ -30,6 +30,20 @@ def fit_sphere(points: np.ndarray) -> tuple[np.ndarray, float, float]:
     return centre, radius, float(np.sqrt(np.mean(residual ** 2)))
 
 
+def split_two(points: np.ndarray) -> np.ndarray:
+    """Return a 0 or 1 label per point for two clusters along the main axis of the cloud."""
+    centred = points - points.mean(axis=0)
+    _, _, vt = np.linalg.svd(centred, full_matrices=False)
+    s = centred @ vt[0]
+    threshold = 0.0
+    for _ in range(20):
+        low, high = s[s <= threshold], s[s > threshold]
+        if len(low) == 0 or len(high) == 0:
+            break
+        threshold = 0.5 * (low.mean() + high.mean())
+    return (s > threshold).astype(np.int64)
+
+
 def write_ply(path: str, points: np.ndarray) -> None:
     """Write points (N, 3) as a binary little-endian PLY file of float vertices."""
     data = np.ascontiguousarray(points, dtype="<f4")
