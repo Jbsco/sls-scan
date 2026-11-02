@@ -41,7 +41,8 @@ def rectify(cal: StereoCalibration) -> Rectification:
 def rectification_params(cal: StereoCalibration, rect: Rectification) -> dict:
     """Return each camera's rectification as the GPU kernel takes it: the inverse of its
     rectified projection times rotation (row-major), focal lengths, principal point and the
-    five distortion coefficients k1, k2, p1, p2, k3."""
+    five distortion coefficients k1, k2, p1, p2, k3. Each camera also lists its rectified
+    projection (3 x 4) and rectifying rotation (3 x 3), row-major, for triangulation."""
     out = {}
     for side, camera, rotation, projection in (
             ("left", cal.left, rect.left_rotation, rect.left_projection),
@@ -55,7 +56,9 @@ def rectification_params(cal: StereoCalibration, rect: Rectification) -> dict:
         out[side] = {"inverse": inverse.ravel().tolist(),
                      "focal": [float(camera.matrix[0, 0]), float(camera.matrix[1, 1])],
                      "centre": [float(camera.matrix[0, 2]), float(camera.matrix[1, 2])],
-                     "distortion": distortion.tolist()}
+                     "distortion": distortion.tolist(),
+                     "projection": projection.ravel().tolist(),
+                     "rotation": rotation.ravel().tolist()}
     return out
 
 
