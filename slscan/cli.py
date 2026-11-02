@@ -185,14 +185,31 @@ def cmd_calibration_patterns(args: argparse.Namespace) -> int:
 
 
 def cmd_calibrate(args: argparse.Namespace) -> int:
-    cal = calibrate.calibrate(read_views(args.captures), _spec(args),
-                              (args.projector_width, args.projector_height))
+    import json
+
+    try:
+        cal = calibrate.calibrate(read_views(args.captures), _spec(args),
+                                  (args.projector_width, args.projector_height))
+    except (ValueError, FileNotFoundError) as e:
+        if args.json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            print(f"calibration failed: {e}")
+        return 1
     calibrate.save(args.out, cal)
+    ok = cal.camera.rms_px < CAMERA_LIMIT_PX and cal.projector.rms_px < PROJECTOR_LIMIT_PX
+    baseline = float(np.linalg.norm(cal.stereo.translation))
+    if args.json:
+        print(json.dumps({"views": cal.views, "camera_rms_px": cal.camera.rms_px,
+                          "camera_limit_px": CAMERA_LIMIT_PX,
+                          "projector_rms_px": cal.projector.rms_px,
+                          "projector_limit_px": PROJECTOR_LIMIT_PX, "baseline_m": baseline,
+                          "out": args.out, "ok": ok}))
+        return 0 if ok else 1
     print(f"{cal.views} views, calibration written to {args.out}")
     print(f"camera reprojection {cal.camera.rms_px:.3f} px (limit {CAMERA_LIMIT_PX})")
     print(f"projector reprojection {cal.projector.rms_px:.3f} px (limit {PROJECTOR_LIMIT_PX})")
-    print(f"baseline {1000.0 * np.linalg.norm(cal.stereo.translation):.2f} mm")
-    ok = cal.camera.rms_px < CAMERA_LIMIT_PX and cal.projector.rms_px < PROJECTOR_LIMIT_PX
+    print(f"baseline {1000.0 * baseline:.2f} mm")
     return 0 if ok else 1
 
 
@@ -247,6 +264,7 @@ def main(argv=None) -> int:
     p.add_argument("--projector-width", type=int, default=1920)
     p.add_argument("--projector-height", type=int, default=1080)
     p.add_argument("--out", default="data/calibration.yaml")
+    p.add_argument("--json", action="store_true", help="print the result as one JSON object")
     p.set_defaults(func=cmd_calibrate)
 
     p = sub.add_parser("calibration-diff", help="compare two calibrations against repeatability limits")
