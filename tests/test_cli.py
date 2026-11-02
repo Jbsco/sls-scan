@@ -190,6 +190,11 @@ def test_fusion_vectors_command_writes_consistent_files(tmp_path):
     assert (out / "model.bin").stat().st_size == 24 * meta["model"]
 
 
+def test_calibration_repeat_passes_with_a_board_filling_the_view(capsys):
+    assert cli.main(["calibration-repeat", "--sessions", "3"]) == 0
+    assert "largest focal length change" in capsys.readouterr().out
+
+
 def test_stereo_calibration_diff_compares_both_cameras(tmp_path, capsys):
     head = synthetic.stereo_head()
     spec = synthetic.SMALL_BOARD

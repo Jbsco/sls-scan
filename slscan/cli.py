@@ -392,6 +392,40 @@ def cmd_fusion_vectors(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_calibration_repeat(args: argparse.Namespace) -> int:
+    """Calibrate the synthetic stereo head from independent sessions of jittered board
+    poses and report how far their focal lengths and baselines spread."""
+    from itertools import combinations
+
+    head = synthetic.stereo_head()
+    spec = _spec(args)
+    print(f"board {args.squares_x} x {args.squares_y} squares of {args.square_mm:g} mm, "
+          f"{args.passes} passes of {len(synthetic.board_poses(spec, 0.5))} poses")
+    sessions = []
+    for seed in range(args.sessions):
+        views = synthetic.stereo_calibration_views(head, spec, seed, jitter_deg=args.jitter_deg,
+                                                   jitter_m=args.jitter_mm / 1000.0,
+                                                   passes=args.passes)
+        cal = calibrate.calibrate_stereo(views, spec)
+        sessions.append(cal)
+        print(f"session {seed}: {cal.views} views, left {cal.left.rms_px:.3f} px, right "
+              f"{cal.right.rms_px:.3f} px, left fx {cal.left.matrix[0, 0]:.2f} px, baseline "
+              f"{1000.0 * np.linalg.norm(cal.stereo.translation):.3f} mm")
+    focal, baseline = 0.0, 0.0
+    for a, b in combinations(sessions, 2):
+        d = calibrate.compare_stereo(a, b)
+        focal = max(focal, d["left_fx"], d["left_fy"], d["right_fx"], d["right_fy"])
+        baseline = max(baseline, d["baseline_m"])
+    reprojection = max(max(c.left.rms_px, c.right.rms_px) for c in sessions)
+    ok = (focal <= args.focal_limit and 1000.0 * baseline <= args.baseline_limit_mm
+          and reprojection < CAMERA_LIMIT_PX)
+    print(f"largest focal length change {100.0 * focal:.3f} % (limit "
+          f"{100.0 * args.focal_limit:.3f} %), largest baseline change "
+          f"{1000.0 * baseline:.3f} mm (limit {args.baseline_limit_mm} mm), largest "
+          f"reprojection {reprojection:.3f} px (limit {CAMERA_LIMIT_PX})")
+    return 0 if ok else 1
+
+
 def cmd_motion_error(args: argparse.Namespace) -> int:
     make_rig, make_scenes, spec, _ = HEADS[args.head]
     rig = synthetic.small_volume_preview_rig() if args.head == "small" else make_rig()
@@ -710,6 +744,24 @@ def main(argv=None) -> int:
     p.add_argument("--out", default="data/depth.json")
     p.add_argument("--json", action="store_true", help="print the result as one JSON object")
     p.set_defaults(func=cmd_depth_params)
+
+    p = sub.add_parser("calibration-repeat",
+                       help="calibrate the synthetic stereo head from independent sessions "
+                            "and report their spread")
+    p.add_argument("--sessions", type=int, default=5)
+    p.add_argument("--squares-x", type=int, default=11)
+    p.add_argument("--squares-y", type=int, default=8)
+    p.add_argument("--square-mm", type=float, default=12.0)
+    p.add_argument("--marker-mm", type=float, default=9.0)
+    p.add_argument("--dictionary", default="DICT_5X5_100")
+    p.add_argument("--passes", type=int, default=2, help="times through the pose table")
+    p.add_argument("--jitter-deg", type=float, default=5.0,
+                   help="largest change of each board angle per session")
+    p.add_argument("--jitter-mm", type=float, default=10.0,
+                   help="largest change of each board position per session")
+    p.add_argument("--focal-limit", type=float, default=0.001, help="relative focal length change")
+    p.add_argument("--baseline-limit-mm", type=float, default=0.2)
+    p.set_defaults(func=cmd_calibration_repeat)
 
     p = sub.add_parser("fusion-vectors",
                        help="write the depth frames of a short synthetic sweep and their "
