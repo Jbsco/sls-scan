@@ -1,5 +1,6 @@
 use slscan_app::client::{self, Event};
 use slscan_app::protocol::SequenceRequest;
+use slscan_app::ui::ScanApp;
 use std::process::ExitCode;
 use std::time::Duration;
 
@@ -84,6 +85,17 @@ fn main() -> ExitCode {
     if args.get(1).map(String::as_str) == Some("capture") {
         return headless_capture(&args[2..]);
     }
-    eprintln!("usage: sls-scan capture [--node host:port] [--set scan|calibration] [--pitch n] [--steps n] [--wait s]");
-    ExitCode::FAILURE
+    let options = eframe::NativeOptions::default();
+    let result = eframe::run_native(
+        "sls-scan",
+        options,
+        Box::new(|_cc| Ok(Box::new(ScanApp::default()))),
+    );
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("application failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }
