@@ -106,7 +106,9 @@ does the same without a window.
 
 `slscan calibration-diff a.yaml b.yaml` compares two calibrations against the
 repeatability limits of Phases 1 and 8: focal length within 0.1 % and baseline within
-0.2 mm.
+0.2 mm. It takes two stereo calibrations as well. `slscan calibration-repeat`
+calibrates the synthetic stereo head from independent sessions of hand-placed board
+poses and checks them against the same limits (`DESIGN.md` D44).
 
 ## Capture
 
