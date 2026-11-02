@@ -34,9 +34,11 @@ Phase 0 of `ROADMAP.md`, the scaffold, is complete. Calibration (Phase 1) and th
 reference pipeline (Phase 2) are implemented and verified on a virtual bench of
 synthetic captures, for active stereo (`DESIGN.md` D25) and for the phase-shift option
 (D15 and D17). Phase 3 is in progress: the capture protocol, a stand-in node, and the
-application shell with its capture client, three panels and calibration runs. Phase 4
-has a decode kernel for the phase-shift option, with stereo matching on the GPU next.
-Phase 5 has ICP tracking and point fusion, verified on a synthetic sweep (D26).
+application shell with its capture client, three panels and calibration runs.
+
+Phase 4 has a decode kernel for the phase-shift option, with stereo matching on the GPU
+next. Phase 5 has ICP tracking and point fusion, verified on a synthetic sweep (D26).
+Phase 9 has second-order matching windows, which follow curved surfaces (D28).
 
 Bench acceptance of each phase waits on the hardware in `docs/hardware.md`.
 
@@ -66,7 +68,8 @@ measured geometry. Among them:
 3. **Match.** Both images are rectified so that matching points share a row. A coarse
    disparity comes from semi-global matching, and each sample is refined to a small
    fraction of a pixel by an affine window, which follows the different foreshortening
-   each camera sees on a slanted surface.
+   each camera sees on a slanted surface. A second-order window then follows the
+   surface's curvature.
 4. **Triangulate.** Each matched pair of pixels gives a point in the left camera's frame.
 5. **Track and fuse.** While the scanner moves, each depth frame is aligned to the model
    from its geometry and from markers on the mat around the part, and fused into a
@@ -113,10 +116,11 @@ the full list, trigger wiring, rates and build notes.
 
 Depth resolution follows δz = z²·δd/(f·b), with δd the matching precision in pixels. On
 the virtual bench, two Global Shutter cameras with 16 mm lenses on a 0.2 m baseline at
-0.5 m match uncoated parts to about 0.01 px. An 80 mm plate measures 8 µm RMS and a ball
-bar's spacing lands within 0.02 mm. Matching windows average the surface, so curved
-surfaces read slightly inside, by 42 µm on a 25 mm sphere. `docs/accuracy.md` has the
-numbers, the acceptance tests and the error budget.
+0.5 m match uncoated parts to about 0.01 px. An 80 mm plate measures 8 to 10 µm RMS and
+a ball bar's spacing lands within 0.02 mm. Affine matching windows read a 25 mm sphere
+about 40 µm inside its surface. Second-order windows follow its curvature and bring that
+offset under 1 µm. `docs/accuracy.md` has the numbers, the acceptance tests and the
+error budget.
 
 ## Repository layout
 
