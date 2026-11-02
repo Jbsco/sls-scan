@@ -1,8 +1,4 @@
-"""The command line: one command per pipeline stage.
-
-Phase 0 ships the pattern commands. Calibration, capture, decode, triangulate,
-register and mesh follow their phases in ROADMAP.md.
-"""
+"""The command line: one command per pipeline stage."""
 
 import argparse
 import sys
