@@ -3,6 +3,7 @@
 //! `coarse_samples`, `direct_refine` and `triangulate` in `slscan/stereo.py`.
 
 use crate::coarse::{BlockMatcher, CoarseParams};
+use crate::gpu::Gpu;
 use crate::rectify::{Rectifier, RectifyParams};
 use crate::refine::{RefineParams, Refiner, SAMPLE_FLOATS};
 use std::time::Instant;
@@ -34,6 +35,7 @@ pub struct DepthResult {
 }
 
 pub struct DepthFrame {
+    gpu: Gpu,
     rectifier: Rectifier,
     matcher: BlockMatcher,
     refiner: Refiner,
@@ -167,16 +169,16 @@ pub fn triangulate(
 }
 
 impl DepthFrame {
-    /// Open the first adapter wgpu offers for each kernel, or a software one when
-    /// `fallback` is set.
+    /// Open one device on the first adapter wgpu offers, or on a software one when
+    /// `fallback` is set, and build every kernel on it.
     pub fn new(fallback: bool) -> Result<Self, String> {
-        let rectifier = Rectifier::new(fallback)?;
-        let adapter = rectifier.adapter.clone();
+        let gpu = Gpu::open(fallback)?;
         Ok(Self {
-            rectifier,
-            matcher: BlockMatcher::new(fallback)?,
-            refiner: Refiner::new(fallback)?,
-            adapter,
+            rectifier: Rectifier::with(&gpu),
+            matcher: BlockMatcher::with(&gpu),
+            refiner: Refiner::with(&gpu),
+            adapter: gpu.adapter.clone(),
+            gpu,
         })
     }
 
@@ -189,16 +191,27 @@ impl DepthFrame {
         right_raw: &[u8],
     ) -> Result<DepthResult, String> {
         let (w, h) = (params.coarse.width, params.coarse.height);
+        let pixels = w as usize * h as usize;
+        if left_raw.len() != pixels || right_raw.len() != pixels {
+            return Err("image sizes do not match the parameters".into());
+        }
         let mut timings = Vec::new();
         let mut clock = Instant::now();
         let mut lap = |name: &'static str, timings: &mut Vec<(&'static str, f64)>| {
             timings.push((name, clock.elapsed().as_secs_f64() * 1000.0));
             clock = Instant::now();
         };
-        let left = self.rectifier.rectify(cameras.0, w, h, left_raw)?;
-        let right = self.rectifier.rectify(cameras.1, w, h, right_raw)?;
+        let left_raw = self.gpu.upload("left raw", left_raw);
+        let right_raw = self.gpu.upload("right raw", right_raw);
+        let left_buffer = self.rectifier.rectify_buffer(cameras.0, w, h, &left_raw)?;
+        let right_buffer = self.rectifier.rectify_buffer(cameras.1, w, h, &right_raw)?;
+        let mut left = self.gpu.download(&left_buffer, left_buffer.size())?;
+        left.truncate(pixels);
         lap("rectify", &mut timings);
-        let (disparity, valid) = self.matcher.disparity(&params.coarse, &left, &right)?;
+        let (disparity, valid) =
+            self.matcher
+                .disparity_buffers(&params.coarse, &left_buffer, &right_buffer)?;
+        let (disparity, valid) = self.matcher.download(&disparity, &valid)?;
         lap("coarse", &mut timings);
         let (samples, guesses) = select(params, &left, &disparity, &valid);
         let mut start = Vec::with_capacity(samples.len() * SAMPLE_FLOATS);
@@ -222,7 +235,8 @@ impl DepthFrame {
         let (refined, kept) = if samples.is_empty() {
             (Vec::new(), Vec::new())
         } else {
-            self.refiner.stages(&base, &left, &right, &start, &stages)?
+            self.refiner
+                .stages_buffers(&base, &left_buffer, &right_buffer, &start, &stages)?
         };
         lap("refine", &mut timings);
         let matches: Vec<([f32; 2], [f32; 2])> = samples
