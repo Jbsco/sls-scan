@@ -85,8 +85,9 @@ def cmd_measure(args: argparse.Namespace) -> int:
     points = geometry.read_ply(args.cloud)
     if args.shape == "plane":
         _, _, rms = geometry.fit_plane(points)
-        print(f"plane RMS residual {1000.0 * rms:.3f} mm (limit {1000.0 * PLATE_LIMIT_M:.1f} mm)")
-        return 0 if rms < PLATE_LIMIT_M else 1
+        limit = args.limit_mm / 1000.0
+        print(f"plane RMS residual {1000.0 * rms:.3f} mm (limit {args.limit_mm:g} mm)")
+        return 0 if rms < limit else 1
     if args.shape == "sphere":
         centre, radius, rms = geometry.fit_sphere(points)
         print(f"sphere radius {1000.0 * radius:.3f} mm, form RMS {1000.0 * rms:.3f} mm, "
@@ -356,6 +357,8 @@ def main(argv=None) -> int:
     p = sub.add_parser("measure", help="fit an acceptance artifact to a point cloud")
     p.add_argument("cloud")
     p.add_argument("--shape", choices=("plane", "sphere", "ball-bar"), required=True)
+    p.add_argument("--limit-mm", type=float, default=1000.0 * PLATE_LIMIT_M,
+                   help="plane RMS limit in mm")
     p.set_defaults(func=cmd_measure)
 
     p = sub.add_parser("simulate", help="write synthetic calibration and scan captures")
