@@ -105,3 +105,21 @@ def test_calibrate_command_reports_too_few_views(tmp_path, capsys):
         cv2.imwrite(str(tmp_path / "pose_000" / f"{axis}_001.png"), np.zeros((8, 8), dtype=np.uint8))
     assert cli.main(["calibrate", str(tmp_path), "--json"]) == 1
     assert "error" in json.loads(capsys.readouterr().out)
+
+
+def test_decode_vectors_match_the_reference_decode(tmp_path, rig):
+    out = str(tmp_path / "vectors")
+    assert cli.main(["decode-vectors", "--out", out]) == 0
+    meta = json.load(open(os.path.join(out, "meta.json")))
+    n = meta["width"] * meta["height"]
+    gray = np.fromfile(os.path.join(out, "gray.bin"), dtype=np.uint8)
+    phase = np.fromfile(os.path.join(out, "phase.bin"), dtype=np.uint8)
+    assert gray.size == 2 * meta["planes"] * n and phase.size == meta["steps"] * n
+    columns = np.fromfile(os.path.join(out, "columns.bin"), dtype="<f4")
+    mask = np.fromfile(os.path.join(out, "mask.bin"), dtype=np.uint8).astype(bool)
+    from slscan import decode
+    again, again_mask = decode.decode_columns(gray.reshape(-1, meta["height"], meta["width"]),
+                                              phase.reshape(-1, meta["height"], meta["width"]),
+                                              meta["projector_width"], meta["pitch"])
+    assert np.array_equal(again_mask.ravel(), mask)
+    assert np.allclose(again.ravel()[mask], columns[mask], atol=1e-4)

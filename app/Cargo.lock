@@ -2772,6 +2772,7 @@ version = "0.0.1"
 dependencies = [
  "eframe",
  "png",
+ "pollster",
  "serde",
  "serde_json",
 ]
