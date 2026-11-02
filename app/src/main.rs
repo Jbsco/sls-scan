@@ -1,5 +1,6 @@
 use slscan_app::calibration;
 use slscan_app::client::{self, Event};
+use slscan_app::coarse;
 use slscan_app::gpu;
 use slscan_app::protocol::SequenceRequest;
 use slscan_app::rectify;
@@ -308,6 +309,19 @@ struct StereoMeta {
     max_move: f32,
     #[serde(default)]
     min_correlation: f32,
+    #[serde(default)]
+    coarse: Option<CoarseMeta>,
+}
+
+#[derive(serde::Deserialize)]
+struct CoarseMeta {
+    scale: u32,
+    block: u32,
+    lo: i32,
+    count: u32,
+    min_correlation: f32,
+    margin: f32,
+    fill: u32,
 }
 
 fn floats(bytes: &[u8]) -> Vec<f32> {
@@ -597,6 +611,116 @@ fn rectify_check(args: &[String]) -> ExitCode {
     }
 }
 
+fn coarse_check(args: &[String]) -> ExitCode {
+    let Some(dir) = args.first().map(PathBuf::from) else {
+        eprintln!("usage: sls-scan coarse-check <vector directory> [--fallback]");
+        return ExitCode::FAILURE;
+    };
+    let fallback = args.iter().any(|a| a == "--fallback");
+    let read = |name: &str| std::fs::read(dir.join(name));
+    let (meta, left, right, reference) = match (
+        read("meta.json"),
+        read("left.bin"),
+        read("right.bin"),
+        read("coarse.bin"),
+    ) {
+        (Ok(m), Ok(l), Ok(r), Ok(c)) => (m, l, r, floats(&c)),
+        _ => {
+            eprintln!("coarse vectors missing in {}", dir.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let meta: StereoMeta = match serde_json::from_slice(&meta) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("meta.json: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let Some(c) = meta.coarse else {
+        eprintln!("meta.json has no coarse section");
+        return ExitCode::FAILURE;
+    };
+    let matcher = match coarse::BlockMatcher::new(fallback) {
+        Ok(m) => m,
+        Err(e) if std::env::var_os("SLS_REQUIRE_GPU").is_none() => {
+            println!("no GPU adapter, coarse check skipped: {e}");
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            eprintln!("no GPU adapter: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let params = coarse::CoarseParams {
+        width: meta.width,
+        height: meta.height,
+        scale: c.scale,
+        block: c.block,
+        lo: c.lo,
+        count: c.count,
+        min_correlation: c.min_correlation,
+        margin: c.margin,
+        fill: c.fill,
+    };
+    let mut fastest = f64::INFINITY;
+    let mut result = None;
+    for _ in 0..3 {
+        let start = Instant::now();
+        match matcher.disparity(&params, &left, &right) {
+            Ok(r) => result = Some(r),
+            Err(e) => {
+                eprintln!("coarse failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+        fastest = fastest.min(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    let Some((disparity, valid)) = result else {
+        return ExitCode::FAILURE;
+    };
+    if disparity.len() != reference.len() {
+        eprintln!("coarse vectors do not match meta.json");
+        return ExitCode::FAILURE;
+    }
+    let mut mismatched = 0usize;
+    let mut both = 0usize;
+    let mut differing = 0usize;
+    let mut largest = 0.0f32;
+    for ((d, v), r) in disparity.iter().zip(&valid).zip(&reference) {
+        if *v != r.is_finite() {
+            mismatched += 1;
+        } else if *v {
+            both += 1;
+            let difference = (d - r).abs();
+            largest = largest.max(difference);
+            differing += usize::from(difference > 0.01);
+        }
+    }
+    let pixels = reference.len();
+    let fraction = mismatched as f64 / pixels as f64;
+    let differing_fraction = differing as f64 / both.max(1) as f64;
+    println!("adapter {}", matcher.adapter);
+    println!(
+        "{} × {} reduced pixels over {} disparities matched in {fastest:.1} ms (fastest of three, with upload and readback)",
+        meta.width / c.scale,
+        meta.height / c.scale,
+        c.count
+    );
+    println!(
+        "validity disagreements {mismatched} of {pixels} ({:.3} %), over 0.01 apart {differing} of {both} ({:.3} %), largest difference {largest:.4}",
+        100.0 * fraction,
+        100.0 * differing_fraction
+    );
+    if fraction <= 0.005 && differing_fraction <= 0.005 {
+        println!("coarse check: GPU matches the NumPy reference");
+        ExitCode::SUCCESS
+    } else {
+        println!("coarse check: GPU differs from the NumPy reference");
+        ExitCode::FAILURE
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
@@ -605,6 +729,7 @@ fn main() -> ExitCode {
         Some("decode-check") => return decode_check(&args[2..]),
         Some("refine-check") => return refine_check(&args[2..]),
         Some("rectify-check") => return rectify_check(&args[2..]),
+        Some("coarse-check") => return coarse_check(&args[2..]),
         _ => {}
     }
     let options = eframe::NativeOptions::default();
