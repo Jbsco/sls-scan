@@ -462,3 +462,32 @@ Radeon RX 7900 GRE both 1456 × 1088 images rectify in about 1 ms with upload an
 readback. Under 0.01 % of pixels differ, each by one grey level, where single precision
 rounds a half level the other way. Coarse disparity is the remaining CPU stage before
 refinement.
+
+## D32. Matching by Gauss-Newton alone (2026-11-02)
+
+`slscan.stereo.direct_matches` matches without Lucas-Kanade or ECC, so a GPU can run the
+whole refinement. Each sample starts from its coarse disparity with an affine window
+fitted by Gauss-Newton. It is kept when it moves under 3 px and its window correlates at
+0.95 or better, and a second-order window refines it from there. Second-order windows
+straight from the coarse disparity failed on the ball bar. Windows lying partly off a
+sphere still correlated above 0.95 with centres up to 0.77 mm off, which read the
+spacing 35 to 132 µm long. The affine stage drops them, as ECC does.
+
+With true calibration, a sample every 8 px and 25 px windows, `direct_matches` keeps 293
+of the 294 sphere samples that affine matching keeps and all 6296 plate samples, within
+0.00002 px at the 99th percentile. It also keeps 51 sphere samples that affine matching
+drops.
+
+| Artifact | Affine start | Direct |
+|---|---|---|
+| Sphere, points | 294 | 344 |
+| Sphere, mean offset | +0.1 µm | +0.3 µm |
+| Sphere, fitted radius | +0.6 µm | +3.7 µm |
+| Sphere, form | 6.7 µm RMS | 6.8 µm RMS |
+| Plate, points | 6296 | 6334 |
+| Plate, flatness | 9.0 µm RMS | 9.1 µm RMS |
+| Ball bar spacing, three noise seeds | +27.3, +23.5, +17.7 µm | +25.0, +20.0, +17.7 µm |
+
+NumPy takes about twice as long, since every sample runs two Gauss-Newton passes. Both
+paths read this ball bar 18 to 27 µm long in single views, and affine windows alone read
+it 12 to 16 µm short. The source of that bias is open.

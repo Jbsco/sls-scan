@@ -150,19 +150,23 @@ def refine_second_order(left: np.ndarray, right: np.ndarray, left_points: np.nda
 
 def second_order_matches(left: np.ndarray, right: np.ndarray, left_points: np.ndarray,
                          right_points: np.ndarray, affine: np.ndarray, window: int = 21,
-                         iterations: int = 20,
-                         batch: int = 1024) -> tuple[np.ndarray, np.ndarray]:
+                         iterations: int = 20, batch: int = 1024, max_move: float = 1.0,
+                         min_correlation: float | None = None,
+                         terms: int = 6) -> tuple[np.ndarray, np.ndarray]:
     """Refine every match with a second-order window by Gauss-Newton.
 
     Each window maps to the right image through a quadratic displacement field, 12
     parameters, with an intensity gain and offset, starting from the affine match. Returns
     the refined right points (N, 2) and a kept flag (N,). A match is not kept when its
-    solve fails or its column moves 1 px or more from the affine match.
+    solve fails or its column moves max_move px or more from its start. With
+    min_correlation, a match is also not kept when its template and its window correlate
+    below that value. Terms 3 limits each window to an affine shape.
     """
     hw = window // 2
     dy, dx = np.mgrid[-hw:hw + 1, -hw:hw + 1].astype(np.float32)
     dx, dy = dx.ravel(), dy.ravel()
     shape = np.stack([np.ones_like(dx), dx, dy, 0.5 * dx * dx, dx * dy, 0.5 * dy * dy], axis=1)
+    shape[:, terms:] = 0.0
     lf, rf = left.astype(np.float32), right.astype(np.float32)
     gx = cv2.Scharr(rf, cv2.CV_32F, 1, 0) / 32.0
     gy = cv2.Scharr(rf, cv2.CV_32F, 0, 1) / 32.0
@@ -213,7 +217,17 @@ def second_order_matches(left: np.ndarray, right: np.ndarray, left_points: np.nd
             moving = np.max(np.abs(step[:, [0, 6]]), axis=1) >= 1e-5
             active = active[moving]
         ok &= np.all(np.isfinite(p.reshape(n, -1)), axis=1)
-        ok &= np.abs(p[:, 0, 0] - (rp[:, 0] - lp[:, 0])) < 1.0
+        ok &= np.abs(p[:, 0, 0] - (rp[:, 0] - lp[:, 0])) < max_move
+        if min_correlation is not None:
+            q = np.where(np.isfinite(p), p, 0.0)
+            g = cv2.remap(rf, (lp[:, :1] + dx + q[:, 0] @ shape.T).astype(np.float32),
+                          (lp[:, 1:2] + dy + q[:, 1] @ shape.T).astype(np.float32),
+                          cv2.INTER_CUBIC)
+            fc = f - f.mean(axis=1, keepdims=True)
+            gc = g - g.mean(axis=1, keepdims=True)
+            denominator = np.sqrt(np.sum(fc * fc, axis=1) * np.sum(gc * gc, axis=1))
+            correlation = np.sum(fc * gc, axis=1) / np.maximum(denominator, 1e-12)
+            ok &= correlation >= min_correlation
         out_kept.append(ok)
         out_right.append(np.column_stack([lp[:, 0] + p[:, 0, 0], lp[:, 1] + p[:, 1, 0]]))
     if not out_right:
@@ -221,16 +235,16 @@ def second_order_matches(left: np.ndarray, right: np.ndarray, left_points: np.nd
     return np.vstack(out_right), np.concatenate(out_kept)
 
 
-def affine_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
+def coarse_samples(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
                    near_m: float, far_m: float, step: int = 8, window: int = 21,
                    min_level: float = 6.0):
-    """Rectify a view and match a grid of left pixels every step pixels with affine windows,
-    for surfaces between near_m and far_m. Returns the rectification, both rectified
-    images, the kept left and right points (N, 2) and each window's affine part (N, 2, 2).
+    """Rectify a view and pick a grid of left pixels every step pixels with right guesses
+    from the coarse disparity, for surfaces between near_m and far_m. Returns the
+    rectification, both rectified images, the left points (N, 2) and their guesses (N, 2).
 
-    A sample is matched only when its whole window lies on lit surface (local mean at or
+    A sample is picked only when its whole window lies on lit surface (local mean at or
     above min_level in the left image) that semi-global matching also matched, so no window
-    straddles an edge. The right side of each match is judged by its correlation."""
+    straddles an edge."""
     rect = rectify(cal)
     rl = cv2.remap(left, *rect.left_maps, cv2.INTER_LINEAR)
     rr = cv2.remap(right, *rect.right_maps, cv2.INTER_LINEAR)
@@ -246,8 +260,53 @@ def affine_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
     points, d = points[valid], d[valid]
     guesses = points.copy()
     guesses[:, 0] -= d
+    return rect, rl, rr, points, guesses
+
+
+def affine_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
+                   near_m: float, far_m: float, step: int = 8, window: int = 21,
+                   min_level: float = 6.0):
+    """Match the samples of coarse_samples with affine windows. Returns the rectification,
+    both rectified images, the kept left and right points (N, 2) and each window's affine
+    part (N, 2, 2). The right side of each match is judged by its correlation."""
+    rect, rl, rr, points, guesses = coarse_samples(cal, left, right, near_m, far_m, step,
+                                                   window, min_level)
     left_pts, right_pts, warps = refine(rl, rr, points, guesses, window, return_warps=True)
     return rect, rl, rr, left_pts, right_pts, warps
+
+
+def direct_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
+                   near_m: float, far_m: float, step: int = 8, window: int = 25,
+                   min_level: float = 6.0, max_move: float = 3.0,
+                   min_correlation: float = 0.95):
+    """Match the samples of coarse_samples by Gauss-Newton alone, without Lucas-Kanade or
+    ECC: affine windows from the coarse disparity, kept when they move under max_move px
+    and correlate at min_correlation or better, then second-order windows from there.
+    Returns the rectification, both rectified images, the left points (N, 2), their
+    refined right points (N, 2) and a kept flag (N,)."""
+    rect, rl, rr, points, guesses = coarse_samples(cal, left, right, near_m, far_m, step,
+                                                   window, min_level)
+    start = np.repeat(np.eye(2)[None], len(points), axis=0)
+    affine, affine_kept = second_order_matches(rl, rr, points, guesses, start, window,
+                                               max_move=max_move,
+                                               min_correlation=min_correlation, terms=3)
+    refined, kept = second_order_matches(rl, rr, points, affine, start, window)
+    return rect, rl, rr, points, refined, kept & affine_kept
+
+
+def triangulate(rect: Rectification, left_pts: np.ndarray, right_pts: np.ndarray,
+                near_m: float, far_m: float) -> np.ndarray:
+    """Return points (N, 3) in metres in the left camera's frame for matched rectified
+    pixels, dropping any outside 0.8 near_m to 1.2 far_m."""
+    if len(left_pts) == 0:
+        return np.empty((0, 3))
+    right_pts = right_pts.copy()
+    right_pts[:, 1] = left_pts[:, 1]
+    x = cv2.triangulatePoints(rect.left_projection, rect.right_projection, left_pts.T,
+                              right_pts.T)
+    x = (x[:3] / x[3]).T
+    depth_ok = (x[:, 2] > near_m * 0.8) & (x[:, 2] < far_m * 1.2)
+    return x[depth_ok] @ rect.left_rotation
 
 
 def depth_points(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
@@ -259,10 +318,4 @@ def depth_points(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
                                                               step, window, min_level)
     if order == 2:
         left_pts, right_pts = refine_second_order(rl, rr, left_pts, right_pts, warps, window)
-    if len(left_pts) == 0:
-        return np.empty((0, 3)), rect
-    right_pts[:, 1] = left_pts[:, 1]
-    x = cv2.triangulatePoints(rect.left_projection, rect.right_projection, left_pts.T, right_pts.T)
-    x = (x[:3] / x[3]).T
-    depth_ok = (x[:, 2] > near_m * 0.8) & (x[:, 2] < far_m * 1.2)
-    return x[depth_ok] @ rect.left_rotation, rect
+    return triangulate(rect, left_pts, right_pts, near_m, far_m), rect

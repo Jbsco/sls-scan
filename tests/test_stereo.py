@@ -130,3 +130,41 @@ def test_rectification_params_reproduce_the_maps(stereo_calibration):
         rows, cols = i.astype(int), j.astype(int)
         assert np.max(np.abs(u - maps[0][rows, cols])) < 0.001
         assert np.max(np.abs(v - maps[1][rows, cols])) < 0.001
+
+
+def test_direct_matches_keep_the_affine_matches(head, pattern):
+    truth = synthetic.true_stereo_calibration(head, BOARD)
+    ball = synthetic.stereo_scenes()["sphere"][0]
+    centre = synthetic.to_left(head, ball.centre[None])[0]
+    images = capture(head, [ball], pattern)
+    _, rl, rr, left, right, warps = stereo.affine_matches(truth, images["left"], images["right"],
+                                                          0.4, 0.6, step=12, window=25)
+    reference, kept = stereo.second_order_matches(rl, rr, left, right, warps, 25)
+    rect, _, _, points, refined, direct_kept = stereo.direct_matches(
+        truth, images["left"], images["right"], 0.4, 0.6, step=12)
+    index = {tuple(p): i for i, p in enumerate(points)}
+    pairs = [(index[tuple(p)], i) for i, p in enumerate(left) if kept[i]]
+    both = [(d, r) for d, r in pairs if direct_kept[d]]
+    assert len(both) >= 0.98 * len(pairs)
+    differences = [np.abs(refined[d] - reference[r]).max() for d, r in both]
+    assert np.percentile(differences, 99) < 0.001
+    cloud = stereo.triangulate(rect, points[direct_kept], refined[direct_kept], 0.4, 0.6)
+    assert direct_kept.sum() >= kept.sum()
+    assert abs(np.mean(np.linalg.norm(cloud - centre, axis=1) - ball.radius)) < 0.000005
+
+
+def test_direct_matches_measure_the_ball_bar_like_affine_matches(head, pattern):
+    truth = synthetic.true_stereo_calibration(head, BOARD)
+    images = capture(head, synthetic.stereo_scenes()["ball-bar"], pattern)
+
+    def spacing(cloud):
+        labels = geometry.split_two(cloud)
+        centres = [geometry.fit_sphere(cloud[labels == i])[0] for i in (0, 1)]
+        return np.linalg.norm(centres[0] - centres[1])
+
+    reference, _ = stereo.depth_points(truth, images["left"], images["right"], 0.4, 0.6, 8, 25,
+                                       order=2)
+    rect, _, _, points, refined, kept = stereo.direct_matches(truth, images["left"],
+                                                              images["right"], 0.4, 0.6)
+    direct = stereo.triangulate(rect, points[kept], refined[kept], 0.4, 0.6)
+    assert abs(spacing(direct) - spacing(reference)) < 0.00001
