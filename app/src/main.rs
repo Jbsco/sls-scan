@@ -1,6 +1,7 @@
 use slscan_app::calibration;
 use slscan_app::client::{self, Event};
 use slscan_app::coarse;
+use slscan_app::depth;
 use slscan_app::gpu;
 use slscan_app::protocol::SequenceRequest;
 use slscan_app::rectify;
@@ -311,6 +312,16 @@ struct StereoMeta {
     min_correlation: f32,
     #[serde(default)]
     coarse: Option<CoarseMeta>,
+    #[serde(default)]
+    depth: Option<DepthMeta>,
+}
+
+#[derive(serde::Deserialize)]
+struct DepthMeta {
+    near: f64,
+    far: f64,
+    step: u32,
+    min_level: f32,
 }
 
 #[derive(serde::Deserialize)]
@@ -690,6 +701,147 @@ fn coarse_check(args: &[String]) -> ExitCode {
     }
 }
 
+fn depth_check(args: &[String]) -> ExitCode {
+    let Some(dir) = args.first().map(PathBuf::from) else {
+        eprintln!("usage: sls-scan depth-check <vector directory> [--fallback]");
+        return ExitCode::FAILURE;
+    };
+    let fallback = args.iter().any(|a| a == "--fallback");
+    let read = |name: &str| std::fs::read(dir.join(name));
+    let (meta, cameras, left, right, reference) = match (
+        read("meta.json"),
+        read("rectify.json"),
+        read("left-raw.bin"),
+        read("right-raw.bin"),
+        read("depth.bin"),
+    ) {
+        (Ok(m), Ok(c), Ok(l), Ok(r), Ok(d)) => (m, c, l, r, d),
+        _ => {
+            eprintln!("depth vectors missing in {}", dir.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let (meta, cameras): (StereoMeta, Rectifications) = match (
+        serde_json::from_slice(&meta),
+        serde_json::from_slice(&cameras),
+    ) {
+        (Ok(m), Ok(c)) => (m, c),
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("vector metadata: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let (Some(c), Some(d)) = (&meta.coarse, &meta.depth) else {
+        eprintln!("meta.json has no coarse or depth section");
+        return ExitCode::FAILURE;
+    };
+    let params = depth::DepthParams {
+        coarse: coarse::CoarseParams {
+            width: meta.width,
+            height: meta.height,
+            scale: c.scale,
+            block: c.block,
+            lo: c.lo,
+            count: c.count,
+            min_correlation: c.min_correlation,
+            margin: c.margin,
+            fill: c.fill,
+        },
+        step: d.step,
+        window: meta.window,
+        iterations: meta.iterations,
+        min_level: d.min_level,
+        max_move: meta.max_move,
+        min_correlation: meta.min_correlation,
+        near_m: d.near,
+        far_m: d.far,
+    };
+    let frame = match depth::DepthFrame::new(fallback) {
+        Ok(f) => f,
+        Err(e) if std::env::var_os("SLS_REQUIRE_GPU").is_none() => {
+            println!("no GPU adapter, depth check skipped: {e}");
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            eprintln!("no GPU adapter: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut best: Option<(f64, depth::DepthResult)> = None;
+    for _ in 0..3 {
+        let start = Instant::now();
+        let result = match frame.depth(&params, (&cameras.left, &cameras.right), &left, &right) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("depth failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let total = start.elapsed().as_secs_f64() * 1000.0;
+        if best.as_ref().is_none_or(|(t, _)| total < *t) {
+            best = Some((total, result));
+        }
+    }
+    let Some((total, result)) = best else {
+        return ExitCode::FAILURE;
+    };
+    let mut expected = std::collections::HashMap::new();
+    for row in reference.chunks_exact(40) {
+        let v: Vec<f64> = row
+            .chunks_exact(8)
+            .map(|b| f64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
+            .collect();
+        expected.insert((v[0] as i64, v[1] as i64), [v[2], v[3], v[4]]);
+    }
+    let mut extra = 0usize;
+    let mut distances = Vec::new();
+    for (s, p) in result.samples.iter().zip(&result.points) {
+        match expected.get(&(s[0] as i64, s[1] as i64)) {
+            Some(r) => {
+                let squares = (0..3).map(|i| (p[i] - r[i]).powi(2)).sum::<f64>();
+                distances.push(squares.sqrt());
+            }
+            None => extra += 1,
+        }
+    }
+    let missing = expected.len() - distances.len();
+    distances.sort_by(f64::total_cmp);
+    let median = distances.get(distances.len() / 2).copied().unwrap_or(0.0);
+    let p99 = distances
+        .get(distances.len() * 99 / 100)
+        .copied()
+        .unwrap_or(0.0);
+    let largest = distances.last().copied().unwrap_or(0.0);
+    let stages: Vec<String> = result
+        .timings
+        .iter()
+        .map(|(name, ms)| format!("{name} {ms:.1}"))
+        .collect();
+    println!("adapter {}", frame.adapter);
+    println!(
+        "{} points from a {} × {} pair in {total:.1} ms (fastest of three, with upload and readback): {} ms",
+        result.points.len(),
+        meta.width,
+        meta.height,
+        stages.join(", ")
+    );
+    println!(
+        "against {} reference points: {missing} missing, {extra} extra, distance median {:.3} µm, 99th percentile {:.3} µm, largest {:.3} µm",
+        expected.len(),
+        median * 1e6,
+        p99 * 1e6,
+        largest * 1e6
+    );
+    let differing = (missing + extra) as f64 / expected.len().max(1) as f64;
+    if differing <= 0.005 && p99 <= 1e-6 && largest <= 5e-6 {
+        println!("depth check: GPU matches the NumPy reference");
+        ExitCode::SUCCESS
+    } else {
+        println!("depth check: GPU differs from the NumPy reference");
+        ExitCode::FAILURE
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
@@ -699,6 +851,7 @@ fn main() -> ExitCode {
         Some("refine-check") => return refine_check(&args[2..]),
         Some("rectify-check") => return rectify_check(&args[2..]),
         Some("coarse-check") => return coarse_check(&args[2..]),
+        Some("depth-check") => return depth_check(&args[2..]),
         _ => {}
     }
     let options = eframe::NativeOptions::default();
