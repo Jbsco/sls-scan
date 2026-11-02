@@ -32,10 +32,11 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   through lavapipe. Acceptance: 15 depth frames per second at 1.6 MP on either machine's
   GPU, 3 or more on the CPU fallback, and kernel outputs within tolerance of the Phase 2
   reference on recorded frames. A phase-shift decode kernel is in place (D22).
-- Phase 5, open. Continuous scanning. Pose tracking from geometry and from markers on the
+- Phase 5, in progress. Continuous scanning. Pose tracking from geometry and from markers on the
   mat around the part, TSDF fusion of the depth stream, loop closure on revisited areas.
   Acceptance: a sweep around a part fuses to a model whose ball bar is within 0.05 mm and
-  shows no doubling at revisited surfaces.
+  shows no doubling at revisited surfaces. ICP tracking and point fusion pass a
+  synthetic sweep (D26).
 - Phase 6, open. Many static views. Marker detection, view poses from the markers, ICP
   refinement, keyed markers defining the object's frame, a merged cloud. Acceptance: two
   scale bars in different orientations measure within 0.5 mm after a 10-view scan of an
