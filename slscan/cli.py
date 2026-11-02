@@ -279,8 +279,8 @@ def cmd_decode_vectors(args: argparse.Namespace) -> int:
 
 
 def cmd_stereo_vectors(args: argparse.Namespace) -> int:
-    """Write a rectified stereo view, its affine matches and their NumPy second-order
-    refinement as raw files for the GPU kernels."""
+    """Write a stereo view with its rectification, its affine matches and their NumPy
+    second-order refinement as raw files for the GPU kernels."""
     import json
 
     head = synthetic.stereo_head()
@@ -289,11 +289,15 @@ def cmd_stereo_vectors(args: argparse.Namespace) -> int:
                                     np.random.default_rng(0))
     images = synthetic.stereo_capture(head, synthetic.stereo_scenes()[args.scene], pattern,
                                       np.random.default_rng(args.seed))
-    _, rl, rr, left_pts, right_pts, warps = stereo.affine_matches(
+    rect, rl, rr, left_pts, right_pts, warps = stereo.affine_matches(
         cal, images["left"], images["right"], 0.4, 0.6, args.step, args.window)
     refined, kept = stereo.second_order_matches(rl, rr, left_pts, right_pts, warps, args.window,
                                                 args.iterations)
     os.makedirs(args.out, exist_ok=True)
+    images["left"].tofile(os.path.join(args.out, "left-raw.bin"))
+    images["right"].tofile(os.path.join(args.out, "right-raw.bin"))
+    with open(os.path.join(args.out, "rectify.json"), "w", encoding="utf-8") as f:
+        json.dump(stereo.rectification_params(cal, rect), f)
     rl.tofile(os.path.join(args.out, "left.bin"))
     rr.tofile(os.path.join(args.out, "right.bin"))
     samples = np.column_stack([left_pts, right_pts, warps.reshape(-1, 4)])
@@ -601,8 +605,8 @@ def main(argv=None) -> int:
     p.set_defaults(func=cmd_decode_vectors)
 
     p = sub.add_parser("stereo-vectors",
-                       help="write a rectified stereo view, its affine matches and their "
-                            "reference second-order refinement")
+                       help="write a stereo view with its rectification, its affine matches "
+                            "and their reference second-order refinement")
     p.add_argument("--out", default="data/stereo-vectors")
     p.add_argument("--scene", choices=("plate", "sphere", "ball-bar"), default="sphere")
     p.add_argument("--step", type=int, default=8, help="sample spacing in pixels")

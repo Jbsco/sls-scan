@@ -445,3 +445,20 @@ upload and readback, down from 302 ms. A sphere view's 296 samples take 14 ms, d
 234 ms. Kept flags still agree on every sample, and refined points differ from NumPy by
 at most 0.00012 px. A plate view at 115 ms is still above the 66 ms per frame that 15
 depth frames per second allow (Phase 4).
+
+## D31. Rectification on the GPU (2026-11-02)
+
+Rectification runs as a WGSL kernel (`app/src/rectify.wgsl`) that computes OpenCV's
+undistort-rectify map for each output pixel and samples the raw image bilinearly, with
+zero outside it. The map needs only each camera's inverse rectified projection times
+rotation, focal lengths, principal point and five distortion terms, which
+`slscan.stereo.rectification_params` exports. No map images go to the GPU. In NumPy
+double precision this formula reproduces OpenCV's maps within 0.00006 px, the precision
+of their single-precision storage, and bilinear sampling of that form reproduces
+`cv2.remap` exactly.
+
+`sls-scan rectify-check` compares the kernel with OpenCV on the stereo vectors. On a
+Radeon RX 7900 GRE both 1456 × 1088 images rectify in about 1 ms with upload and
+readback. Under 0.01 % of pixels differ, each by one grey level, where single precision
+rounds a half level the other way. Coarse disparity is the remaining CPU stage before
+refinement.

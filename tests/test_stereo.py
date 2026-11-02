@@ -110,3 +110,23 @@ def test_second_order_matches_flag_the_kept_samples(head, pattern):
     assert kept.sum() > 0.9 * len(left)
     assert np.array_equal(kept_left, left[kept])
     assert np.array_equal(kept_right, refined[kept])
+
+
+def test_rectification_params_reproduce_the_maps(stereo_calibration):
+    rect = stereo.rectify(stereo_calibration)
+    params = stereo.rectification_params(stereo_calibration, rect)
+    w, h = rect.size
+    j, i = np.meshgrid(np.arange(0, w, 37.0), np.arange(0, h, 29.0))
+    for side, maps in (("left", rect.left_maps), ("right", rect.right_maps)):
+        p = params[side]
+        ir = np.array(p["inverse"]).reshape(3, 3)
+        k1, k2, p1, p2, k3 = p["distortion"]
+        hx, hy, hw = (ir[r, 0] * j + ir[r, 1] * i + ir[r, 2] for r in range(3))
+        x, y = hx / hw, hy / hw
+        r2 = x * x + y * y
+        radial = 1 + ((k3 * r2 + k2) * r2 + k1) * r2
+        u = p["focal"][0] * (x * radial + 2 * p1 * x * y + p2 * (r2 + 2 * x * x)) + p["centre"][0]
+        v = p["focal"][1] * (y * radial + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y) + p["centre"][1]
+        rows, cols = i.astype(int), j.astype(int)
+        assert np.max(np.abs(u - maps[0][rows, cols])) < 0.001
+        assert np.max(np.abs(v - maps[1][rows, cols])) < 0.001

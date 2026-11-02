@@ -38,6 +38,27 @@ def rectify(cal: StereoCalibration) -> Rectification:
     return Rectification(rl, rr, pl, pr, left_maps, right_maps, size)
 
 
+def rectification_params(cal: StereoCalibration, rect: Rectification) -> dict:
+    """Return each camera's rectification as the GPU kernel takes it: the inverse of its
+    rectified projection times rotation (row-major), focal lengths, principal point and the
+    five distortion coefficients k1, k2, p1, p2, k3."""
+    out = {}
+    for side, camera, rotation, projection in (
+            ("left", cal.left, rect.left_rotation, rect.left_projection),
+            ("right", cal.right, rect.right_rotation, rect.right_projection)):
+        distortion = np.zeros(5)
+        coefficients = np.ravel(camera.distortion)
+        if np.any(coefficients[5:]) or camera.matrix[0, 1] != 0:
+            raise ValueError("the GPU rectification takes five distortion terms and no skew")
+        distortion[:min(5, len(coefficients))] = coefficients[:5]
+        inverse = np.linalg.inv(projection[:3, :3] @ rotation)
+        out[side] = {"inverse": inverse.ravel().tolist(),
+                     "focal": [float(camera.matrix[0, 0]), float(camera.matrix[1, 1])],
+                     "centre": [float(camera.matrix[0, 2]), float(camera.matrix[1, 2])],
+                     "distortion": distortion.tolist()}
+    return out
+
+
 def disparity_at(rect: Rectification, depth_m: float) -> float:
     """Return the rectified disparity of a point at depth_m in the rectified frame."""
     pl, pr = rect.left_projection, rect.right_projection
