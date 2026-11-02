@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
+use std::thread;
 
 pub type Mat3 = [[f64; 3]; 3];
 pub type Vec3 = [f64; 3];
@@ -11,6 +12,8 @@ const NEIGHBOURS: usize = 12;
 const LIMITS: [f64; 4] = [0.004, 0.002, 0.001, 0.0005];
 const ITERATIONS: usize = 10;
 const MIN_PAIRS: usize = 50;
+/// Fewest points a thread takes, so that small frames stay on one thread.
+const CHUNK: usize = 2048;
 
 /// Multiply-and-rotate hash for cell keys, much cheaper than the default for short
 /// integer keys that need no protection from chosen inputs.
@@ -33,6 +36,27 @@ impl Hasher for CellHasher {
 }
 
 type CellMap<V> = HashMap<[i64; 3], V, BuildHasherDefault<CellHasher>>;
+
+/// Run `work` on consecutive chunks of `0..n` on scoped threads and return the results in
+/// chunk order.
+fn chunked<T: Send>(n: usize, work: impl Fn(std::ops::Range<usize>) -> T + Sync) -> Vec<T> {
+    let threads = thread::available_parallelism().map_or(1, |p| p.get());
+    let chunks = n.div_ceil(CHUNK).clamp(1, threads);
+    let size = n.div_ceil(chunks);
+    if chunks == 1 {
+        return vec![work(0..n)];
+    }
+    thread::scope(|scope| {
+        let work = &work;
+        let handles: Vec<_> = (0..chunks)
+            .map(|c| scope.spawn(move || work(c * size..((c + 1) * size).min(n))))
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+            .collect()
+    })
+}
 
 /// A rigid motion taking points from a frame into the model: `rotation · p + translation`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -272,28 +296,34 @@ impl Grid {
 /// Unit normal per point from the plane of its nearest neighbours.
 fn normals(points: &[Vec3], cell: f64) -> Vec<Vec3> {
     let grid = Grid::new(points, cell);
-    points
-        .iter()
-        .map(|p| {
-            let idx = grid.knn(points, p, NEIGHBOURS);
-            let n = idx.len() as f64;
-            let mut mean = [0.0; 3];
-            for &i in &idx {
-                mean = add(&mean, &points[i]);
+    let parts = chunked(points.len(), |range| {
+        points[range]
+            .iter()
+            .map(|p| normal(&grid, points, p))
+            .collect::<Vec<_>>()
+    });
+    parts.into_iter().flatten().collect()
+}
+
+/// Unit normal of one point from the plane of its nearest neighbours.
+fn normal(grid: &Grid, points: &[Vec3], p: &Vec3) -> Vec3 {
+    let idx = grid.knn(points, p, NEIGHBOURS);
+    let n = idx.len() as f64;
+    let mut mean = [0.0; 3];
+    for &i in &idx {
+        mean = add(&mean, &points[i]);
+    }
+    mean = mean.map(|v| v / n);
+    let mut cov = [[0.0; 3]; 3];
+    for &i in &idx {
+        let d = sub(&points[i], &mean);
+        for r in 0..3 {
+            for c in 0..3 {
+                cov[r][c] += d[r] * d[c];
             }
-            mean = mean.map(|v| v / n);
-            let mut cov = [[0.0; 3]; 3];
-            for &i in &idx {
-                let d = sub(&points[i], &mean);
-                for r in 0..3 {
-                    for c in 0..3 {
-                        cov[r][c] += d[r] * d[c];
-                    }
-                }
-            }
-            smallest_eigenvector(&cov)
-        })
-        .collect()
+        }
+    }
+    smallest_eigenvector(&cov)
 }
 
 /// Point-to-plane ICP of `source` onto `target` from `start`. Returns the pose and the RMS
@@ -304,26 +334,42 @@ fn icp(source: &[Vec3], target: &[Vec3], target_normals: &[Vec3], start: Pose) -
     for limit in LIMITS {
         let grid = Grid::new(target, limit);
         for _ in 0..ITERATIONS {
+            let parts = chunked(source.len(), |range| {
+                let mut ata = [[0.0; 6]; 6];
+                let mut atb = [0.0; 6];
+                let (mut pairs, mut squares) = (0usize, 0.0);
+                for s in &source[range] {
+                    let p = pose.apply(s);
+                    let Some(j) = grid.nearest(target, &p, limit) else {
+                        continue;
+                    };
+                    let n = &target_normals[j];
+                    let residual = dot(&sub(&p, &target[j]), n);
+                    let c = cross(&p, n);
+                    let a = [c[0], c[1], c[2], n[0], n[1], n[2]];
+                    for r in 0..6 {
+                        for k in 0..6 {
+                            ata[r][k] += a[r] * a[k];
+                        }
+                        atb[r] -= a[r] * residual;
+                    }
+                    pairs += 1;
+                    squares += residual * residual;
+                }
+                (ata, atb, pairs, squares)
+            });
             let mut ata = [[0.0; 6]; 6];
             let mut atb = [0.0; 6];
             let (mut pairs, mut squares) = (0usize, 0.0);
-            for s in source {
-                let p = pose.apply(s);
-                let Some(j) = grid.nearest(target, &p, limit) else {
-                    continue;
-                };
-                let n = &target_normals[j];
-                let residual = dot(&sub(&p, &target[j]), n);
-                let c = cross(&p, n);
-                let a = [c[0], c[1], c[2], n[0], n[1], n[2]];
+            for (part_ata, part_atb, part_pairs, part_squares) in parts {
                 for r in 0..6 {
                     for k in 0..6 {
-                        ata[r][k] += a[r] * a[k];
+                        ata[r][k] += part_ata[r][k];
                     }
-                    atb[r] -= a[r] * residual;
+                    atb[r] += part_atb[r];
                 }
-                pairs += 1;
-                squares += residual * residual;
+                pairs += part_pairs;
+                squares += part_squares;
             }
             if pairs < MIN_PAIRS {
                 break;
