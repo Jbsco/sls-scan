@@ -11,6 +11,9 @@ Handheld scanners sold for this work capture only through their makers' Windows 
 macOS software. This project applies the same measurement principle from a static rig,
 under the operator's control from calibration to export.
 
+Nothing in this repository has run on hardware yet. Until the rig is built and the
+acceptance tests in `docs/accuracy.md` pass on it, use anything here at your own risk.
+
 ## Contents
 
 - [Status](#status)
