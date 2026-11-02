@@ -185,7 +185,8 @@ class Plate:
         denominator = directions @ normal
         with np.errstate(divide="ignore", invalid="ignore"):
             t = ((self.centre - origin) @ normal) / denominator
-        local = (origin + t[:, np.newaxis] * directions - self.centre) @ self.axes[:, :2]
+        with np.errstate(invalid="ignore"):
+            local = (origin + t[:, np.newaxis] * directions - self.centre) @ self.axes[:, :2]
         inside = (np.abs(local[:, 0]) <= self.half_u) & (np.abs(local[:, 1]) <= self.half_v)
         return np.where(np.isfinite(t) & (t > 0) & inside, t, np.inf)
 
@@ -448,3 +449,4 @@ def stereo_scenes(crossing_m: float = 0.5) -> dict:
             "sphere": [Ball(np.array([0.003, -0.002, z]), 0.0125)],
             "ball-bar": [Ball(np.array([-0.04, 0.004, z]), 0.0125),
                          Ball(np.array([0.04, -0.004, z + 0.002]), 0.0125)]}
+
