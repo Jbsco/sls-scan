@@ -66,6 +66,10 @@ captures after a settle delay, and a manifest records pattern index, exposure an
 timestamp per image. Two or three exposures per pattern cover a view with both dark and
 light surfaces. The decode takes the best-exposed sample per pixel.
 
+With the capture node of `DESIGN.md` D13, the application sends a sequence request and
+receives frames over the capture protocol (`docs/capture-protocol.md`). `slscan capture`
+saves one sequence in the layouts above.
+
 ## Decode
 
 `decode.py` binarizes each Gray code plane against its inverse and decodes the bits into
