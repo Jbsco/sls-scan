@@ -19,6 +19,14 @@ struct Params {
 @group(0) @binding(7) var<storage, read_write> kept: array<u32>;
 
 const N: u32 = 14u;
+const LANES: u32 = 64u;
+const CHUNK: u32 = 40u;
+const RHS: u32 = 105u;
+
+var<workgroup> partial: array<f32, 2560>;
+var<workgroup> sums: array<f32, 120>;
+var<workgroup> shared_q: array<f32, 14>;
+var<workgroup> state: u32;
 
 fn left_at(i: u32) -> f32 {
     return f32((left[i >> 2u] >> ((i & 3u) * 8u)) & 0xffu);
@@ -122,9 +130,78 @@ fn left_linear(x: f32, y: f32) -> f32 {
     return out;
 }
 
+fn upper(c: u32, d: u32) -> u32 {
+    return c * N - (c * (c + 1u)) / 2u + d;
+}
+
+fn solve(u0: f32, v0: f32) -> u32 {
+    var m = array<f32, 196>();
+    var r = array<f32, 14>();
+    var scaling = array<f32, 14>();
+    for (var c = 0u; c < N; c++) {
+        r[c] = sums[RHS + c];
+        for (var d = c; d < N; d++) {
+            m[c * N + d] = sums[upper(c, d)];
+        }
+        if (!(m[c * N + c] > 0.0)) {
+            return 2u;
+        }
+        scaling[c] = inverseSqrt(m[c * N + c]);
+    }
+    for (var c = 0u; c < N; c++) {
+        r[c] *= scaling[c];
+        for (var d = c; d < N; d++) {
+            m[c * N + d] *= scaling[c] * scaling[d];
+        }
+    }
+    for (var c = 0u; c < N; c++) {
+        var pivot = m[c * N + c];
+        for (var k = 0u; k < c; k++) {
+            pivot -= m[k * N + c] * m[k * N + c];
+        }
+        if (!(pivot > 1e-10)) {
+            return 2u;
+        }
+        m[c * N + c] = sqrt(pivot);
+        for (var d = c + 1u; d < N; d++) {
+            var e = m[c * N + d];
+            for (var k = 0u; k < c; k++) {
+                e -= m[k * N + c] * m[k * N + d];
+            }
+            m[c * N + d] = e / m[c * N + c];
+        }
+    }
+    for (var c = 0u; c < N; c++) {
+        var e = r[c];
+        for (var k = 0u; k < c; k++) {
+            e -= m[k * N + c] * r[k];
+        }
+        r[c] = e / m[c * N + c];
+    }
+    for (var c = N; c > 0u; c--) {
+        let row = c - 1u;
+        var e = r[row];
+        for (var k = row + 1u; k < N; k++) {
+            e -= m[row * N + k] * r[k];
+        }
+        r[row] = e / m[row * N + row];
+    }
+    for (var c = 0u; c < N; c++) {
+        shared_q[c] += r[c] * scaling[c];
+    }
+    if (!(abs(shared_q[0] - u0) < 4.0 && abs(shared_q[6] - v0) < 4.0)) {
+        return 2u;
+    }
+    if (max(abs(r[0] * scaling[0]), abs(r[6] * scaling[6])) < 1e-5) {
+        return 1u;
+    }
+    return 0u;
+}
+
 @compute @workgroup_size(64)
-fn refine(@builtin(global_invocation_id) id: vec3<u32>) {
-    let s = id.x + id.y * params.sample_stride;
+fn refine(@builtin(workgroup_id) group: vec3<u32>,
+          @builtin(local_invocation_index) lane: u32) {
+    let s = group.x + group.y * params.sample_stride;
     if (s >= params.count) {
         return;
     }
@@ -135,112 +212,87 @@ fn refine(@builtin(global_invocation_id) id: vec3<u32>) {
     let v0 = samples[base + 3u] - ly;
     let hw = i32(params.window / 2u);
     let scale = f32(hw);
-    var q: array<f32, 14>;
-    q[0] = u0;
-    q[1] = (samples[base + 4u] - 1.0) * scale;
-    q[2] = samples[base + 5u] * scale;
-    q[6] = v0;
-    q[7] = samples[base + 6u] * scale;
-    q[8] = (samples[base + 7u] - 1.0) * scale;
-    q[12] = 1.0;
-    var ok = true;
+    let pixels = params.window * params.window;
+    if (lane == 0u) {
+        for (var c = 0u; c < N; c++) {
+            shared_q[c] = 0.0;
+        }
+        shared_q[0] = u0;
+        shared_q[1] = (samples[base + 4u] - 1.0) * scale;
+        shared_q[2] = samples[base + 5u] * scale;
+        shared_q[6] = v0;
+        shared_q[7] = samples[base + 6u] * scale;
+        shared_q[8] = (samples[base + 7u] - 1.0) * scale;
+        shared_q[12] = 1.0;
+        state = 0u;
+    }
+    workgroupBarrier();
     for (var it = 0u; it < params.iterations; it++) {
+        var q = array<f32, 14>();
+        for (var c = 0u; c < N; c++) {
+            q[c] = shared_q[c];
+        }
         // Explicit initializers zero these sums on every iteration.
-        var m = array<f32, 196>();
-        var r = array<f32, 14>();
-        for (var j = -hw; j <= hw; j++) {
-            for (var i = -hw; i <= hw; i++) {
-                let a = f32(i) / scale;
-                let b = f32(j) / scale;
-                let shape = array<f32, 6>(1.0, a, b, 0.5 * a * a, a * b, 0.5 * b * b);
-                var u = 0.0;
-                var v = 0.0;
-                for (var k = 0u; k < 6u; k++) {
-                    u += q[k] * shape[k];
-                    v += q[6u + k] * shape[k];
+        var acc = array<f32, 120>();
+        for (var k = lane; k < pixels; k += LANES) {
+            let i = i32(k % params.window) - hw;
+            let j = i32(k / params.window) - hw;
+            let a = f32(i) / scale;
+            let b = f32(j) / scale;
+            let shape = array<f32, 6>(1.0, a, b, 0.5 * a * a, a * b, 0.5 * b * b);
+            var u = 0.0;
+            var v = 0.0;
+            for (var c = 0u; c < 6u; c++) {
+                u += q[c] * shape[c];
+                v += q[6u + c] * shape[c];
+            }
+            let g = right_cubic(lx + f32(i) + u, ly + f32(j) + v);
+            let f = left_linear(lx + f32(i), ly + f32(j));
+            let residual = f - (q[12] * g.x + q[13]);
+            var jac = array<f32, 14>();
+            for (var c = 0u; c < 6u; c++) {
+                jac[c] = q[12] * g.y * shape[c];
+                jac[6u + c] = q[12] * g.z * shape[c];
+            }
+            jac[12] = g.x;
+            jac[13] = 1.0;
+            for (var c = 0u; c < N; c++) {
+                acc[RHS + c] += jac[c] * residual;
+                for (var d = c; d < N; d++) {
+                    acc[upper(c, d)] += jac[c] * jac[d];
                 }
-                let g = right_cubic(lx + f32(i) + u, ly + f32(j) + v);
-                let f = left_linear(lx + f32(i), ly + f32(j));
-                let residual = f - (q[12] * g.x + q[13]);
-                var jac = array<f32, 14>();
-                for (var k = 0u; k < 6u; k++) {
-                    jac[k] = q[12] * g.y * shape[k];
-                    jac[6u + k] = q[12] * g.z * shape[k];
-                }
-                jac[12] = g.x;
-                jac[13] = 1.0;
-                for (var c = 0u; c < N; c++) {
-                    r[c] += jac[c] * residual;
-                    for (var d = c; d < N; d++) {
-                        m[c * N + d] += jac[c] * jac[d];
+            }
+        }
+        for (var chunk = 0u; chunk < 3u; chunk++) {
+            for (var c = 0u; c < CHUNK; c++) {
+                partial[lane * CHUNK + c] = acc[chunk * CHUNK + c];
+            }
+            workgroupBarrier();
+            for (var stride = LANES / 2u; stride > 0u; stride /= 2u) {
+                if (lane < stride) {
+                    for (var c = 0u; c < CHUNK; c++) {
+                        partial[lane * CHUNK + c] += partial[(lane + stride) * CHUNK + c];
                     }
                 }
+                workgroupBarrier();
             }
-        }
-        var scaling = array<f32, 14>();
-        for (var c = 0u; c < N; c++) {
-            if (!(m[c * N + c] > 0.0)) {
-                ok = false;
-            }
-            scaling[c] = select(0.0, inverseSqrt(m[c * N + c]), ok);
-        }
-        if (!ok) {
-            break;
-        }
-        for (var c = 0u; c < N; c++) {
-            r[c] *= scaling[c];
-            for (var d = c; d < N; d++) {
-                m[c * N + d] *= scaling[c] * scaling[d];
-            }
-        }
-        for (var c = 0u; c < N; c++) {
-            var pivot = m[c * N + c];
-            for (var k = 0u; k < c; k++) {
-                pivot -= m[k * N + c] * m[k * N + c];
-            }
-            if (!(pivot > 1e-10)) {
-                ok = false;
-                break;
-            }
-            m[c * N + c] = sqrt(pivot);
-            for (var d = c + 1u; d < N; d++) {
-                var e = m[c * N + d];
-                for (var k = 0u; k < c; k++) {
-                    e -= m[k * N + c] * m[k * N + d];
+            if (lane == 0u) {
+                for (var c = 0u; c < CHUNK; c++) {
+                    sums[chunk * CHUNK + c] = partial[c];
                 }
-                m[c * N + d] = e / m[c * N + c];
             }
+            workgroupBarrier();
         }
-        if (!ok) {
-            break;
+        if (lane == 0u) {
+            state = solve(u0, v0);
         }
-        for (var c = 0u; c < N; c++) {
-            var e = r[c];
-            for (var k = 0u; k < c; k++) {
-                e -= m[k * N + c] * r[k];
-            }
-            r[c] = e / m[c * N + c];
-        }
-        for (var c = N; c > 0u; c--) {
-            let row = c - 1u;
-            var e = r[row];
-            for (var k = row + 1u; k < N; k++) {
-                e -= m[row * N + k] * r[k];
-            }
-            r[row] = e / m[row * N + row];
-        }
-        for (var c = 0u; c < N; c++) {
-            q[c] += r[c] * scaling[c];
-        }
-        if (!(abs(q[0] - u0) < 4.0 && abs(q[6] - v0) < 4.0)) {
-            ok = false;
-            break;
-        }
-        if (max(abs(r[0] * scaling[0]), abs(r[6] * scaling[6])) < 1e-5) {
+        if (workgroupUniformLoad(&state) != 0u) {
             break;
         }
     }
-    refined[2u * s] = lx + q[0];
-    refined[2u * s + 1u] = ly + q[6];
-    kept[s] = select(0u, 1u, ok && abs(q[0] - u0) < 1.0);
+    if (lane == 0u) {
+        refined[2u * s] = lx + shared_q[0];
+        refined[2u * s + 1u] = ly + shared_q[6];
+        kept[s] = select(0u, 1u, state != 2u && abs(shared_q[0] - u0) < 1.0);
+    }
 }
