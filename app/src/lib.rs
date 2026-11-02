@@ -3,5 +3,6 @@
 
 pub mod calibration;
 pub mod client;
+pub mod gpu;
 pub mod protocol;
 pub mod ui;
