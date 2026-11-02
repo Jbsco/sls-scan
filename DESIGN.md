@@ -216,3 +216,19 @@ those planes, so the plane comes from the undistorted projector point at the row
 where the previous estimate lands, refined over three iterations. Calibration stays
 in OpenCV.
 
+## D17. A virtual bench before the hardware (2026-11-01)
+
+The renderer of D15 ray-casts plates and spheres from the camera, tests each point for
+a shadow from the projector, and renders Gray codes as sharp stripes and sinusoids as
+a slightly defocused projector shows them. `slscan simulate` writes a calibration
+capture and three scenes in the file layout of real captures.
+
+The scenes are the artifacts of VDI/VDE 2634 Part 2 for optical 3D measuring systems:
+a flat plate for flatness, a sphere for probing error, and a ball bar for sphere
+spacing. The tests run the whole pipeline on them with a calibration recovered from
+synthetic board views and check each result against its acceptance limit.
+
+Renode emulates microcontrollers, and nothing in this design runs on one, so it is
+not used. The simulation that Phase 3 needs is a capture node stand-in: a process,
+run in a container, that serves synthetic frames over the node's protocol, so the
+application is developed against the same interface as the Pi.
