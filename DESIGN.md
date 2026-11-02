@@ -256,3 +256,15 @@ adds an image build to every local run.
 
 Amended 2026-11-01: the ruleset on `main` requires the node check, with style and test.
 
+## D20. The application shell (2026-11-01)
+
+The application is one Rust crate in `app/`. Its library has the capture protocol, a
+capture client and three panels, and its binary opens the window. It uses eframe with
+default features on wgpu, the configuration its authors test. Rust 1.93.0 is pinned in
+`app/rust-toolchain.toml`, so formatting and lints agree between a workstation and CI.
+
+A headless `capture` mode runs one sequence and prints frame count, missing frames,
+order and mean interval. `app.do` runs it against the Python stand-in, so each
+implementation of the protocol is checked against the other on every run. A client
+waits for HELLO, not for an open port, because a container's port forward accepts
+connections before the node inside listens.
