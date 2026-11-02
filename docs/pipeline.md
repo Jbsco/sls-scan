@@ -186,6 +186,16 @@ given that directory, compare the kernels with them.
 depth-check` compares its points with the NumPy reference (D36). The kernels share one
 device, and the rectified pair stays on it through block matching and refinement (D37).
 
+Recorded pairs replay through the same path (D47):
+
+    app/target/debug/sls-scan capture --set stereo --frames 3 --out data/recorded
+    slscan depth-params --head stereo --step 16 --out data/replay.json
+    slscan replay-reference data/recorded --params data/replay.json --head stereo
+    app/target/debug/sls-scan replay --frames data/recorded --params data/replay.json
+
+`slscan replay-reference` writes a NumPy reference beside each pair, and `sls-scan
+replay` compares each GPU depth frame with it.
+
 ## Application
 
 The Rust application owns the loop: triggered capture of frame pairs from the capture
