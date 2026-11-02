@@ -780,3 +780,28 @@ pair in step, a mean interval of 33.333 ms and a largest gap of 33.333 ms. That 
 95 MB/s of image data over loopback, about three quarters of a gigabit link. This tests
 the protocol, the client and the host. The Pi's capture and its network link wait on
 the rig. The application gate streams 150 pairs at 30 Hz.
+
+## D47. Replay of recorded stereo pairs (2026-11-02)
+
+Phase 4 asks for kernel outputs within tolerance of the Phase 2 reference on recorded
+frames. `sls-scan capture --out DIR` writes each frame it receives as an 8-bit PNG under
+its frame name, so a stereo set lands as `frame_NNN/left.png` and `frame_NNN/right.png`.
+`slscan replay-reference` runs `direct_matches` and `triangulate` on each recorded pair
+with a depth parameter file and writes `frame_NNN/reference.bin`. `sls-scan replay` runs
+the GPU depth frame on each pair with that file and compares its points.
+
+A frame matches when samples kept on one side only are 0.5 % of the reference or less,
+the 99th percentile distance is 1 µm or less, and no more than 0.1 % of points lie
+beyond 5 µm. `sls-scan depth-check` had the first two limits and kept every point within
+5 µm, which one replayed point of 4042 missed at 7.4 µm, so it now uses this rule. By
+D36's relation with z = 0.5 m, f = 4405 px and b = 0.2 m, 7.4 µm is 0.026 px of
+disparity.
+
+Three stand-in pairs recorded at a 16 px step with the near head's calibration gave 3979
+to 4042 points each. No sample was missing or extra. Median distance was 0.007 µm and
+the 99th percentile 0.48 to 0.64 µm, with one point beyond 5 µm on one pair. Each GPU
+frame took 60 to 68 ms on a Radeon RX 7900 GRE, and NumPy took about 12 s per pair.
+
+The application gate records two pairs after its panel calibration and replays them on
+lavapipe. These pairs come from the stand-in's renderer. Pairs from the cameras wait on
+the rig.
