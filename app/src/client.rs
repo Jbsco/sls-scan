@@ -39,9 +39,11 @@ impl Stats {
             .enumerate()
             .filter_map(|(i, s)| (!s).then_some(i))
             .collect();
-        let mean_interval_ns = match (stamps.first(), stamps.last()) {
-            (Some(first), Some(last)) if stamps.len() > 1 => {
-                Some((last - first) as f64 / (stamps.len() - 1) as f64)
+        let mut distinct = stamps.to_vec();
+        distinct.dedup();
+        let mean_interval_ns = match (distinct.first(), distinct.last()) {
+            (Some(first), Some(last)) if distinct.len() > 1 => {
+                Some((last - first) as f64 / (distinct.len() - 1) as f64)
             }
             _ => None,
         };
@@ -94,6 +96,7 @@ pub fn capture(
         hello.projector.width,
         hello.projector.height,
         request.steps,
+        request.frames,
     )
     .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unknown pattern set"))?;
     on_event(Event::Connected(hello));
@@ -149,5 +152,7 @@ mod tests {
         assert!(stats.in_order);
         assert_eq!(stats.mean_interval_ns, Some(15.0));
         assert!(!Stats::from_frames(2, &[1, 0], &[0, 1]).in_order);
+        let pairs = Stats::from_frames(4, &[0, 1, 2, 3], &[0, 0, 30, 30]);
+        assert_eq!(pairs.mean_interval_ns, Some(30.0));
     }
 }

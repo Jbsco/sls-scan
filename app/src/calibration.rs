@@ -136,6 +136,7 @@ pub fn capture_pose(
         set: "calibration".into(),
         pitch: 32,
         steps: 4,
+        frames: 1,
     };
     let mut projector = None;
     let mut failure = None;
