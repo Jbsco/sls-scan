@@ -2,6 +2,7 @@
 //! averages, following `track.fuse` in `slscan/track.py`.
 
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 
 pub type Mat3 = [[f64; 3]; 3];
 pub type Vec3 = [f64; 3];
@@ -10,6 +11,28 @@ const NEIGHBOURS: usize = 12;
 const LIMITS: [f64; 4] = [0.004, 0.002, 0.001, 0.0005];
 const ITERATIONS: usize = 10;
 const MIN_PAIRS: usize = 50;
+
+/// Multiply-and-rotate hash for cell keys, much cheaper than the default for short
+/// integer keys that need no protection from chosen inputs.
+#[derive(Default)]
+struct CellHasher(u64);
+
+impl Hasher for CellHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for chunk in bytes.chunks(8) {
+            let mut word = [0u8; 8];
+            word[..chunk.len()].copy_from_slice(chunk);
+            self.0 = (self.0.rotate_left(5) ^ u64::from_le_bytes(word))
+                .wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+        }
+    }
+}
+
+type CellMap<V> = HashMap<[i64; 3], V, BuildHasherDefault<CellHasher>>;
 
 /// A rigid motion taking points from a frame into the model: `rotation · p + translation`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -154,14 +177,14 @@ fn solve6(mut a: [[f64; 6]; 6], mut b: [f64; 6]) -> Option<[f64; 6]> {
 /// Points bucketed in cubic cells for neighbour searches.
 struct Grid {
     cell: f64,
-    cells: HashMap<[i64; 3], Vec<u32>>,
+    cells: CellMap<Vec<u32>>,
     lo: [i64; 3],
     hi: [i64; 3],
 }
 
 impl Grid {
     fn new(points: &[Vec3], cell: f64) -> Self {
-        let mut cells: HashMap<[i64; 3], Vec<u32>> = HashMap::new();
+        let mut cells: CellMap<Vec<u32>> = CellMap::default();
         let (mut lo, mut hi) = ([i64::MAX; 3], [i64::MIN; 3]);
         for (i, p) in points.iter().enumerate() {
             let key = Self::key_of(p, cell);
@@ -330,7 +353,7 @@ fn icp(source: &[Vec3], target: &[Vec3], target_normals: &[Vec3], start: Pose) -
 /// A model built from depth frames, each aligned to it before it joins.
 pub struct Fusion {
     voxel: f64,
-    sums: HashMap<[i64; 3], (Vec3, u32)>,
+    sums: CellMap<(Vec3, u32)>,
     model: Vec<Vec3>,
     normals: Vec<Vec3>,
     pose: Pose,
@@ -343,7 +366,7 @@ impl Fusion {
     pub fn new(voxel: f64) -> Self {
         Self {
             voxel,
-            sums: HashMap::new(),
+            sums: CellMap::default(),
             model: Vec::new(),
             normals: Vec::new(),
             pose: Pose::IDENTITY,
