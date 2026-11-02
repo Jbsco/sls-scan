@@ -55,7 +55,8 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   Acceptance on the bench: an 80 mm flat fits a plane under 0.01 mm RMS, a 25 mm
   sphere's radius lands within 0.01 mm, and a ball bar's spacing within 0.02 mm.
   Second-order matching windows are in place and remove the curvature bias on the
-  virtual bench (D28).
+  virtual bench (D28). Direct matching from block disparity measures the ball bar within
+  4 µm there (D34).
 - Phase 10, open. Applications. An interior a few metres across, a pattern and the mold
   taken from it, small parts on a turntable with a known axis. Acceptance per job: scale
   bars within the Phase 6 figure and datum residuals within the Phase 7 figure.
