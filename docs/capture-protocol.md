@@ -40,6 +40,10 @@ Frame header, 23 bytes:
 3. Further SEQUENCE messages may follow on the same connection, one per board pose
    during calibration.
 
+Clients wait for HELLO before they start a sequence, retrying the connection until it
+arrives or their wait runs out. An open port alone does not mean a node is ready: a
+container's port forward accepts connections before the node inside listens.
+
 Pattern order follows the capture layouts of `docs/pipeline.md`. A scan set is the
 column Gray codes with their inverses, then the phase shifts (`gray_000` onward, then
 `phase_000` onward). A calibration set is white, then column and row Gray codes
@@ -48,8 +52,9 @@ column Gray codes with their inverses, then the phase shifts (`gray_000` onward,
 ## Stand-in node
 
     slscan node-sim --scene plate                 # serves synthetic frames on port 5600
-    slscan capture --set scan --pitch 16 --out data/view
+    slscan capture --set scan --pitch 16 --wait 30 --out data/view
     slscan capture --set calibration --out data/calibration/pose_000
+    app/target/debug/sls-scan capture --set scan --pitch 16 --wait 30
 
 The stand-in renders the chosen scene for scan sets and the next board pose for each
 calibration set, with timestamps at 60 Hz. Captures land in the layouts that

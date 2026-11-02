@@ -30,9 +30,10 @@ acceptance tests in `docs/accuracy.md` pass on it, use anything here at your own
 
 Phase 0 of `ROADMAP.md`, the scaffold, is complete. Calibration tooling (Phase 1) and
 the static reference pipeline (Phase 2) are implemented and verified on a virtual bench
-of synthetic captures (`DESIGN.md` D15 and D17). The application with its GPU preview
-(Phases 3 and 4, Rust) is next. Bench acceptance of each phase waits on the hardware in
-`docs/hardware.md`.
+of synthetic captures (`DESIGN.md` D15 and D17). Phase 3 is in progress: the capture
+protocol, a stand-in node, and the application shell with its capture client and three
+panels. GPU decode and preview (Phase 4) follow. Bench acceptance of each phase waits on
+the hardware in `docs/hardware.md`.
 
 ## Applications
 
@@ -124,14 +125,14 @@ acceptance tests: a flat plate, a sphere and the scale bars.
 | Path | Contents |
 |---|---|
 | `slscan/` | Python package: pattern codes, calibration, decode, triangulation, artifact fits, synthetic captures, capture protocol with a stand-in node, and the commands in `cli.py` |
-| `app/` | Rust application, from Phase 3 |
+| `app/` | Rust application: capture client, three panels, and a headless `capture` mode |
 | `tests/` | pytest tests of the pure functions, and the virtual bench on synthetic captures |
 | `docs/hardware.md` | Bill of materials, rig geometry and build notes |
 | `docs/accuracy.md` | Error model and acceptance tests |
 | `docs/pipeline.md` | Each stage with its inputs, outputs and file formats |
 | `docs/capture-protocol.md` | Messages between the application and a capture node |
 | `tools/` | Markdown rendering check, prose check |
-| `style.do`, `test.do`, `verify.do`, `node.do` | The gates, runnable with `bash` or `redo` |
+| `style.do`, `test.do`, `app.do`, `verify.do`, `node.do` | The gates, runnable with `bash` or `redo` |
 | `Dockerfile` | Stand-in capture node image |
 | `DESIGN.md` | Numbered design decisions with their reasons |
 | `ROADMAP.md` | Phases with acceptance criteria, and open questions |
@@ -139,19 +140,22 @@ acceptance tests: a flat plate, a sphere and the scale bars.
 ## Development
 
 Python 3.11 or later with the packages in `pyproject.toml` (OpenCV with the contrib
-modules, NumPy, Open3D, PyYAML, pytest). The application, from Phase 3, needs a stable
-Rust toolchain and a Vulkan driver (or Mesa's lavapipe for the CPU path).
+modules, NumPy, Open3D, PyYAML, pytest). The application needs Rust 1.93, pinned in
+`app/rust-toolchain.toml`, and a Vulkan driver (or Mesa's lavapipe for the CPU path).
 
     python3 -m venv .venv && . .venv/bin/activate
     pip install -e '.[dev]'
     bash test.do                              # the pytest suite
     bash style.do                             # markdown, sanitization and prose
+    bash app.do                               # Rust format, lints, tests, protocol check
     bash verify.do                            # every gate, cheapest first
     bash node.do                              # virtual bench over the capture protocol, needs Docker
 
 The virtual bench runs the whole pipeline on synthetic captures, with no hardware:
 
     slscan simulate --out data/simulated      # prints the calibrate, scan and measure commands
+    slscan node-sim --scene sphere            # stand-in capture node on port 5600
+    cargo run --release --manifest-path app/Cargo.toml    # application window
 
 A change is finished when `verify.do` is green, and CI runs the same gates on every push
 and pull request. Captures, calibrations and scan outputs live under `data/`, which is
