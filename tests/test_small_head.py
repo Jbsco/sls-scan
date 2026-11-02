@@ -22,3 +22,11 @@ def test_board_poses_scale_with_board_and_distance():
         assert 0.44 < centre[2] < 0.58
         assert np.all(np.abs(centre[:2]) < 0.011)
 
+
+def test_moving_plate_error_grows_with_axial_speed(rig, spec):
+    cal = synthetic.true_calibration(rig, spec)
+    plate = synthetic.acceptance_scenes()["plate"][0]
+    still = synthetic.moving_plate_error(rig, cal, plate, np.zeros(3))
+    moving = synthetic.moving_plate_error(rig, cal, plate, np.array([0.0, 0.0, 0.02]))
+    assert still < 0.0001
+    assert moving > 1.5 * still

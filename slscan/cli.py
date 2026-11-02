@@ -191,6 +191,23 @@ def cmd_decode_vectors(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_motion_error(args: argparse.Namespace) -> int:
+    make_rig, make_scenes, spec, _ = HEADS[args.head]
+    rig = synthetic.small_volume_preview_rig() if args.head == "small" else make_rig()
+    cal = synthetic.true_calibration(rig, spec)
+    plate = make_scenes()["plate"][0]
+    steps_ms = 1000.0 * args.steps / args.rate
+    print(f"{args.head} head, {args.rate:g} Hz, {args.steps} steps ({steps_ms:.0f} ms cycle), "
+          f"pitch {args.pitch}: RMS depth error of one cycle")
+    for speed in (float(s) for s in args.speeds.split(",")):
+        errors = [synthetic.moving_plate_error(rig, cal, plate, speed / 1000.0 * np.array(d),
+                                               args.rate, args.steps, args.pitch)
+                  for d in ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0))]
+        print(f"  {speed:g} mm/s: across the axis {1e6 * errors[0]:.1f} µm, "
+              f"along the axis {1e6 * errors[1]:.1f} µm")
+    return 0
+
+
 def cmd_board(args: argparse.Namespace) -> int:
     import cv2
 
@@ -347,6 +364,14 @@ def main(argv=None) -> int:
     p.add_argument("--pitch", type=int, default=16, help="phase shift pitch for the 1024-column virtual projector")
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_simulate)
+
+    p = sub.add_parser("motion-error", help="depth error of one phase cycle on a moving plate")
+    p.add_argument("--head", choices=sorted(HEADS), default="small")
+    p.add_argument("--rate", type=float, default=60.0, help="projector frame rate in Hz")
+    p.add_argument("--steps", type=int, default=4)
+    p.add_argument("--pitch", type=int, default=16)
+    p.add_argument("--speeds", default="0,1,2,5", help="sweep speeds in mm/s, comma separated")
+    p.set_defaults(func=cmd_motion_error)
 
     p = sub.add_parser("decode-vectors", help="write a synthetic scan and its reference decode")
     p.add_argument("--out", default="data/decode-vectors")

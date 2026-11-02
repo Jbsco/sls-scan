@@ -306,3 +306,35 @@ def small_volume_scenes() -> dict:
             "ball-bar": [Ball(np.array([-0.04, 0.004, 0.5]), 0.006),
                          Ball(np.array([0.04, -0.004, 0.502]), 0.006)]}
 
+
+def moving_plate_error(rig: Rig, cal: calibrate.Calibration, plate: Plate, velocity: np.ndarray,
+                       rate_hz: float = 60.0, steps: int = 4, pitch: int = 16,
+                       seed: int = 0) -> float:
+    """Return the RMS depth error in metres of one phase-shift cycle on a moving plate.
+
+    Frame i is rendered with the plate moved by velocity × i / rate_hz. The wrapped phase is
+    unwrapped against the true column at mid-cycle, as the preview path unwraps against its
+    model, and the points are compared with the plate at mid-cycle.
+    """
+    rng = np.random.default_rng(seed)
+
+    def moved(t):
+        return Plate(plate.centre + velocity * t, plate.axes, plate.half_u, plate.half_v,
+                     plate.albedo)
+
+    frames, lit = [], None
+    for i in range(steps):
+        sv = scene_view(rig, [moved(i / rate_hz)])
+        values = 127.5 + 127.5 * np.cos(2.0 * math.pi * (np.where(sv.lit, sv.u, 0.0) / pitch
+                                                         + i / steps))
+        frames.append(capture_scene(sv, values, rng))
+        lit = sv.lit if lit is None else lit & sv.lit
+    middle = moved((steps - 1) / 2.0 / rate_hz)
+    sv = scene_view(rig, [middle])
+    wrapped = patterns.wrapped_phase(np.stack(frames).astype(np.float64)).ravel()
+    columns = patterns.unwrap_with_columns(wrapped, sv.u, pitch)
+    mask = (lit & sv.lit & (np.abs(columns - sv.u) < pitch / 2.0)).reshape(sv.shape)
+    from . import triangulate
+    points, _ = triangulate.triangulate(columns.reshape(sv.shape), mask, cal)
+    distance = (points - middle.centre) @ middle.axes[:, 2]
+    return float(np.sqrt(np.mean(distance ** 2)))
