@@ -295,6 +295,32 @@ def cmd_motion_error(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sweep_bench(args: argparse.Namespace) -> int:
+    from . import track
+
+    rig = synthetic.stereo_head()
+    spec = synthetic.SMALL_BOARD
+    if args.recovered:
+        cal = calibrate.calibrate_stereo(synthetic.stereo_calibration_views(rig, spec), spec)
+    else:
+        cal = synthetic.true_stereo_calibration(rig, spec)
+    rng = np.random.default_rng(args.seed)
+    pattern = synthetic.random_dots(rig.light.width, rig.light.height, 3.0, 1.0, rng)
+    scene = synthetic.sweep_scene()
+    poses = synthetic.sweep_poses(args.frames, args.yaw, args.pitch)
+    frames = [stereo.depth_points(cal, im["left"], im["right"], 0.4, 0.6, args.step)[0]
+              for im in synthetic.sweep_captures(rig, scene, poses, pattern, args.seed)]
+    result = track.sweep_bench(rig, cal, scene, poses, frames)
+    print(f"{result['frames']} frames, sweep ±{args.yaw:g}° yaw and ±{args.pitch:g}° pitch, "
+          f"{'recovered' if args.recovered else 'true'} calibration, {result['points']} fused points")
+    print(f"pose error: translation up to {1e6 * result['max_translation_error_m']:.1f} µm, "
+          f"rotation up to {result['max_rotation_error_deg']:.4f}°")
+    print(f"ball bar spacing error {1e6 * result['ball_bar_error_m']:+.1f} µm, sphere radius errors "
+          + ", ".join(f"{1e6 * e:+.1f} µm" for e in result["ball_radius_errors_m"]))
+    print(f"mat flatness {1e6 * result['mat_flatness_m']:.1f} µm RMS")
+    return 0
+
+
 def cmd_board(args: argparse.Namespace) -> int:
     import cv2
 
@@ -456,6 +482,15 @@ def main(argv=None) -> int:
     p.add_argument("--window", type=int, default=21, help="matching window in pixels")
     p.add_argument("--out", default="data/view.ply")
     p.set_defaults(func=cmd_scan_stereo)
+
+    p = sub.add_parser("sweep-bench", help="track and fuse a synthetic continuous sweep")
+    p.add_argument("--frames", type=int, default=25)
+    p.add_argument("--yaw", type=float, default=25.0, help="yaw half-range in degrees")
+    p.add_argument("--pitch", type=float, default=8.0, help="pitch amplitude in degrees")
+    p.add_argument("--step", type=int, default=12, help="sample spacing in pixels")
+    p.add_argument("--recovered", action="store_true", help="use a calibration recovered from board views")
+    p.add_argument("--seed", type=int, default=0)
+    p.set_defaults(func=cmd_sweep_bench)
 
     p = sub.add_parser("measure", help="fit an acceptance artifact to a point cloud")
     p.add_argument("cloud")
