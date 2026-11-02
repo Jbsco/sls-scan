@@ -163,10 +163,13 @@ the result, and dense matching of selected frames refines it afterwards.
 In the phase-shift option a depth frame is a cycle of phase-shifted patterns instead.
 Its decode kernel is `app/src/decode.wgsl`, and it matches the NumPy decode (D22).
 
-Second-order refinement runs in `app/src/refine.wgsl`, one workgroup per sample after a
-gradient pass, and matches the NumPy refinement (D29, D30). `slscan stereo-vectors` writes a
-rectified view with its affine matches and their NumPy refinement, and `sls-scan
-refine-check <directory>` compares the kernel with it.
+Rectification runs in `app/src/rectify.wgsl` from each camera's rectification parameters
+and matches `cv2.remap` within one grey level (D31). Second-order refinement runs in
+`app/src/refine.wgsl`, one workgroup per sample after a gradient pass, and matches the
+NumPy refinement (D29, D30). `slscan stereo-vectors` writes a raw and a rectified view
+with the rectification parameters, its affine matches and their NumPy refinement.
+`sls-scan rectify-check <directory>` and `sls-scan refine-check <directory>` compare the
+kernels with them.
 
 ## Application
 
