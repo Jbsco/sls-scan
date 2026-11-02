@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 fn headless_capture(args: &[String]) -> ExitCode {
     let mut node = "127.0.0.1:5600".to_owned();
     let mut wait = Duration::ZERO;
+    let mut out: Option<PathBuf> = None;
     let mut request = SequenceRequest {
         set: "scan".to_owned(),
         pitch: 32,
@@ -25,7 +26,7 @@ fn headless_capture(args: &[String]) -> ExitCode {
     for pair in args.chunks(2) {
         let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
             eprintln!(
-                "arguments come in pairs: --node, --set, --pitch, --steps, --frames, --rate, --wait"
+                "arguments come in pairs: --node, --set, --pitch, --steps, --frames, --rate, --wait, --out"
             );
             return ExitCode::FAILURE;
         };
@@ -42,6 +43,10 @@ fn headless_capture(args: &[String]) -> ExitCode {
             "--steps" => value.parse().map(|v| request.steps = v),
             "--frames" => value.parse().map(|v| request.frames = v),
             "--rate" => value.parse().map(|v| request.rate_hz = v),
+            "--out" => {
+                out = Some(PathBuf::from(value));
+                Ok(())
+            }
             "--wait" => match value.parse::<f64>() {
                 Ok(seconds) if seconds >= 0.0 => {
                     wait = Duration::from_secs_f64(seconds);
@@ -62,11 +67,35 @@ fn headless_capture(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
-    let result = client::capture(&node, &request, wait, |event| {
-        if let Event::Connected(hello) = event {
-            println!("connected to {} at {node}", hello.node);
+    let mut written = Ok(());
+    let result = client::capture(&node, &request, wait, |event| match event {
+        Event::Connected(hello) => println!("connected to {} at {node}", hello.node),
+        Event::Frame {
+            header,
+            name,
+            pixels,
+        } => {
+            if let (Some(dir), Ok(())) = (&out, &written) {
+                let path = dir.join(format!("{name}.png"));
+                written = path
+                    .parent()
+                    .map_or(Ok(()), std::fs::create_dir_all)
+                    .and_then(|()| {
+                        calibration::write_png(
+                            &path,
+                            header.width.into(),
+                            header.height.into(),
+                            &pixels,
+                        )
+                    });
+            }
         }
+        _ => {}
     });
+    if let Err(e) = written {
+        eprintln!("recording failed: {e}");
+        return ExitCode::FAILURE;
+    }
     match result {
         Ok(stats) => {
             let interval = stats
