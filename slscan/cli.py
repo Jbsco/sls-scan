@@ -7,7 +7,7 @@ import sys
 
 import numpy as np
 
-from . import calibrate, decode, geometry, node, patterns, synthetic, triangulate
+from . import calibrate, decode, geometry, node, patterns, stereo, synthetic, triangulate
 
 CAMERA_LIMIT_PX = 0.3
 PROJECTOR_LIMIT_PX = 0.5
@@ -106,7 +106,93 @@ HEADS = {
 }
 
 
+def read_stereo_views(directory: str):
+    """Yield left and right board images from each pose_* directory of a capture."""
+    import cv2
+
+    poses = sorted(glob.glob(os.path.join(directory, "pose_*")))
+    if not poses:
+        raise FileNotFoundError(f"no pose_* directories in {directory}")
+    for pose in poses:
+        yield {side: cv2.imread(os.path.join(pose, f"{side}.png"), cv2.IMREAD_GRAYSCALE)
+               for side in ("left", "right")}
+
+
+def simulate_stereo(args: argparse.Namespace) -> int:
+    import cv2
+
+    rig = synthetic.stereo_head()
+    spec = synthetic.SMALL_BOARD
+    for i, view in enumerate(synthetic.stereo_calibration_views(rig, spec, args.seed)):
+        pose = os.path.join(args.out, "calibration", f"pose_{i:03d}")
+        os.makedirs(pose, exist_ok=True)
+        for side in ("left", "right"):
+            cv2.imwrite(os.path.join(pose, f"{side}.png"), view[side])
+    rng = np.random.default_rng(args.seed)
+    pattern = synthetic.random_dots(rig.light.width, rig.light.height, 3.0, 1.0, rng)
+    scenes = synthetic.stereo_scenes()
+    for name, scene in scenes.items():
+        images = synthetic.stereo_capture(rig, scene, pattern, rng)
+        os.makedirs(os.path.join(args.out, name), exist_ok=True)
+        for side in ("left", "right"):
+            cv2.imwrite(os.path.join(args.out, name, f"{side}.png"), images[side])
+    bar = scenes["ball-bar"]
+    print(f"synthetic stereo captures written to {args.out}")
+    print(f"true sphere radius {1000.0 * scenes['sphere'][0].radius:.3f} mm, "
+          f"true ball bar spacing {1000.0 * np.linalg.norm(bar[0].centre - bar[1].centre):.3f} mm")
+    print("next:")
+    print(f"  slscan calibrate-stereo {args.out}/calibration --squares-x {spec.squares_x} "
+          f"--squares-y {spec.squares_y} --square-mm {1000.0 * spec.square_m:g} "
+          f"--marker-mm {1000.0 * spec.marker_m:g} --out {args.out}/stereo.yaml")
+    for name, shape in (("plate", "plane"), ("sphere", "sphere"), ("ball-bar", "ball-bar")):
+        print(f"  slscan scan-stereo {args.out}/{name} --calibration {args.out}/stereo.yaml "
+              f"--out {args.out}/{name}.ply && slscan measure {args.out}/{name}.ply --shape {shape}")
+    return 0
+
+
+def cmd_calibrate_stereo(args: argparse.Namespace) -> int:
+    import json
+
+    try:
+        cal = calibrate.calibrate_stereo(read_stereo_views(args.captures), _spec(args))
+    except (ValueError, FileNotFoundError) as e:
+        print(json.dumps({"error": str(e)}) if args.json else f"calibration failed: {e}")
+        return 1
+    calibrate.save_stereo(args.out, cal)
+    ok = cal.left.rms_px < CAMERA_LIMIT_PX and cal.right.rms_px < CAMERA_LIMIT_PX
+    baseline = float(np.linalg.norm(cal.stereo.translation))
+    if args.json:
+        print(json.dumps({"views": cal.views, "left_rms_px": cal.left.rms_px,
+                          "right_rms_px": cal.right.rms_px, "stereo_rms_px": cal.stereo.rms_px,
+                          "camera_limit_px": CAMERA_LIMIT_PX, "baseline_m": baseline,
+                          "out": args.out, "ok": ok}))
+        return 0 if ok else 1
+    print(f"{cal.views} views, stereo calibration written to {args.out}")
+    print(f"left reprojection {cal.left.rms_px:.3f} px, right {cal.right.rms_px:.3f} px "
+          f"(limit {CAMERA_LIMIT_PX}), pair {cal.stereo.rms_px:.3f} px")
+    print(f"baseline {1000.0 * baseline:.2f} mm")
+    return 0 if ok else 1
+
+
+def cmd_scan_stereo(args: argparse.Namespace) -> int:
+    import cv2
+
+    cal = calibrate.load_stereo(args.calibration)
+    images = [cv2.imread(os.path.join(args.view, f"{side}.png"), cv2.IMREAD_GRAYSCALE)
+              for side in ("left", "right")]
+    if any(i is None for i in images):
+        print(f"left.png and right.png are needed in {args.view}")
+        return 1
+    points, _ = stereo.depth_points(cal, images[0], images[1], args.near, args.far,
+                                    args.step, args.window)
+    geometry.write_ply(args.out, points)
+    print(f"{len(points)} points written to {args.out}")
+    return 0
+
+
 def cmd_simulate(args: argparse.Namespace) -> int:
+    if args.head == "stereo":
+        return simulate_stereo(args)
     make_rig, make_scenes, spec, crossing = HEADS[args.head]
     rig = make_rig()
     import cv2
@@ -354,6 +440,23 @@ def main(argv=None) -> int:
     p.add_argument("--out", default="data/view.ply")
     p.set_defaults(func=cmd_scan)
 
+    p = sub.add_parser("calibrate-stereo", help="calibrate two cameras from captured board poses")
+    p.add_argument("captures", help="directory of pose_* directories with left.png and right.png")
+    _board_arguments(p)
+    p.add_argument("--out", default="data/stereo.yaml")
+    p.add_argument("--json", action="store_true", help="print the result as one JSON object")
+    p.set_defaults(func=cmd_calibrate_stereo)
+
+    p = sub.add_parser("scan-stereo", help="match one stereo view into a PLY point cloud")
+    p.add_argument("view", help="directory with left.png and right.png")
+    p.add_argument("--calibration", default="data/stereo.yaml")
+    p.add_argument("--near", type=float, default=0.4, help="nearest surface in metres")
+    p.add_argument("--far", type=float, default=0.6, help="farthest surface in metres")
+    p.add_argument("--step", type=int, default=8, help="sample spacing in pixels")
+    p.add_argument("--window", type=int, default=21, help="matching window in pixels")
+    p.add_argument("--out", default="data/view.ply")
+    p.set_defaults(func=cmd_scan_stereo)
+
     p = sub.add_parser("measure", help="fit an acceptance artifact to a point cloud")
     p.add_argument("cloud")
     p.add_argument("--shape", choices=("plane", "sphere", "ball-bar"), required=True)
@@ -362,7 +465,7 @@ def main(argv=None) -> int:
     p.set_defaults(func=cmd_measure)
 
     p = sub.add_parser("simulate", help="write synthetic calibration and scan captures")
-    p.add_argument("--head", choices=sorted(HEADS), default="reference")
+    p.add_argument("--head", choices=sorted(HEADS) + ["stereo"], default="reference")
     p.add_argument("--out", default="data/simulated")
     p.add_argument("--pitch", type=int, default=16, help="phase shift pitch for the 1024-column virtual projector")
     p.add_argument("--seed", type=int, default=0)
