@@ -31,8 +31,9 @@ acceptance tests in `docs/accuracy.md` pass on it, use anything here at your own
 Phase 0 of `ROADMAP.md`, the scaffold, is complete. Calibration tooling (Phase 1) and
 the static reference pipeline (Phase 2) are implemented and verified on a virtual bench
 of synthetic captures (`DESIGN.md` D15 and D17). Phase 3 is in progress: the capture
-protocol, a stand-in node, and the application shell with its capture client and three
-panels. GPU decode and preview (Phase 4) follow. Bench acceptance of each phase waits on
+protocol, a stand-in node, and the application shell with its capture client, three
+panels and calibration from the configuration panel. GPU decode and preview (Phase 4)
+follow. Bench acceptance of each phase waits on
 the hardware in `docs/hardware.md`.
 
 ## Applications

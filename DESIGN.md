@@ -268,3 +268,16 @@ order and mean interval. `app.do` runs it against the Python stand-in, so each
 implementation of the protocol is checked against the other on every run. A client
 waits for HELLO, not for an open port, because a container's port forward accepts
 connections before the node inside listens.
+
+## D21. Calibration from the panel (2026-11-01)
+
+Capture pose runs a calibration sequence over the protocol and writes its frames as PNG
+files into the next `pose_NNN` directory of a session, in the layout `slscan calibrate`
+reads. The application runs the Python tool as a subprocess: `slscan detect` after each
+pose and `slscan calibrate` for the solve, both with `--json`, so it parses one JSON
+object and no text meant for a person. Until the tool ships with the application, its
+command is a setting, `python3 -m slscan.cli` by default.
+
+Dependencies build with optimization in development builds. Writing a session of 492
+frames at 1280 × 960 took 5 min with unoptimized PNG and deflate code, and 25 s with
+optimized dependencies and fast PNG compression.

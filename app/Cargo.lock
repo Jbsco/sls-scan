@@ -2771,6 +2771,7 @@ name = "sls-scan-app"
 version = "0.0.1"
 dependencies = [
  "eframe",
+ "png",
  "serde",
  "serde_json",
 ]

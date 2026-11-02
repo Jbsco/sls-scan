@@ -27,8 +27,8 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   panels, calibration through the frontend (D12), the capture interface with its two
   implementations (the Pi node of D13 streaming over Ethernet, USB cameras on the
   host), pattern display flipped on the vertical blank, the trigger line, frame
-  timestamps. In place: capture protocol (D18), stand-in node (D17), and an
-  application shell that runs sequences against it (D20).
+  timestamps. In place: capture protocol (D18), stand-in node (D17), application shell
+  (D20) and calibration from the panel (D21).
   Acceptance: pattern frames captured in order at the projector rate with no drops over
   a minute, and a calibration run end to end from the panel.
 - Phase 4, open. GPU decode and preview. WGSL kernels for phase decode, unwrapping,
