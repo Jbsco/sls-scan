@@ -106,3 +106,16 @@ def test_stereo_sequence_pairs_share_timestamps(stand_in, tmp_path):
         for side in ("left", "right"):
             assert (tmp_path / "sweep" / f"frame_{i:03d}" / f"{side}.png").exists()
 
+
+def test_stereo_calibration_and_fuse_over_the_protocol(stand_in, tmp_path):
+    host, port = stand_in
+    for i in range(12):
+        node.capture(host, port, "stereo-calibration", str(tmp_path / "cal" / f"pose_{i:03d}"))
+    board = ["--squares-x", "9", "--squares-y", "6", "--square-mm", "10", "--marker-mm", "7.5"]
+    cal = str(tmp_path / "stereo.yaml")
+    assert cli.main(["calibrate-stereo", str(tmp_path / "cal"), *board, "--out", cal]) == 0
+    node.capture(host, port, "stereo", str(tmp_path / "sweep"), frames=3)
+    model = str(tmp_path / "model.ply")
+    assert cli.main(["fuse", str(tmp_path / "sweep"), "--calibration", cal, "--step", "16",
+                     "--out", model]) == 0
+    assert len(geometry.read_ply(model)) > 3000

@@ -321,6 +321,34 @@ def cmd_sweep_bench(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fuse(args: argparse.Namespace) -> int:
+    import cv2
+
+    from . import track
+
+    cal = calibrate.load_stereo(args.calibration)
+    frames_dirs = sorted(glob.glob(os.path.join(args.sweep, "frame_*")))
+    if not frames_dirs:
+        print(f"no frame_* directories in {args.sweep}")
+        return 1
+    clouds = []
+    for d in frames_dirs:
+        left, right = (cv2.imread(os.path.join(d, f"{s}.png"), cv2.IMREAD_GRAYSCALE)
+                       for s in ("left", "right"))
+        clouds.append(stereo.depth_points(cal, left, right, args.near, args.far, args.step,
+                                          args.window)[0])
+    poses, model = track.fuse(clouds, args.voxel_mm / 1000.0)
+    geometry.write_ply(args.out, model)
+    travel = np.linalg.norm(poses[-1][1] - poses[0][1])
+    print(f"{len(clouds)} frames, {sum(len(c) for c in clouds)} matched points, "
+          f"{len(model)} fused points written to {args.out}; last pose {1000.0 * travel:.1f} mm "
+          f"from the first")
+    if len(clouds) > 1 and len(model) >= sum(len(c) for c in clouds):
+        print("no frames overlapped: the sweep moved too far between frames to track")
+        return 1
+    return 0
+
+
 def cmd_board(args: argparse.Namespace) -> int:
     import cv2
 
@@ -482,6 +510,17 @@ def main(argv=None) -> int:
     p.add_argument("--window", type=int, default=21, help="matching window in pixels")
     p.add_argument("--out", default="data/view.ply")
     p.set_defaults(func=cmd_scan_stereo)
+
+    p = sub.add_parser("fuse", help="match, track and fuse a captured stereo sweep")
+    p.add_argument("sweep", help="directory of frame_* directories with left.png and right.png")
+    p.add_argument("--calibration", default="data/stereo.yaml")
+    p.add_argument("--near", type=float, default=0.4)
+    p.add_argument("--far", type=float, default=0.6)
+    p.add_argument("--step", type=int, default=12)
+    p.add_argument("--window", type=int, default=21)
+    p.add_argument("--voxel-mm", type=float, default=0.5)
+    p.add_argument("--out", default="data/model.ply")
+    p.set_defaults(func=cmd_fuse)
 
     p = sub.add_parser("sweep-bench", help="track and fuse a synthetic continuous sweep")
     p.add_argument("--frames", type=int, default=25)
