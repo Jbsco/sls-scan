@@ -189,16 +189,16 @@ def refine_second_order(left: np.ndarray, right: np.ndarray, left_points: np.nda
     return np.vstack(out_left), np.vstack(out_right)
 
 
-def depth_points(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
-                 near_m: float, far_m: float, step: int = 8, window: int = 21,
-                 min_level: float = 6.0, order: int = 1) -> tuple[np.ndarray, Rectification]:
-    """Return points (N, 3) in metres in the left camera's frame, matched on a grid of
-    rectified left pixels every step pixels, for surfaces between near_m and far_m.
+def affine_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
+                   near_m: float, far_m: float, step: int = 8, window: int = 21,
+                   min_level: float = 6.0):
+    """Rectify a view and match a grid of left pixels every step pixels with affine windows,
+    for surfaces between near_m and far_m. Returns the rectification, both rectified
+    images, the kept left and right points (N, 2) and each window's affine part (N, 2, 2).
 
     A sample is matched only when its whole window lies on lit surface (local mean at or
     above min_level in the left image) that semi-global matching also matched, so no window
-    straddles an edge. The right side of each match is judged by its correlation. Order 2
-    refines each affine match with a second-order window."""
+    straddles an edge. The right side of each match is judged by its correlation."""
     rect = rectify(cal)
     rl = cv2.remap(left, *rect.left_maps, cv2.INTER_LINEAR)
     rr = cv2.remap(right, *rect.right_maps, cv2.INTER_LINEAR)
@@ -214,11 +214,19 @@ def depth_points(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
     points, d = points[valid], d[valid]
     guesses = points.copy()
     guesses[:, 0] -= d
+    left_pts, right_pts, warps = refine(rl, rr, points, guesses, window, return_warps=True)
+    return rect, rl, rr, left_pts, right_pts, warps
+
+
+def depth_points(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
+                 near_m: float, far_m: float, step: int = 8, window: int = 21,
+                 min_level: float = 6.0, order: int = 1) -> tuple[np.ndarray, Rectification]:
+    """Return points (N, 3) in metres in the left camera's frame from affine_matches.
+    Order 2 refines each affine match with a second-order window."""
+    rect, rl, rr, left_pts, right_pts, warps = affine_matches(cal, left, right, near_m, far_m,
+                                                              step, window, min_level)
     if order == 2:
-        left_pts, right_pts, warps = refine(rl, rr, points, guesses, window, return_warps=True)
         left_pts, right_pts = refine_second_order(rl, rr, left_pts, right_pts, warps, window)
-    else:
-        left_pts, right_pts = refine(rl, rr, points, guesses, window)
     if len(left_pts) == 0:
         return np.empty((0, 3)), rect
     right_pts[:, 1] = left_pts[:, 1]
