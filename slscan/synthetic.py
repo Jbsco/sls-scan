@@ -44,20 +44,27 @@ def pinhole(width: int, height: int, f: float, cx: float, cy: float) -> Pinhole:
     return Pinhole(width, height, np.array([[f, 0.0, cx], [0.0, f, cy], [0.0, 0.0, 1.0]]))
 
 
-def reference_rig(baseline_m: float = 0.35, crossing_m: float = 1.0) -> Rig:
+def toed_in_rig(camera: Pinhole, projector: Pinhole, baseline_m: float, crossing_m: float) -> Rig:
     """A camera and a projector toed in so their axes cross at crossing_m."""
-    camera = pinhole(1280, 960, 1500.0, 643.0, 478.0)
-    projector = pinhole(1024, 768, 1400.0, 512.0, 480.0)
     toe = math.degrees(math.atan2(-baseline_m, crossing_m))
-    r_projector_in_camera = rotation(0.0, toe)
-    r = r_projector_in_camera.T
+    r = rotation(0.0, toe).T
     t = -r @ np.array([baseline_m, 0.0, 0.0])
     return Rig(camera, projector, r, t)
 
 
-def board_poses(spec: calibrate.BoardSpec) -> list:
-    """Return board poses (rotation, translation) around the crossing point, tilted in turn."""
+def reference_rig(baseline_m: float = 0.35, crossing_m: float = 1.0) -> Rig:
+    """The 1 m rig: a 1280 × 960 camera at f = 1500 px and a 1024 × 768 projector."""
+    return toed_in_rig(pinhole(1280, 960, 1500.0, 643.0, 478.0),
+                       pinhole(1024, 768, 1400.0, 512.0, 480.0), baseline_m, crossing_m)
+
+
+def board_poses(spec: calibrate.BoardSpec, crossing_m: float = 1.0) -> list:
+    """Return board poses (rotation, translation) around the crossing point, tilted in turn.
+
+    Offsets scale with the board width against a 0.36 m board, and distances with crossing_m.
+    """
     size = np.array([spec.squares_x * spec.square_m, spec.squares_y * spec.square_m, 0.0])
+    k = size[0] / 0.36
     table = [(0, 0, 0, 0.0, 0.0, 1.0), (20, 0, 0, 0.0, 0.03, 1.0), (-20, 0, 0, 0.0, -0.03, 1.0),
              (0, 20, 0, 0.03, 0.0, 1.0), (0, -20, 0, -0.03, 0.0, 1.0),
              (15, 15, 5, 0.04, 0.03, 0.9), (-15, 15, -5, 0.04, -0.03, 0.95),
@@ -66,7 +73,7 @@ def board_poses(spec: calibrate.BoardSpec) -> list:
     poses = []
     for ax, ay, az, x, y, z in table:
         r = rotation(ax, ay, az)
-        poses.append((r, np.array([x, y, z]) - r @ (size / 2.0)))
+        poses.append((r, np.array([k * x, k * y, crossing_m * z]) - r @ (size / 2.0)))
     return poses
 
 
@@ -86,8 +93,15 @@ class View:
 
 
 def view(rig: Rig, spec: calibrate.BoardSpec, r: np.ndarray, t: np.ndarray,
-         px_per_square: int = 64, black: float = 0.12, background: float = 0.1) -> View:
-    """Render the board print's albedo in the camera and the plane's projector mapping."""
+         px_per_square: int = 0, black: float = 0.12, background: float = 0.1) -> View:
+    """Render the board print's albedo in the camera and the plane's projector mapping.
+
+    The print is rendered at px_per_square, or when it is 0 at about the camera's sampling
+    of a square at the board's distance, so the warp neither aliases nor blurs it much.
+    """
+    if px_per_square <= 0:
+        seen = rig.camera.matrix[0, 0] * spec.square_m / max(float(t[2]), 1e-6)
+        px_per_square = int(min(256, max(64, round(seen))))
     margin = px_per_square
     printed = calibrate.board_image(spec, px_per_square, margin).astype(np.float32) / 255.0
     printed = black + (1.0 - black) * printed
@@ -128,10 +142,11 @@ def calibration_view(rig: Rig, spec: calibrate.BoardSpec, r: np.ndarray, t: np.n
             "view": v}
 
 
-def calibration_views(rig: Rig, spec: calibrate.BoardSpec, seed: int = 0):
+def calibration_views(rig: Rig, spec: calibrate.BoardSpec, seed: int = 0,
+                      crossing_m: float = 1.0):
     """Yield every board pose of board_poses as a calibration view, one at a time."""
     rng = np.random.default_rng(seed)
-    for r, t in board_poses(spec):
+    for r, t in board_poses(spec, crossing_m):
         yield calibration_view(rig, spec, r, t, rng)
 
 
@@ -261,3 +276,4 @@ def acceptance_scenes() -> dict:
             "sphere": [Ball(np.array([0.02, -0.01, 1.0]), 0.05)],
             "ball-bar": [Ball(np.array([-0.15, 0.02, 1.0]), 0.025),
                          Ball(np.array([0.15, -0.02, 1.02]), 0.025)]}
+
