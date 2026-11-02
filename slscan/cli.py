@@ -184,7 +184,7 @@ def cmd_scan_stereo(args: argparse.Namespace) -> int:
         print(f"left.png and right.png are needed in {args.view}")
         return 1
     points, _ = stereo.depth_points(cal, images[0], images[1], args.near, args.far,
-                                    args.step, args.window)
+                                    args.step, args.window, order=args.order)
     geometry.write_ply(args.out, points)
     print(f"{len(points)} points written to {args.out}")
     return 0
@@ -308,11 +308,14 @@ def cmd_sweep_bench(args: argparse.Namespace) -> int:
     pattern = synthetic.random_dots(rig.light.width, rig.light.height, 3.0, 1.0, rng)
     scene = synthetic.sweep_scene()
     poses = synthetic.sweep_poses(args.frames, args.yaw, args.pitch)
-    frames = [stereo.depth_points(cal, im["left"], im["right"], 0.4, 0.6, args.step)[0]
+    window = 25 if args.order == 2 else 21
+    frames = [stereo.depth_points(cal, im["left"], im["right"], 0.4, 0.6, args.step, window,
+                                  order=args.order)[0]
               for im in synthetic.sweep_captures(rig, scene, poses, pattern, args.seed)]
     result = track.sweep_bench(rig, cal, scene, poses, frames)
     print(f"{result['frames']} frames, sweep ±{args.yaw:g}° yaw and ±{args.pitch:g}° pitch, "
-          f"{'recovered' if args.recovered else 'true'} calibration, {result['points']} fused points")
+          f"{'recovered' if args.recovered else 'true'} calibration, order {args.order} windows, "
+          f"{result['points']} fused points")
     print(f"pose error: translation up to {1e6 * result['max_translation_error_m']:.1f} µm, "
           f"rotation up to {result['max_rotation_error_deg']:.4f}°")
     print(f"ball bar spacing error {1e6 * result['ball_bar_error_m']:+.1f} µm, sphere radius errors "
@@ -336,7 +339,7 @@ def cmd_fuse(args: argparse.Namespace) -> int:
         left, right = (cv2.imread(os.path.join(d, f"{s}.png"), cv2.IMREAD_GRAYSCALE)
                        for s in ("left", "right"))
         clouds.append(stereo.depth_points(cal, left, right, args.near, args.far, args.step,
-                                          args.window)[0])
+                                          args.window, order=args.order)[0])
     poses, model = track.fuse(clouds, args.voxel_mm / 1000.0)
     geometry.write_ply(args.out, model)
     travel = np.linalg.norm(poses[-1][1] - poses[0][1])
@@ -507,7 +510,9 @@ def main(argv=None) -> int:
     p.add_argument("--near", type=float, default=0.4, help="nearest surface in metres")
     p.add_argument("--far", type=float, default=0.6, help="farthest surface in metres")
     p.add_argument("--step", type=int, default=8, help="sample spacing in pixels")
-    p.add_argument("--window", type=int, default=21, help="matching window in pixels")
+    p.add_argument("--window", type=int, default=25, help="matching window in pixels")
+    p.add_argument("--order", type=int, choices=(1, 2), default=2,
+                   help="1 for affine windows, 2 for second-order windows that follow curvature")
     p.add_argument("--out", default="data/view.ply")
     p.set_defaults(func=cmd_scan_stereo)
 
@@ -518,6 +523,8 @@ def main(argv=None) -> int:
     p.add_argument("--far", type=float, default=0.6)
     p.add_argument("--step", type=int, default=12)
     p.add_argument("--window", type=int, default=21)
+    p.add_argument("--order", type=int, choices=(1, 2), default=1,
+                   help="1 for affine windows, 2 for second-order windows that follow curvature")
     p.add_argument("--voxel-mm", type=float, default=0.5)
     p.add_argument("--out", default="data/model.ply")
     p.set_defaults(func=cmd_fuse)
@@ -528,6 +535,8 @@ def main(argv=None) -> int:
     p.add_argument("--pitch", type=float, default=8.0, help="pitch amplitude in degrees")
     p.add_argument("--step", type=int, default=12, help="sample spacing in pixels")
     p.add_argument("--recovered", action="store_true", help="use a calibration recovered from board views")
+    p.add_argument("--order", type=int, choices=(1, 2), default=1,
+                   help="1 for affine windows, 2 for second-order windows that follow curvature")
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_sweep_bench)
 
