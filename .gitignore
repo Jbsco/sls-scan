@@ -1,0 +1,14 @@
+# Captures, calibrations and scan outputs are large and machine-specific
+data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Editor noise
+*.swp
