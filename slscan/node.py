@@ -11,6 +11,7 @@ import os
 import socket
 import socketserver
 import struct
+import time
 
 import numpy as np
 
@@ -23,6 +24,7 @@ HELLO, SEQUENCE, FRAME, END, ERROR = 1, 2, 3, 4, 5
 MONO8 = 0
 FRAME_PERIOD_NS = 16_666_667
 STEREO_PERIOD_NS = 33_333_333
+PACED_CYCLE = 8
 
 
 def send(sock: socket.socket, kind: int, payload: bytes) -> None:
@@ -106,15 +108,18 @@ def connect(host: str, port: int, wait: float = 0.0,
 
 
 def capture(host: str, port: int, pattern_set: str, out: str, pitch: int = 32,
-            steps: int = 4, timeout: float = 60.0, wait: float = 0.0, frames: int = 1) -> dict:
-    """Run one sequence on a node and save its frames as PNG files under out."""
+            steps: int = 4, timeout: float = 60.0, wait: float = 0.0, frames: int = 1,
+            rate_hz: float = 0.0) -> dict:
+    """Run one sequence on a node and save its frames as PNG files under out. A rate asks
+    a stereo set to be triggered at that many pairs per second."""
     import cv2
 
     sock, hello = connect(host, port, wait, timeout)
     with sock:
         projector = hello["projector"]
         names = pattern_names(pattern_set, projector["width"], projector["height"], steps, frames)
-        request = {"set": pattern_set, "pitch": pitch, "steps": steps, "frames": frames}
+        request = {"set": pattern_set, "pitch": pitch, "steps": steps, "frames": frames,
+                   "rate_hz": rate_hz}
         send(sock, SEQUENCE, json.dumps(request).encode())
         os.makedirs(out, exist_ok=True)
         indices, stamps = [], []
@@ -157,6 +162,7 @@ class StandIn(socketserver.ThreadingTCPServer):
         self.dots = synthetic.random_dots(self.stereo.light.width, self.stereo.light.height, 3.0,
                                           1.0, np.random.default_rng(seed))
         self.seed = seed
+        self.cycle = None
         super().__init__(address, _Handler)
 
     def hello(self) -> dict:
@@ -192,6 +198,28 @@ class StandIn(socketserver.ThreadingTCPServer):
         images = self._pattern_frames(request)
         return images, [i * FRAME_PERIOD_NS for i in range(len(images))]
 
+    def paced_pairs(self, count: int, rate_hz: float):
+        """Yield (pair index, left, right, timestamp in nanoseconds) for count pairs on a
+        trigger clock at rate_hz, playing a short pre-rendered sweep in a loop. A pair whose
+        trigger time passed more than one period before the node reaches it is dropped, as
+        a node with a full queue drops it."""
+        if self.cycle is None:
+            poses = synthetic.sweep_poses(PACED_CYCLE, yaw_deg=float(PACED_CYCLE),
+                                          pitch_deg=0.3 * PACED_CYCLE)
+            self.cycle = [(pair["left"], pair["right"]) for pair in synthetic.sweep_captures(
+                self.stereo, synthetic.sweep_scene(), poses, self.dots, self.seed)]
+        period = 1.0 / rate_hz
+        start = time.monotonic() + period
+        for i in range(count):
+            due = start + i * period
+            now = time.monotonic()
+            if now < due:
+                time.sleep(due - now)
+            elif now - due > period:
+                continue
+            left, right = self.cycle[i % len(self.cycle)]
+            yield i, left, right, int(round(i * period * 1e9))
+
     def _pattern_frames(self, request: dict) -> list:
         if request["set"] == "calibration":
             r, t = self.poses[self.next_pose % len(self.poses)]
@@ -218,8 +246,20 @@ class _Handler(socketserver.BaseRequestHandler):
             if kind != SEQUENCE:
                 send(self.request, ERROR, json.dumps({"message": "expected SEQUENCE"}).encode())
                 continue
+            request = json.loads(payload)
+            rate = float(request.get("rate_hz", 0.0))
+            if request.get("set") == "stereo" and rate > 0.0:
+                sent = 0
+                for i, left, right, stamp in server.paced_pairs(int(request.get("frames", 1)),
+                                                                rate):
+                    send(self.request, FRAME, frame_payload(sequence, 2 * i, 0, stamp, left))
+                    send(self.request, FRAME, frame_payload(sequence, 2 * i + 1, 0, stamp, right))
+                    sent += 2
+                send(self.request, END, json.dumps({"sequence": sequence, "frames": sent}).encode())
+                sequence += 1
+                continue
             try:
-                frames, stamps = server.frames(json.loads(payload))
+                frames, stamps = server.frames(request)
             except (ValueError, KeyError) as e:
                 send(self.request, ERROR, json.dumps({"message": str(e)}).encode())
                 continue
