@@ -28,6 +28,7 @@ pub struct BlockMatcher {
     device: wgpu::Device,
     queue: wgpu::Queue,
     downsample: wgpu::ComputePipeline,
+    stats: wgpu::ComputePipeline,
     correlate: wgpu::ComputePipeline,
     choose: wgpu::ComputePipeline,
     fill: wgpu::ComputePipeline,
@@ -65,8 +66,9 @@ impl BlockMatcher {
                 cache: None,
             })
         };
-        let (downsample, correlate, choose, fill) = (
+        let (downsample, stats, correlate, choose, fill) = (
             pipeline("downsample"),
+            pipeline("stats"),
             pipeline("correlate"),
             pipeline("choose"),
             pipeline("fill"),
@@ -75,6 +77,7 @@ impl BlockMatcher {
             device,
             queue: gpu.queue.clone(),
             downsample,
+            stats,
             correlate,
             choose,
             fill,
@@ -183,6 +186,7 @@ impl BlockMatcher {
         let storage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC;
         let small_left = buffer("small left", small * 4, wgpu::BufferUsages::STORAGE);
         let small_right = buffer("small right", small * 4, wgpu::BufferUsages::STORAGE);
+        let block_stats = buffer("block stats", small * 16, wgpu::BufferUsages::STORAGE);
         let volume = buffer(
             "volume",
             small * params.count as usize * 4,
@@ -220,6 +224,15 @@ impl BlockMatcher {
                 (4, &small_right),
             ],
         );
+        let stats_group = bind(
+            &self.stats,
+            &[
+                (0, &params_buffer),
+                (3, &small_left),
+                (4, &small_right),
+                (10, &block_stats),
+            ],
+        );
         let correlate_group = bind(
             &self.correlate,
             &[
@@ -227,6 +240,7 @@ impl BlockMatcher {
                 (3, &small_left),
                 (4, &small_right),
                 (5, &volume),
+                (10, &block_stats),
             ],
         );
         let choose_group = bind(
@@ -262,6 +276,7 @@ impl BlockMatcher {
         ];
         let mut passes = vec![
             (&self.downsample, &downsample_group, (px, py)),
+            (&self.stats, &stats_group, (px, py)),
             (&self.correlate, &correlate_group, (vx, vy)),
             (&self.choose, &choose_group, (px, py)),
         ];

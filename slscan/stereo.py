@@ -105,7 +105,8 @@ def block_disparity_small(left: np.ndarray, right: np.ndarray, d_min: float, d_m
                           fill: int = 2) -> tuple[np.ndarray, int, int]:
     """Block matching by normalized cross-correlation at 1/scale resolution. Returns the
     disparity map in 1/scale pixels (NaN where no match), the lowest disparity searched and
-    the number of disparities searched.
+    the number of disparities searched. Each image's block sums reflect at that image's
+    own borders, with the right image's taken at the column a disparity points at.
 
     A disparity is kept when its correlation reaches min_correlation, beats every
     disparity more than one step away by margin, and the right pixel picks it back within
@@ -120,18 +121,29 @@ def block_disparity_small(left: np.ndarray, right: np.ndarray, d_min: float, d_m
     box = (block, block)
     mean_l = cv2.boxFilter(ls, -1, box)
     var_l = cv2.boxFilter(ls * ls, -1, box) - mean_l * mean_l
+    box_r = cv2.boxFilter(rs, -1, box)
+    box_rr = cv2.boxFilter(rs * rs, -1, box)
+    pad = block // 2
+    padded_l = cv2.copyMakeBorder(ls, pad, pad, pad, pad, cv2.BORDER_REFLECT_101)
+    padded_r = cv2.copyMakeBorder(rs, pad, pad, pad, pad, cv2.BORDER_REFLECT_101)
+
+    def shift(image, d):
+        out = np.zeros_like(image)
+        columns = image.shape[1]
+        if d >= 0:
+            out[:, d:] = image[:, :columns - d]
+        else:
+            out[:, :columns + d] = image[:, -d:]
+        return out
+
     volume = np.full((hi - lo + 1, h, w), -1.0, np.float32)
     for i, d in enumerate(range(lo, hi + 1)):
         if abs(d) + block >= w:
             continue
-        shifted = np.zeros_like(rs)
-        if d >= 0:
-            shifted[:, d:] = rs[:, :w - d]
-        else:
-            shifted[:, :w + d] = rs[:, -d:]
-        mean_r = cv2.boxFilter(shifted, -1, box)
-        var_r = cv2.boxFilter(shifted * shifted, -1, box) - mean_r * mean_r
-        cov = cv2.boxFilter(ls * shifted, -1, box) - mean_l * mean_r
+        mean_r = shift(box_r, d)
+        var_r = shift(box_rr, d) - mean_r * mean_r
+        product = cv2.boxFilter(padded_l * shift(padded_r, d), -1, box)
+        cov = product[pad:pad + h, pad:pad + w] - mean_l * mean_r
         c = cov / np.sqrt(np.maximum(var_l * var_r, 1e-6))
         if d >= 0:
             c[:, :d + block] = -1.0

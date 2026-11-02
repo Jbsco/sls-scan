@@ -23,6 +23,7 @@ struct Params {
 @group(0) @binding(7) var<storage, read_write> source_valid: array<u32>;
 @group(0) @binding(8) var<storage, read_write> output: array<f32>;
 @group(0) @binding(9) var<storage, read_write> output_valid: array<u32>;
+@group(0) @binding(10) var<storage, read_write> block_stats: array<vec4<f32>>;
 
 fn byte_at(image: u32, i: u32) -> u32 {
     if (image == 0u) {
@@ -64,6 +65,30 @@ fn downsample(@builtin(global_invocation_id) id: vec3<u32>) {
 }
 
 @compute @workgroup_size(64)
+fn stats(@builtin(global_invocation_id) id: vec3<u32>) {
+    let p = id.x + id.y * params.small_stride;
+    if (p >= params.small_width * params.small_height) {
+        return;
+    }
+    let w = i32(params.small_width);
+    let h = i32(params.small_height);
+    let x = i32(p % params.small_width);
+    let y = i32(p / params.small_width);
+    let r = i32(params.block) / 2;
+    var sums = vec4<f32>(0.0);
+    for (var dy = -r; dy <= r; dy++) {
+        let row = reflect101(y + dy, h) * w;
+        for (var dx = -r; dx <= r; dx++) {
+            let k = row + reflect101(x + dx, w);
+            let l = small_left[k];
+            let rv = small_right[k];
+            sums += vec4<f32>(l, l * l, rv, rv * rv);
+        }
+    }
+    block_stats[p] = sums;
+}
+
+@compute @workgroup_size(64)
 fn correlate(@builtin(global_invocation_id) id: vec3<u32>) {
     let pixels = params.small_width * params.small_height;
     let i = id.x + id.y * params.volume_stride;
@@ -82,33 +107,22 @@ fn correlate(@builtin(global_invocation_id) id: vec3<u32>) {
     let masked = select((x >= w + d - b), (x < d + b), (d >= 0));
     if (abs(d) + b < w && !masked) {
         let r = b / 2;
-        var sl = 0.0;
-        var sll = 0.0;
-        var sr = 0.0;
-        var srr = 0.0;
         var slr = 0.0;
         for (var dy = -r; dy <= r; dy++) {
             let row = reflect101(y + dy, h) * w;
             for (var dx = -r; dx <= r; dx++) {
-                let xx = reflect101(x + dx, w);
-                let l = small_left[row + xx];
-                let xs = xx - d;
-                var rv = 0.0;
-                if (xs >= 0 && xs < w) {
-                    rv = small_right[row + xs];
-                }
-                sl += l;
-                sll += l * l;
-                sr += rv;
-                srr += rv * rv;
-                slr += l * rv;
+                let xl = reflect101(x + dx, w);
+                let xr = reflect101(x - d + dx, w);
+                slr += small_left[row + xl] * small_right[row + xr];
             }
         }
+        let left = block_stats[p];
+        let right = block_stats[u32(y) * params.small_width + u32(x - d)];
         let inv = 1.0 / f32(b * b);
-        let ml = sl * inv;
-        let mr = sr * inv;
-        let vl = sll * inv - ml * ml;
-        let vr = srr * inv - mr * mr;
+        let ml = left.x * inv;
+        let mr = right.z * inv;
+        let vl = left.y * inv - ml * ml;
+        let vr = right.w * inv - mr * mr;
         let cov = slr * inv - ml * mr;
         out = cov / sqrt(max(vl * vr, 1e-6));
     }
