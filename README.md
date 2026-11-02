@@ -4,12 +4,12 @@
 [![Style](https://github.com/Jbsco/sls-scan/actions/workflows/style.yml/badge.svg)](https://github.com/Jbsco/sls-scan/actions/workflows/style.yml)
 
 A structured-light 3D scanner built from a camera and a projector on a rigid bar, with
-its calibration, capture, decoding, triangulation, registration and meshing scripted
-on Linux. It scans objects from a few centimetres to a few metres across at an accuracy
-that reaches 0.2 to 0.5 mm within one view and 0.5 to 1 mm across a vehicle cab, for
-reverse engineering into CAD. The handheld scanners sold for this work capture only
-through their own Windows and macOS software; this project is the same principle,
-static instead of swept, in the open, and under the operator's control end to end.
+calibration, capture, decoding, triangulation, registration and meshing scripted on
+Linux. It scans objects from a few centimetres to a few metres across, at 0.2 to 0.5 mm
+within one view and 0.5 to 1 mm across a vehicle cab, for reverse engineering into CAD.
+Handheld scanners sold for this work capture only through their makers' Windows and
+macOS software. This project applies the same measurement principle from a static rig,
+under the operator's control from calibration to export.
 
 ## Contents
 
@@ -25,18 +25,18 @@ static instead of swept, in the open, and under the operator's control end to en
 
 ## Status
 
-Phase 0 of `ROADMAP.md`, the scaffold, is complete: the pattern generator and its Gray
-code encode and decode are implemented and tested, and `verify.do` is green. The
-calibration tooling and the static reference pipeline (Phases 1 and 2, Python) come
-first, then the application with its GPU preview (Phases 3 and 4, Rust), once the
-hardware in `docs/hardware.md` is on the bench.
+Phase 0 of `ROADMAP.md`, the scaffold, is complete: the pattern generator with its Gray
+code encode and decode is implemented and tested, and `verify.do` is green. Calibration
+tooling and the static reference pipeline (Phases 1 and 2, Python) come first, then the
+application with its GPU preview (Phases 3 and 4, Rust), once the hardware in
+`docs/hardware.md` is on the bench.
 
 ## Applications
 
-- **A bare vehicle cab.** With the dashboard, carpet and trim out, one scan gives the
+- **Bare vehicle cab.** With the dashboard, carpet and trim out, one scan gives the
   floor, firewall and pillar geometry for a dashboard frame, seat adapters, cable runs
   and crash-space checks, as reference geometry in CAD.
-- **A plug for a composite part.** A repaired original part, finished to gloss, scanned
+- **Plug for a composite part.** A repaired original part, finished to gloss, scanned
   before the mold is taken, so the mold and the shell can be checked against it.
 - **Molds and shells.** The cured part scanned against its plug for shrink and spring.
 - **Small parts.** Trim tabs, clip bosses, brackets and housings for reproduction by
@@ -46,7 +46,7 @@ hardware in `docs/hardware.md` is on the bench.
 
 ## How it works
 
-1. **Calibrate.** The camera's intrinsics come from a printed ChArUco board in 20 to 30
+1. **Calibrate.** Camera intrinsics come from a printed ChArUco board in 20 to 30
    poses. The projector is calibrated as an inverse camera: Gray codes projected onto the
    same board map its corners to projector pixels. A stereo calibration between the two
    gives the baseline. The board's printed square size sets the absolute scale.
@@ -64,8 +64,8 @@ hardware in `docs/hardware.md` is on the bench.
    quadric decimation to a size CAD can hold, alignment to datum points measured on the
    object, and export as PLY, OBJ or STL.
 
-The decoding uses OpenCV's `structured_light` module (Gray code and sinusoidal phase
-shift), the point cloud work uses Open3D, and everything else is NumPy.
+Decoding uses OpenCV's `structured_light` module (Gray code and sinusoidal phase shift),
+the point cloud work uses Open3D, and everything else is NumPy.
 
 ## Architecture
 
@@ -82,21 +82,23 @@ card through Vulkan, and on the CPU through Mesa's software Vulkan when no card 
 present. It has three panels: configuration (devices, calibration, pattern set,
 exposure), preview and processing (live view, coverage, capture, the deferred queue),
 and the scene (the final mesh with its datums, scale bars, residual report and
-measurement tools). Scan modes are static (view, reorient, view), continuous (sweep
-and fuse), and keyed (named targets define the object's frame). Python tools do the
-calibration solve and the mesh post-processing with OpenCV and Open3D, exchanging
-YAML and PLY files with the application. `DESIGN.md` D11 has the reasoning.
+measurement tools).
+
+Scan modes are static (view, reorient, view), continuous (sweep and fuse), and keyed
+(named targets define the object's frame). Python tools do the calibration solve and
+the mesh post-processing with OpenCV and Open3D, exchanging YAML and PLY files with the
+application. `DESIGN.md` D11 has the reasoning.
 
 ## Hardware
 
-| Part | Choice | Why |
+| Part | Choice | Reason |
 |---|---|---|
-| Final camera | Raspberry Pi HQ camera, IMX477, 12 MP, 6 mm lens, on the Pi capture node | Full-resolution static views; f ≈ 3,870 px, a 1.05 × 0.78 m field at 1 m |
-| Preview camera | Raspberry Pi Global Shutter camera, IMX296, 1456 × 1088, triggered per pattern, on the Pi capture node | The live path at the projector rate; the global shutter freezes each pattern |
-| Capture node | Raspberry Pi 5: both cameras, HDMI to the projector, a GPIO trigger line, gigabit Ethernet to the host | Display timing, trigger and capture on one clock; USB cameras on the host are the alternative |
+| Final camera | Raspberry Pi HQ camera, IMX477, 12 MP, 6 mm lens, on the Pi capture node | Full-resolution static views. f ≈ 3,870 px, a 1.05 × 0.78 m field at 1 m |
+| Preview camera | Raspberry Pi Global Shutter camera, IMX296, 1456 × 1088, triggered per pattern, on the Pi capture node | Live path at the projector rate, with a global shutter that freezes each pattern |
+| Capture node | Raspberry Pi 5: both cameras, HDMI to the projector, a GPIO trigger line, gigabit Ethernet to the host | Display timing, trigger and capture on one clock. USB cameras on the host are the alternative |
 | GPU | Any Vulkan-capable card (AMD or NVIDIA on Linux), or Mesa lavapipe on the CPU | One set of WGSL kernels for preview, final processing and the scene |
-| Projector | Used DLP with a native 1920 × 1080 DMD, 2,000 ANSI lumens or more, manual focus to 1 m, temporal processing off | DLP keeps binary patterns sharp; `docs/hardware.md` lists the requirements |
-| Bar | 40 × 40 aluminum extrusion, camera and projector at a 0.35 m baseline toed in to cross at 1 m, on a tripod | The calibration holds only while the pair does not move relative to each other |
+| Projector | Used DLP with a native 1920 × 1080 DMD, 2,000 ANSI lumens or more, manual focus to 1 m, temporal processing off | DLP keeps binary patterns sharp. `docs/hardware.md` lists the requirements |
+| Bar | 40 × 40 aluminum extrusion, camera and projector at a 0.35 m baseline toed in to cross at 1 m, on a tripod | Calibration holds only while the pair does not move relative to each other |
 | Calibration board | ChArUco, printed flat on foam board | One board calibrates the camera, the projector and the pair |
 | Targets and scale bars | Printed ArUco targets, two bars with targets at a caliper-measured spacing | Registration across views and an independent check of scale |
 | Surface preparation | Matte scanning spray or dry developer | Gloss and black surfaces return no usable pattern without it |
@@ -114,17 +116,18 @@ acceptance tests: a flat plate, a sphere and the scale bars.
 
 ## Repository layout
 
-- `slscan/`: the Python package. The pattern codes now, the calibration and the
-  reference pipeline next, `cli.py` for the commands.
-- `app/`: the Rust application, from Phase 3.
-- `tests/`: pytest tests of the pure functions, the pattern codes first.
-- `docs/hardware.md`: the bill of materials, rig geometry and build notes.
-- `docs/accuracy.md`: the error model and the acceptance tests.
-- `docs/pipeline.md`: each stage, its inputs, outputs and file formats.
-- `DESIGN.md`: the design decision ledger, dated and numbered.
-- `ROADMAP.md`: phases with acceptance criteria.
-- `tools/mdlint.py`: the markdown gate.
-- `style.do`, `test.do`, `verify.do`: the gates.
+| Path | Contents |
+|---|---|
+| `slscan/` | Python package: pattern codes now, calibration and the reference pipeline next, `cli.py` for the commands |
+| `app/` | Rust application, from Phase 3 |
+| `tests/` | pytest tests of the pure functions, the pattern codes first |
+| `docs/hardware.md` | Bill of materials, rig geometry and build notes |
+| `docs/accuracy.md` | Error model and acceptance tests |
+| `docs/pipeline.md` | Each stage with its inputs, outputs and file formats |
+| `tools/` | Markdown rendering check |
+| `style.do`, `test.do`, `verify.do` | The gates, runnable with `bash` or `redo` |
+| `DESIGN.md` | Numbered design decisions with their reasons |
+| `ROADMAP.md` | Phases with acceptance criteria, and open questions |
 
 ## Development
 
@@ -138,8 +141,9 @@ Rust toolchain and a Vulkan driver (or Mesa's lavapipe for the CPU path).
     bash style.do                             # markdown and sanitization
     bash verify.do                            # every gate, cheapest first
 
-A change is finished when `verify.do` is green. Captures, calibrations and scan outputs
-live under `data/`, which is not tracked.
+A change is finished when `verify.do` is green, and CI runs the same gates on every push
+and pull request. Captures, calibrations and scan outputs live under `data/`, which is
+not tracked.
 
 ## License
 
