@@ -353,7 +353,7 @@ board views, an 80 mm plate measures 8 µm RMS and a ball bar's spacing lands wi
 0.02 mm. Windows average the surface, so curved surfaces read slightly inside. A 21 px
 window spans 2.3 mm at 0.5 m and puts points on a 25 mm sphere 42 µm inside it, which
 shortens its fitted radius by about 0.1 mm. Smaller windows trade that bias for noise.
-Second-order matching windows or a curvature correction are the remedy we plan.
+D28 removes this bias with second-order matching windows.
 
 This supersedes the projector parts of D13 and D23. The capture node takes two Global
 Shutter cameras on its two connectors, fired by one trigger pulse. The motion limits of
@@ -389,3 +389,25 @@ The stand-in renders a sweep around a part on a mat, about 2° per frame as a sw
 30 fps would move, and the next board pose for each stereo-calibration sequence.
 `slscan fuse` runs matching, tracking and fusion on a captured sweep, and fails when no
 frames overlap, which is the sign of a sweep too fast to track.
+
+## D28. Second-order matching windows (2026-11-02)
+
+An affine window fits a plane to the surface it covers and reads a curved surface inside
+it (D25). A second-order window maps its pixels to the right image through a quadratic
+displacement field, six terms on each axis, which follows curvature across the window.
+Gauss-Newton fits those terms, with a gain and an offset for brightness, starting from
+each affine match. A sample stops iterating once its step falls under 10⁻⁵ px. A match
+is dropped when its column moves 1 px or more from its affine match.
+
+With true calibration, a sample every 8 px and windows of 25 px, points on a 25 mm
+sphere lie within 0.1 µm of it on average. Affine windows of 21 px put them 40.9 µm
+inside. The second-order radius fits 0.6 µm long, and an 80 mm plate measures 9.0 µm
+RMS. In the synthetic sweep of D26, second-order windows shrink ball bar sphere radius
+errors from -116 and -76 µm to -33 and +8 µm.
+
+Second-order matching takes about five times as long. NumPy and OpenCV match that plate
+in 11.1 s on a Ryzen 7 7700X, where affine windows take 2.3 s. `slscan scan-stereo` uses
+second-order windows of 25 px by default, since one view is its result. `slscan fuse`
+and `slscan sweep-bench` match every frame of a sweep, so they default to affine windows
+and take `--order 2`. Second-order matching on every frame waits on GPU kernels
+(Phase 4).
