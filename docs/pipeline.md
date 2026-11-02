@@ -38,6 +38,27 @@ projector calibration.
 4. Scale: board square size, measured with calipers on the print, not taken from the
    print job.
 
+Distortion is radial and tangential with k3 fixed, for both devices. Column and row
+Gray codes are both projected, because each corner needs a projector row as well as a
+column.
+
+A calibration capture is one directory per board pose (`pose_000`, `pose_001` and so
+on). Each contains the camera image of every frame that `slscan calibration-patterns`
+writes, under the same file name: `white.png`, `columns_000.png` onward and
+`rows_000.png` onward. `slscan calibrate <directory>` reads them and writes
+`calibration.yaml`:
+
+| Field | Contents |
+|---|---|
+| `board` | squares across and down, square and marker size in metres, marker dictionary |
+| `camera`, `projector` | image size, 3 × 3 matrix, distortion (k1, k2, p1, p2, k3), reprojection error in pixels |
+| `stereo` | rotation and translation in metres from camera frame to projector frame, reprojection error |
+| `views` | poses used |
+
+`slscan calibration-diff a.yaml b.yaml` compares two calibrations against the
+repeatability limits of Phases 1 and 8: focal length within 0.1 % and baseline within
+0.2 mm.
+
 ## Capture
 
 The projector is the second display. A fullscreen window shows each pattern, the camera
