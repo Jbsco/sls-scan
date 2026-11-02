@@ -135,6 +135,22 @@ pub fn write_png(path: &Path, width: u32, height: u32, pixels: &[u8]) -> io::Res
     writer.write_image_data(pixels).map_err(io::Error::other)
 }
 
+/// Read an 8-bit greyscale PNG as its width, height and row-major pixels.
+pub fn read_png(path: &Path) -> io::Result<(u32, u32, Vec<u8>)> {
+    let decoder = png::Decoder::new(io::BufReader::new(File::open(path)?));
+    let mut reader = decoder.read_info().map_err(io::Error::other)?;
+    let mut pixels = vec![0; reader.output_buffer_size().unwrap_or(0)];
+    let info = reader.next_frame(&mut pixels).map_err(io::Error::other)?;
+    if info.color_type != png::ColorType::Grayscale || info.bit_depth != png::BitDepth::Eight {
+        return Err(io::Error::other(format!(
+            "{} is not 8-bit greyscale",
+            path.display()
+        )));
+    }
+    pixels.truncate(info.buffer_size());
+    Ok((info.width, info.height, pixels))
+}
+
 /// The next unused `pose_NNN` directory of a session.
 pub fn next_pose_dir(session: &Path) -> io::Result<PathBuf> {
     fs::create_dir_all(session)?;
@@ -285,12 +301,9 @@ mod tests {
         let path = dir.join("frame.png");
         let pixels: Vec<u8> = (0..12).collect();
         write_png(&path, 4, 3, &pixels)?;
-        let decoder = png::Decoder::new(io::BufReader::new(File::open(&path)?));
-        let mut reader = decoder.read_info().map_err(io::Error::other)?;
-        let mut back = vec![0; reader.output_buffer_size().unwrap_or(0)];
-        let info = reader.next_frame(&mut back).map_err(io::Error::other)?;
-        assert_eq!((info.width, info.height), (4, 3));
-        assert_eq!(&back[..12], pixels.as_slice());
+        let (width, height, back) = read_png(&path)?;
+        assert_eq!((width, height), (4, 3));
+        assert_eq!(back, pixels);
         fs::remove_dir_all(dir)
     }
 
