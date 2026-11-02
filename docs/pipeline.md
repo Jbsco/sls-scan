@@ -2,19 +2,37 @@
 
 Each stage is one module in `slscan/` and one command in `slscan/cli.py`, with files
 between stages so any stage can be rerun from its input. All data lives under `data/`,
-which is not tracked.
+which is not tracked. Active stereo is the main path (`DESIGN.md` D25). The phase-shift
+path with a calibrated projector is the option for edge-sharp static scans.
 
 ## Stages
 
 | Stage | Module | Input | Output |
 |---|---|---|---|
-| Patterns | `patterns.py` | projector width and height, phase pitch and steps | pattern image stack and decode tables |
-| Calibration | `calibrate.py` | board images, projected-code images on the board | `calibration.yaml`: camera matrix, distortion, projector matrix, extrinsics, board scale |
+| Stereo calibration | `calibrate.py` | board images from both cameras | `stereo.yaml`: both cameras' matrices and distortion, left-to-right rotation and translation, board scale |
+| Stereo matching | `stereo.py` | left and right images, `stereo.yaml` | a point cloud per frame (PLY) in the left camera's frame |
+| Patterns (phase shift) | `patterns.py` | projector width and height, phase pitch and steps | pattern image stack and decode tables |
+| Projector calibration | `calibrate.py` | board images, projected-code images on the board | `calibration.yaml`: camera matrix, distortion, projector matrix, extrinsics, board scale |
 | Capture | `capture.py` | pattern stack, exposure list | one directory per view with the images and a manifest |
-| Decode | `decode.py` | a view directory | per-pixel projector column, confidence mask |
-| Triangulate | `triangulate.py` | decoded view, `calibration.yaml` | a point cloud per view (PLY) |
+| Decode (phase shift) | `decode.py` | a view directory | per-pixel projector column, confidence mask |
+| Triangulate (phase shift) | `triangulate.py` | decoded view, `calibration.yaml` | a point cloud per view (PLY) |
 | Register | `register.py` | view clouds and target detections | view poses, a merged cloud, scale bar report |
 | Mesh | `mesh.py` | merged cloud, datum points | a mesh (PLY, OBJ, STL) and the residual report |
+
+## Active stereo
+
+A stereo calibration capture is one directory per board pose (`pose_000` onward), each
+with `left.png` and `right.png` taken at the same instant. `slscan calibrate-stereo`
+calibrates each camera from every pose in which it sees the board, and the pair from
+the corners both see, then writes `stereo.yaml`.
+
+A stereo view is a directory with `left.png` and `right.png` under the pattern light.
+`slscan scan-stereo <view>` rectifies both, takes a coarse disparity from semi-global
+matching at quarter resolution, and refines a sample every 8 pixels by Lucas-Kanade and
+an affine window of 21 pixels fitted with ECC. A sample is kept when its window lies on
+lit, matched surface, correlates at 0.95 or better, and lands within 3 pixels of its
+guess. `--near` and `--far` bound the depth search, and `--step` and `--window` set
+density and the trade between noise and curvature bias (`docs/accuracy.md`).
 
 ## Patterns
 
@@ -117,23 +135,20 @@ a report of scale bar lengths and datum residuals.
 
 ## Preview path
 
-The live path trades resolution and code length for rate. The projector cycles three or
-four phase-shifted sinusoids at one pitch, and the global-shutter camera captures each
-at the projector rate. Every complete cycle gives a depth frame: phase decode,
-unwrapping against the previous frame and the fused model, triangulation, and TSDF
-integration at a coarse voxel size, all in WGSL kernels. The decode kernel is
-`app/src/decode.wgsl`, and it matches the NumPy decode (`DESIGN.md` D22).
+Every synchronized frame pair is a depth frame: rectification, coarse disparity, affine
+refinement, triangulation, and TSDF integration at a coarse voxel size, all in WGSL
+kernels on the host. Poses come from the frame's geometry against the model, helped by
+markers on the mat around the part. The scene draws the volume and the live cloud as
+the scanner moves, which shows coverage and gaps. In continuous mode the fused model is
+the result, and dense matching of selected frames refines it afterwards.
 
-Poses come from coded targets seen in the camera frames, refined by ICP against the
-model. The scene draws the volume and the live cloud as the rig moves, which shows
-coverage and gaps. The preview shows the operator where to point the rig, and the
-deliverable comes from the final path.
+In the phase-shift option a depth frame is a cycle of phase-shifted patterns instead.
+Its decode kernel is `app/src/decode.wgsl`, and it matches the NumPy decode (D22).
 
 ## Application
 
-The Rust application owns the devices and the loop. It owns projector output as a
-fullscreen surface, triggered capture from the preview camera, sequenced capture from
-the final camera, timestamps per frame, WGSL kernels, the fused volume, the deferred
-processing queue, and the three panels. Calibration YAML comes from the Python tools and goes back
-out with each scan. Final views are written as image stacks with a manifest for the
-deferred path, and results as PLY, OBJ and STL with the report.
+The Rust application owns the loop: triggered capture of frame pairs from the capture
+node, timestamps per pair, WGSL kernels, the fused volume, the deferred processing queue,
+and the three panels. Calibration YAML comes from the Python tools and goes back out with
+each scan. Selected frame pairs are written for the deferred path, and results as PLY,
+OBJ and STL with the report.
