@@ -278,6 +278,37 @@ def cmd_decode_vectors(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_stereo_vectors(args: argparse.Namespace) -> int:
+    """Write a rectified stereo view, its affine matches and their NumPy second-order
+    refinement as raw files for the GPU kernels."""
+    import json
+
+    head = synthetic.stereo_head()
+    cal = synthetic.true_stereo_calibration(head, synthetic.SMALL_BOARD)
+    pattern = synthetic.random_dots(head.light.width, head.light.height, 3.0, 1.0,
+                                    np.random.default_rng(0))
+    images = synthetic.stereo_capture(head, synthetic.stereo_scenes()[args.scene], pattern,
+                                      np.random.default_rng(args.seed))
+    _, rl, rr, left_pts, right_pts, warps = stereo.affine_matches(
+        cal, images["left"], images["right"], 0.4, 0.6, args.step, args.window)
+    refined, kept = stereo.second_order_matches(rl, rr, left_pts, right_pts, warps, args.window,
+                                                args.iterations)
+    os.makedirs(args.out, exist_ok=True)
+    rl.tofile(os.path.join(args.out, "left.bin"))
+    rr.tofile(os.path.join(args.out, "right.bin"))
+    samples = np.column_stack([left_pts, right_pts, warps.reshape(-1, 4)])
+    samples.astype("<f4").tofile(os.path.join(args.out, "samples.bin"))
+    refined.astype("<f4").tofile(os.path.join(args.out, "refined.bin"))
+    kept.astype(np.uint8).tofile(os.path.join(args.out, "kept.bin"))
+    meta = {"width": int(rl.shape[1]), "height": int(rl.shape[0]), "window": args.window,
+            "iterations": args.iterations, "samples": int(len(left_pts))}
+    with open(os.path.join(args.out, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+    print(f"stereo vectors of the {args.scene} scene written to {args.out}: {len(left_pts)} "
+          f"affine matches, {int(kept.sum())} kept by second-order refinement")
+    return 0
+
+
 def cmd_motion_error(args: argparse.Namespace) -> int:
     make_rig, make_scenes, spec, _ = HEADS[args.head]
     rig = synthetic.small_volume_preview_rig() if args.head == "small" else make_rig()
@@ -568,6 +599,17 @@ def main(argv=None) -> int:
     p.add_argument("--pitch", type=int, default=16)
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_decode_vectors)
+
+    p = sub.add_parser("stereo-vectors",
+                       help="write a rectified stereo view, its affine matches and their "
+                            "reference second-order refinement")
+    p.add_argument("--out", default="data/stereo-vectors")
+    p.add_argument("--scene", choices=("plate", "sphere", "ball-bar"), default="sphere")
+    p.add_argument("--step", type=int, default=8, help="sample spacing in pixels")
+    p.add_argument("--window", type=int, default=25, help="matching window in pixels")
+    p.add_argument("--iterations", type=int, default=20)
+    p.add_argument("--seed", type=int, default=1)
+    p.set_defaults(func=cmd_stereo_vectors)
 
     p = sub.add_parser("node-sim", help="run a stand-in capture node serving synthetic frames")
     p.add_argument("--host", default="127.0.0.1")
