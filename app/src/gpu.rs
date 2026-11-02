@@ -28,30 +28,56 @@ pub struct Decoder {
     pub adapter: String,
 }
 
-fn words(bytes: &[u8]) -> Vec<u8> {
+/// Pad bytes to whole 32-bit words, as WGSL storage arrays of `u32` need.
+pub fn words(bytes: &[u8]) -> Vec<u8> {
     let mut padded = bytes.to_vec();
     padded.resize(bytes.len().div_ceil(4) * 4, 0);
     padded
 }
 
+/// Open the first adapter wgpu offers, or a software one when `fallback` is set. Returns
+/// the device, its queue and a description of the adapter.
+pub fn open(fallback: bool, label: &str) -> Result<(wgpu::Device, wgpu::Queue, String), String> {
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        force_fallback_adapter: fallback,
+        compatible_surface: None,
+    }))
+    .map_err(|e| e.to_string())?;
+    let info = adapter.get_info();
+    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some(label),
+        required_limits: adapter.limits(),
+        ..Default::default()
+    }))
+    .map_err(|e| e.to_string())?;
+    let name = format!("{} ({:?}, {:?})", info.name, info.backend, info.device_type);
+    Ok((device, queue, name))
+}
+
+/// Map a readback buffer after the queue's work and copy its contents to host memory.
+pub fn read(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Result<Vec<u8>, String> {
+    let (tx, rx) = mpsc::channel();
+    buffer.map_async(wgpu::MapMode::Read, .., move |r| {
+        let _ = tx.send(r);
+    });
+    device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .map_err(|e| e.to_string())?;
+    rx.recv()
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    let bytes = buffer.get_mapped_range(..).to_vec();
+    buffer.unmap();
+    Ok(bytes)
+}
+
 impl Decoder {
     /// Open the first adapter wgpu offers, or a software one when `fallback` is set.
     pub fn new(fallback: bool) -> Result<Self, String> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            force_fallback_adapter: fallback,
-            compatible_surface: None,
-        }))
-        .map_err(|e| e.to_string())?;
-        let info = adapter.get_info();
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("decode"),
-            required_limits: adapter.limits(),
-            ..Default::default()
-        }))
-        .map_err(|e| e.to_string())?;
+        let (device, queue, adapter) = open(fallback, "decode")?;
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("decode"),
             source: wgpu::ShaderSource::Wgsl(include_str!("decode.wgsl").into()),
@@ -68,7 +94,7 @@ impl Decoder {
             device,
             queue,
             pipeline,
-            adapter: format!("{} ({:?}, {:?})", info.name, info.backend, info.device_type),
+            adapter,
         })
     }
 
@@ -181,23 +207,8 @@ impl Decoder {
         encoder.copy_buffer_to_buffer(&columns, 0, &columns_read, 0, size);
         encoder.copy_buffer_to_buffer(&mask, 0, &mask_read, 0, size);
         self.queue.submit([encoder.finish()]);
-        let read = |buffer: &wgpu::Buffer| -> Result<Vec<u8>, String> {
-            let (tx, rx) = mpsc::channel();
-            buffer.map_async(wgpu::MapMode::Read, .., move |r| {
-                let _ = tx.send(r);
-            });
-            self.device
-                .poll(wgpu::PollType::wait_indefinitely())
-                .map_err(|e| e.to_string())?;
-            rx.recv()
-                .map_err(|e| e.to_string())?
-                .map_err(|e| e.to_string())?;
-            let bytes = buffer.get_mapped_range(..).to_vec();
-            buffer.unmap();
-            Ok(bytes)
-        };
-        let column_bytes = read(&columns_read)?;
-        let mask_bytes = read(&mask_read)?;
+        let column_bytes = read(&self.device, &columns_read)?;
+        let mask_bytes = read(&self.device, &mask_read)?;
         let columns = column_bytes
             .chunks_exact(4)
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
