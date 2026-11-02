@@ -281,3 +281,17 @@ command is a setting, `python3 -m slscan.cli` by default.
 Dependencies build with optimization in development builds. Writing a session of 492
 frames at 1280 × 960 took 5 min with unoptimized PNG and deflate code, and 25 s with
 optimized dependencies and fast PNG compression.
+
+## D22. Decode kernel on the GPU (2026-11-01)
+
+The decode of D16 runs as one WGSL compute invocation per camera pixel through wgpu
+(`app/src/decode.wgsl`), in single precision. `slscan decode-vectors` writes a
+synthetic scan with its NumPy decode, and `sls-scan decode-check` compares the kernel's
+output with it. On each virtual bench scene at 1280 × 960, masks agree on every pixel
+and columns differ by at most 0.00006 px, decoded in 70 ms on a Radeon RX 7900 GRE
+with upload and readback. Vectors are written at gate time, so no large files are
+tracked.
+
+The CPU fallback of D11 is Mesa's lavapipe running the same kernel. Without an
+adapter, kernel checks skip unless `SLS_REQUIRE_GPU` is set, which makes a missing
+adapter a failure.
