@@ -430,6 +430,18 @@ differ by at most 0.00012 px. NumPy spends about 8.8 s on this stage: 11.1 s for
 view with second-order windows less 2.3 s with affine windows (D28).
 
 One invocation per sample runs its iterations serially, so the 296 samples of a sphere
-view take 234 ms. A workgroup per sample, sharing the window's pixels, is the next step
-toward 15 depth frames per second (Phase 4). Rectification, coarse disparity and the
-affine stage stay on the CPU.
+view take 234 ms. D30 gives each sample a workgroup instead. Rectification, coarse
+disparity and the affine stage stay on the CPU.
+
+## D30. A workgroup per sample for refinement (2026-11-02)
+
+The refinement kernel of D29 gives each sample a workgroup of 64 lanes. Lanes split the
+window's pixels and add their partial normal equations in workgroup memory, in three
+chunks of 40 sums. Lane 0 solves the system and updates the parameters that all lanes
+read in the next iteration.
+
+On the plate vectors, a Radeon RX 7900 GRE now refines 6296 samples in 115 ms with
+upload and readback, down from 302 ms. A sphere view's 296 samples take 14 ms, down from
+234 ms. Kept flags still agree on every sample, and refined points differ from NumPy by
+at most 0.00012 px. A plate view at 115 ms is still above the 66 ms per frame that 15
+depth frames per second allow (Phase 4).

@@ -1,5 +1,5 @@
-//! Second-order refinement of stereo matches on the GPU: one WGSL compute invocation per
-//! sample, following the NumPy reference `second_order_matches` in `slscan/stereo.py`.
+//! Second-order refinement of stereo matches on the GPU: one WGSL workgroup per sample,
+//! following the NumPy reference `second_order_matches` in `slscan/stereo.py`.
 
 use crate::gpu::{open, read, words};
 use eframe::wgpu;
@@ -86,7 +86,11 @@ impl Refiner {
             return Ok((Vec::new(), Vec::new()));
         }
         let (px, py) = groups(pixels)?;
-        let (sx, sy) = groups(count)?;
+        let sample_groups = u32::try_from(count).map_err(|e| e.to_string())?;
+        let (sx, sy) = (
+            sample_groups.min(MAX_GROUPS),
+            sample_groups.div_ceil(MAX_GROUPS),
+        );
         let mut uniform = Vec::with_capacity(32);
         for v in [
             params.width,
@@ -95,7 +99,7 @@ impl Refiner {
             params.iterations,
             u32::try_from(count).map_err(|e| e.to_string())?,
             px * WORKGROUP,
-            sx * WORKGROUP,
+            sx,
             0,
         ] {
             uniform.extend_from_slice(&v.to_le_bytes());
