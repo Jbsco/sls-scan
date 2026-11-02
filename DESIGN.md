@@ -4,19 +4,20 @@ Decisions are dated and numbered. A reversal gets a new entry, never an edit.
 
 ## D1. The GPL-3.0-or-later license (2026-10-31)
 
-A scanner built from commodity parts and open libraries should stay open with its
+We chose the copyleft so that a scanner built on this one stays open with its
 improvements. OpenCV (Apache-2.0) and Open3D (MIT) are compatible dependencies.
 
 ## D2. A static rig, not a handheld (2026-10-31)
 
-The handheld scanners in the $250 to $1,500 range capture only through their makers'
+Handheld scanners in the $250 to $1,500 range capture only through their makers'
 Windows and macOS applications, and their per-frame accuracy claims hold with markers
 on the part. A camera and projector fixed to a bar on a tripod gives the same
 measurement principle with a calibration the operator owns, a pipeline that runs on
-Linux end to end, and per-view accuracy that matches the handhelds on large parts. The
-cost is time: a view takes 10 to 15 s of capture and a minute or two of repositioning,
-so a cab is one to two hours of capture against twenty minutes with a handheld. For
-reference geometry taken once, the time is acceptable.
+Linux end to end, and per-view accuracy that matches the handhelds on large parts.
+
+The cost is time: a view takes 10 to 15 s of capture and a minute or two of
+repositioning, so a cab is one to two hours of capture against twenty minutes with a
+handheld. For reference geometry taken once, that time is acceptable.
 
 ## D3. The camera (2026-10-31)
 
@@ -33,25 +34,25 @@ their availability saves.
 A used 1080p DLP projector. DLP mirrors keep binary edges sharp where LCD panels blur
 them, 1080p samples a 1 m field at about 0.5 mm per projector pixel, and used office
 units cost $80 to $150. Keystone correction stays off, because it resamples the
-patterns. The projector's depth of field, about ±0.25 m around focus, sets the usable
-depth band per view, and each view is set up with the surface inside it.
+patterns. Projector depth of field, about ±0.25 m around focus, sets the usable depth
+band per view, and each view is set up with the surface inside it.
 
 ## D5. Gray code plus phase shift (2026-10-31)
 
 Gray code alone resolves the projector column per camera pixel without ambiguity, at
 one projector pixel of precision. Phase shift alone resolves to a tenth of a pixel but
-only within one period. Together, the Gray code picks the period and the phase shift
-refines inside it, which is the standard combination and what OpenCV's
-`structured_light` module implements. Inverse patterns make the binarization robust
-to surface reflectance, and two or three exposures per pattern cover dark and light
-areas in one view.
+only within one period. Together, Gray code picks the period and phase shift refines
+inside it, which is the standard combination and what OpenCV's `structured_light`
+module implements. Inverse patterns make the binarization robust to surface
+reflectance, and two or three exposures per pattern cover dark and light areas in one
+view.
 
 ## D6. Python with OpenCV and Open3D (2026-10-31)
 
 A scanner's value is in its calibration and its measurement, both checked by physical
 acceptance tests (`docs/accuracy.md`), and its work is image and point cloud
 processing, where OpenCV and Open3D are the established tools. Python with those two,
-and NumPy for everything between, reaches a working scanner fastest. The pure functions
+and NumPy for everything between, reaches a working scanner fastest. Pure functions
 (pattern codes, decoding arithmetic, triangulation) are kept free of camera and display
 dependencies and tested in isolation, so a later port of that core to a compiled
 language has a specification and vectors to port against.
@@ -59,8 +60,8 @@ language has a specification and vectors to port against.
 ## D7. Registration by coded targets, checked by scale bars (2026-10-31)
 
 Global accuracy over a large object is set by how the views are joined, not by the
-sensor. Printed coded targets seen in three or more views give the view poses directly,
-and ICP refines them on the overlapping geometry. ICP alone drifts with the number of
+sensor. Printed coded targets seen in three or more views give view poses directly,
+and ICP refines them on overlapping geometry. ICP alone drifts with the number of
 views, which is why it is a refinement and not the registration. Two scale bars of
 caliper-measured length, placed in different orientations, give an independent check of
 every scan's scale and are reported with every result.
@@ -69,9 +70,10 @@ every scan's scale and are reported with every result.
 
 Depth resolution follows the stereo relation δz = z²·δp/(f·b), with z the working
 distance, δp the decoding precision in camera pixels, f the focal length in pixels and
-b the baseline. `docs/accuracy.md` carries the numbers for the reference rig. Resolution
-is the floor; accuracy is set above it by calibration residuals, projector gamma and
-rig flex, and is measured, never assumed, by the acceptance tests.
+b the baseline. `docs/accuracy.md` contains the numbers for the reference rig.
+Resolution is the floor. Accuracy sits above it, set by calibration residuals,
+projector gamma and rig flex, and the acceptance tests measure it rather than assume
+it.
 
 ## D9. Data outside version control (2026-10-31)
 
@@ -81,15 +83,18 @@ files that a rig directory can track by choice.
 
 ## D10. A self-hosted runner while the repository is private (2026-10-31)
 
-GitHub provides hosted runners to public repositories; a private one supplies its own,
-so the workflows run on a self-hosted runner, with `runs-on: [self-hosted, linux]`. The steps that only the hosted Ubuntu image needs
-(the apt install of the markdown renderer, the Python setup and the package install)
-are gated on `runner.environment == 'github-hosted'` rather than deleted, so a return
-to hosted runners is a one-line change per job. The runner's host supplies the
-renderer, Python, NumPy and pytest. Jobs run with that host account's access, which for
-a private repository of one's own equals running the gates locally. At a public flip the
-workflows go back to `ubuntu-latest` and the runner is removed, because a public
-repository's fork pull requests would otherwise execute on the host.
+GitHub provides hosted runners to public repositories. A private one supplies its own,
+so the workflows run on a self-hosted runner, with `runs-on: [self-hosted, linux]`. The
+steps that only the hosted Ubuntu image needs (the apt install of the markdown
+renderer, the Python setup and the package install) are gated on
+`runner.environment == 'github-hosted'` rather than deleted, so a return to hosted
+runners is a one-line change per job. The runner's host supplies the renderer, Python,
+NumPy and pytest.
+
+Jobs run with that host account's access, which for a private repository of one's own
+equals running the gates locally. At a public flip the workflows go back to
+`ubuntu-latest` and the runner is removed, because a public repository's fork pull
+requests would otherwise execute on the host.
 
 ## D11. Live scanning, the GPU and the languages (2026-10-31)
 
@@ -103,29 +108,30 @@ with the final object captured at full resolution and processed afterwards.
   camera at 1 MP synchronized to the projector. At 60 Hz that is 15 to 20 depth frames
   per second, at 120 Hz 30 to 40. A one-shot pattern matched by stereo is the fallback
   for coverage-only preview at camera rate. Frames are fused into a coarse TSDF volume
-  for display, with poses from the coded targets and ICP.
-- **Final path.** The full Gray code and phase shift sequence per view at the full
-  camera resolution, processed after capture on the GPU (seconds per view) or the CPU
-  (tens of seconds), then registered and meshed as in D7.
-- **GPU and fallback.** The kernels run through wgpu, the WebGPU API over Vulkan, which
+  for display, with poses from coded targets and ICP.
+- **Final path.** The full Gray code and phase shift sequence per view at full camera
+  resolution, processed after capture on the GPU (seconds per view) or the CPU (tens of
+  seconds), then registered and meshed as in D7.
+- **GPU and fallback.** Kernels run through wgpu, the WebGPU API over Vulkan, which
   serves both an AMD and an NVIDIA card on Linux through their Vulkan drivers, in WGSL
   compute shaders that share buffers with the 3D view. The CPU fallback is Mesa's
   software Vulkan implementation (lavapipe) running the same shaders unchanged, slower,
   plus the reference implementation for the pure core, so no kernel exists twice.
   Vendor-only paths (CUDA, ROCm, Accelerate's PTX backend) are out, because the two
-  machines carry different vendors.
-- **Languages.** The application (capture, synchronization, kernels, fusion, the panels
-  and the 3D scene) is Rust with wgpu and egui, chosen over C for memory safety at the
-  same speed and over Python for the live loop's latency and the single-binary
-  deployment. Python stays for the offline tooling where OpenCV has no equal: the
-  calibration solve, target detection development, and mesh post-processing with
-  Open3D, exchanging YAML and PLY files with the application. Haskell is the candidate
-  for the executable reference of the pure core (pattern codes, decoding arithmetic,
-  triangulation): it generates the vectors the kernels are checked against, as a second
-  implementation in a different language catches what a port of the same code repeats.
-  Haskell is not the kernel language, since Accelerate targets only NVIDIA through
-  PTX, and Futhark, which does target AMD and NVIDIA and a multicore CPU from one
-  source, is kept as the alternative kernel language if WGSL proves limiting.
+  machines have cards from different vendors.
+- **Languages.** The application (capture, synchronization, kernels, fusion, panels and
+  the 3D scene) is Rust with wgpu and egui, chosen over C for memory safety at the same
+  speed and over Python for live-loop latency and single-binary deployment. Python
+  stays for offline tooling where OpenCV has no equal: calibration solve, target
+  detection development, and mesh post-processing with Open3D, exchanging YAML and PLY
+  files with the application.
+- **Reference core.** Haskell is the candidate for the executable reference of the pure
+  core (pattern codes, decoding arithmetic, triangulation): it generates the vectors the
+  kernels are checked against, as a second implementation in a different language
+  catches what a port of the same code repeats. Haskell is not the kernel language,
+  since Accelerate targets only NVIDIA through PTX. Futhark, which targets AMD, NVIDIA
+  and a multicore CPU from one source, is kept as the alternative kernel language if
+  WGSL proves limiting.
 - **Modes and markers.** Static (view, reorient, view, registered on targets),
   continuous (the rig moves slowly while the preview path runs and fuses), and keyed
   (the operator names the target IDs that define the object's frame, so a scan aligns
@@ -137,24 +143,26 @@ with the final object captured at full resolution and processed afterwards.
 ## D12. Calibration through the frontend (2026-10-31)
 
 The calibration solve stays in Python (D11), and the operator never runs it by hand.
-The configuration panel captures the board poses, shows the detection count and
-coverage as they accumulate, runs the solve as a subprocess of the bundled tool,
-reports the reprojection errors against the Phase 1 limits, and loads the resulting
-YAML into the active rig. A failed or poor solve is reported with the poses that hurt
-it, so the operator recaptures those rather than everything.
+The configuration panel captures board poses, shows detection count and coverage as
+they accumulate, runs the solve as a subprocess of the bundled tool, reports
+reprojection errors against the Phase 1 limits, and loads the resulting YAML into the
+active rig. A failed or poor solve is reported with the poses that hurt it, so the
+operator recaptures those rather than everything.
 
 ## D13. The capture node (2026-10-31)
 
 The Raspberry Pi cameras are CSI devices and attach only to a Pi, so a Pi 5 is the
 capture node: both cameras on its two CSI connectors (the HQ camera for the final
 path, the Global Shutter camera for the preview path), its HDMI output driving the
-projector, the patterns flipped on the display's vertical blank, and a GPIO line
-from the page-flip handler triggering the Global Shutter camera's external trigger
-input, so the pattern timing and the exposure share one clock. Frames stream to the
-host application over gigabit Ethernet: the preview at 1456 × 1088 mono and 30 fps is
-about 48 MB/s, binned 2 × 2 a quarter of that, and a final view of 30 full-resolution
-frames moves in a few seconds. A USB global-shutter camera and a USB 12 MP module on
-the host remain the alternative where no Pi is wanted, behind the same capture
-interface, with the host's own frame timing as the trigger source. The node keeps the
-real-time work (display timing, trigger, capture) on a machine made for it and leaves
-the GPU work and the panels on the host.
+projector, patterns flipped on the display's vertical blank, and a GPIO line from the
+page-flip handler triggering the Global Shutter camera's external trigger input, so
+pattern timing and exposure share one clock.
+
+Frames stream to the host application over gigabit Ethernet: the preview at 1456 × 1088
+mono and 30 fps is about 48 MB/s, binned 2 × 2 a quarter of that, and a final view of
+30 full-resolution frames moves in a few seconds.
+
+A USB global-shutter camera and a USB 12 MP module on the host remain the alternative
+where no Pi is wanted, behind the same capture interface, with the host's own frame
+timing as the trigger source. The node keeps real-time work (display timing, trigger,
+capture) on a machine made for it and leaves GPU work and the panels on the host.
