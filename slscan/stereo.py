@@ -221,16 +221,16 @@ def second_order_matches(left: np.ndarray, right: np.ndarray, left_points: np.nd
     return np.vstack(out_right), np.concatenate(out_kept)
 
 
-def affine_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
+def coarse_samples(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
                    near_m: float, far_m: float, step: int = 8, window: int = 21,
                    min_level: float = 6.0):
-    """Rectify a view and match a grid of left pixels every step pixels with affine windows,
-    for surfaces between near_m and far_m. Returns the rectification, both rectified
-    images, the kept left and right points (N, 2) and each window's affine part (N, 2, 2).
+    """Rectify a view and pick a grid of left pixels every step pixels with right guesses
+    from the coarse disparity, for surfaces between near_m and far_m. Returns the
+    rectification, both rectified images, the left points (N, 2) and their guesses (N, 2).
 
-    A sample is matched only when its whole window lies on lit surface (local mean at or
+    A sample is picked only when its whole window lies on lit surface (local mean at or
     above min_level in the left image) that semi-global matching also matched, so no window
-    straddles an edge. The right side of each match is judged by its correlation."""
+    straddles an edge."""
     rect = rectify(cal)
     rl = cv2.remap(left, *rect.left_maps, cv2.INTER_LINEAR)
     rr = cv2.remap(right, *rect.right_maps, cv2.INTER_LINEAR)
@@ -246,6 +246,17 @@ def affine_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
     points, d = points[valid], d[valid]
     guesses = points.copy()
     guesses[:, 0] -= d
+    return rect, rl, rr, points, guesses
+
+
+def affine_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
+                   near_m: float, far_m: float, step: int = 8, window: int = 21,
+                   min_level: float = 6.0):
+    """Match the samples of coarse_samples with affine windows. Returns the rectification,
+    both rectified images, the kept left and right points (N, 2) and each window's affine
+    part (N, 2, 2). The right side of each match is judged by its correlation."""
+    rect, rl, rr, points, guesses = coarse_samples(cal, left, right, near_m, far_m, step,
+                                                   window, min_level)
     left_pts, right_pts, warps = refine(rl, rr, points, guesses, window, return_warps=True)
     return rect, rl, rr, left_pts, right_pts, warps
 
