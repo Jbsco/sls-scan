@@ -244,3 +244,12 @@ The node generates the patterns from the set name and its parameters, so no patt
 image crosses the network. Each frame has its pattern index and the node's timestamp
 of exposure start. The application matches frames to patterns by index and checks
 the timing by timestamp. A change to the format changes the magic.
+
+## D19. The stand-in node in a container, checked in CI (2026-11-01)
+
+The stand-in node runs from an image built by the root `Dockerfile`, with only
+packages it needs, at versions CI installs. A container gives it an address of its
+own, so the application connects to it as it will to the Pi. `node.do` runs a virtual
+bench through that container over the capture protocol, and a Node workflow runs it on
+every push and pull request. `verify.do` leaves it out, because it needs Docker and
+adds an image build to every local run.
