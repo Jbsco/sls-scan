@@ -90,6 +90,9 @@ fn headless_capture(args: &[String]) -> ExitCode {
     }
 }
 
+/// Voxel size of the fused model, as `track.fuse` uses by default.
+const FUSION_VOXEL_M: f64 = 0.0005;
+
 fn headless_depth(args: &[String]) -> ExitCode {
     let mut node = "127.0.0.1:5600".to_owned();
     let mut wait = Duration::ZERO;
@@ -171,7 +174,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
     let mut ok = !results.is_empty();
-    let mut last = None;
+    let mut fusion = fuse::Fusion::new(FUSION_VOXEL_M);
     for (pair, result) in &results {
         match result {
             Ok(d) => {
@@ -181,13 +184,19 @@ fn headless_depth(args: &[String]) -> ExitCode {
                     .iter()
                     .map(|(name, ms)| format!("{name} {ms:.1}"))
                     .collect();
+                let start = Instant::now();
+                fusion.add(&d.points);
+                let fused = start.elapsed().as_secs_f64() * 1000.0;
+                let rms = fusion
+                    .last_rms
+                    .map_or_else(String::new, |r| format!(", ICP residual {:.1} µm", r * 1e6));
                 println!(
-                    "{pair}: {} points in {total:.1} ms ({} ms)",
+                    "{pair}: {} points in {total:.1} ms ({} ms), fused in {fused:.1} ms into {} points{rms}",
                     d.points.len(),
-                    stages.join(", ")
+                    stages.join(", "),
+                    fusion.model().len()
                 );
                 ok &= !d.points.is_empty();
-                last = Some(d);
             }
             Err(e) => {
                 println!("{pair}: depth failed: {e}");
@@ -195,9 +204,13 @@ fn headless_depth(args: &[String]) -> ExitCode {
             }
         }
     }
-    if let (Some(path), Some(d)) = (&out, last) {
-        match depth::write_ply(path, &d.points) {
-            Ok(()) => println!("{} points written to {}", d.points.len(), path.display()),
+    if let Some(path) = &out {
+        match depth::write_ply(path, fusion.model()) {
+            Ok(()) => println!(
+                "{} fused points written to {}",
+                fusion.model().len(),
+                path.display()
+            ),
             Err(e) => {
                 eprintln!("{}: {e}", path.display());
                 return ExitCode::FAILURE;
