@@ -491,3 +491,21 @@ drops.
 NumPy takes about twice as long, since every sample runs two Gauss-Newton passes. Both
 paths read this ball bar 18 to 27 µm long in single views, and affine windows alone read
 it 12 to 16 µm short. The source of that bias is open.
+
+## D33. Direct matching on the GPU (2026-11-02)
+
+The refinement kernel runs both stages of D32. Each stage sets its window shape, affine
+or second order, its move limit and an optional correlation gate. The gate is computed
+by all lanes of a sample's workgroup on its final window. Each stage starts from the
+right point of the stage before, with an identity shape, as `direct_refine` does.
+
+`slscan stereo-vectors` adds the coarse samples with their direct refinement, and
+`sls-scan refine-check` runs both stages on them. On the sphere, ball bar and plate
+vectors, kept flags agree on every sample and refined points differ by at most
+0.00012 px. A Radeon RX 7900 GRE takes the 6334 plate samples through both stages in
+260 ms with upload and readback.
+
+The kernel abandons a sample whose iterate strays 32 px from its start. Second-order
+iterates started with an identity shape pass 2 px on the way to some matches that NumPy
+keeps, so this guard sits well above any move limit. Coarse disparity and sample
+selection remain on the CPU.
