@@ -180,7 +180,8 @@ parameters, its affine matches, its coarse samples and their NumPy refinements.
 given that directory, compare the kernels with them.
 
 `app/src/depth.rs` chains the kernels into a depth frame from a raw pair, and `sls-scan
-depth-check` compares its points with the NumPy reference (D36).
+depth-check` compares its points with the NumPy reference (D36). The kernels share one
+device, and the rectified pair stays on it through block matching and refinement (D37).
 
 ## Application
 
