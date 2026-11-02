@@ -253,3 +253,11 @@ def true_calibration(rig: Rig, spec: calibrate.BoardSpec) -> calibrate.Calibrati
         return calibrate.Intrinsics(p.width, p.height, p.matrix.copy(), np.zeros(5), 0.0)
     return calibrate.Calibration(spec, intrinsics(rig.camera), intrinsics(rig.projector),
                                  calibrate.Stereo(rig.rotation.copy(), rig.translation.copy(), 0.0), 0)
+
+
+def acceptance_scenes() -> dict:
+    """Return the virtual bench scenes: a flat plate, a sphere and a ball bar."""
+    return {"plate": [Plate(np.array([0.0, 0.0, 1.0]), rotation(10, -15), 0.25, 0.25)],
+            "sphere": [Ball(np.array([0.02, -0.01, 1.0]), 0.05)],
+            "ball-bar": [Ball(np.array([-0.15, 0.02, 1.0]), 0.025),
+                         Ball(np.array([0.15, -0.02, 1.02]), 0.025)]}

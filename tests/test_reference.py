@@ -15,7 +15,7 @@ def scan(rig, cal, scene, seed=0):
 
 
 def plate():
-    return synthetic.Plate(np.array([0.0, 0.0, 1.0]), synthetic.rotation(10, -15), 0.25, 0.25)
+    return synthetic.acceptance_scenes()["plate"][0]
 
 
 def test_unwrap_with_columns_tolerates_gray_code_error():
@@ -50,7 +50,7 @@ def test_flat_plate_acceptance(rig, calibration):
 
 
 def test_sphere_probing(rig, calibration):
-    ball = synthetic.Ball(np.array([0.02, -0.01, 1.0]), 0.05)
+    ball = synthetic.acceptance_scenes()["sphere"][0]
     points, *_ = scan(rig, calibration, [ball])
     _, radius, rms = geometry.fit_sphere(points)
     assert abs(radius - ball.radius) < 0.0001
@@ -58,11 +58,10 @@ def test_sphere_probing(rig, calibration):
 
 
 def test_ball_bar_spacing(rig, calibration):
-    balls = [synthetic.Ball(np.array([-0.15, 0.02, 1.0]), 0.025),
-             synthetic.Ball(np.array([0.15, -0.02, 1.02]), 0.025)]
+    balls = synthetic.acceptance_scenes()["ball-bar"]
     points, *_ = scan(rig, calibration, balls)
-    nearest = np.argmin([np.linalg.norm(points - b.centre, axis=1) for b in balls], axis=0)
-    centres = [geometry.fit_sphere(points[nearest == i])[0] for i in range(2)]
+    labels = geometry.split_two(points)
+    centres = [geometry.fit_sphere(points[labels == i])[0] for i in range(2)]
     true = np.linalg.norm(balls[0].centre - balls[1].centre)
     assert abs(np.linalg.norm(centres[0] - centres[1]) - true) < 0.0002
 
