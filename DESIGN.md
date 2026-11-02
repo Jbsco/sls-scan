@@ -639,3 +639,24 @@ plate figures of D34 are unchanged within 0.1 µm. On a Radeon RX 7900 GRE the c
 pass stays at about 5 ms. The pass is for the CPU fallback, where block disparity took
 0.7 to 1.7 s of a depth frame on the hosted runners, and the application gate's log
 shows its effect there.
+
+## D40. Live depth frames in the application (2026-11-02)
+
+A stereo run in the application sends each frame pair through the depth frame of D36 on
+a worker thread that owns the device. Pairs that arrive while a frame is in flight are
+skipped and counted, so the preview follows the capture at the GPU's rate instead of
+queueing behind it. The scene panel draws the latest frame's points from the front,
+shaded by depth, with the point count, depth range and the frames run and skipped. The
+preview panel shows each frame's point count and stage times.
+
+`slscan depth-params` writes one JSON file with everything the depth frame takes for a
+calibration: image size, matching settings, the block matching search and settings,
+depth bounds and sampling, and both cameras' rectification. The application loads it
+from its configuration panel. `sls-scan depth` runs the same path without the window
+and writes the last frame's points as PLY, and the application gate runs it on two
+frames from the stand-in node.
+
+On a Radeon RX 7900 GRE the stand-in's sweep frames, a mat with a ball bar and a
+sphere, give about 16,000 points in 108 to 152 ms each, with refinement at 97 to 135 ms
+of it. Point count sets the frame time, so a sparser sample grid in the parameters
+trades density for rate.
