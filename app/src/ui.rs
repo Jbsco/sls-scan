@@ -2,9 +2,10 @@
 
 use crate::calibration::{self, Board, Detection, Solve, Tool};
 use crate::client::{self, Event, Stats};
+use crate::depth::{DepthFrame, DepthResult, DepthSetup};
 use crate::protocol::{FrameHeader, Hello, Projector, SequenceRequest};
 use eframe::egui;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::Duration;
@@ -13,6 +14,13 @@ enum CalibrationEvent {
     Pose(String, Result<Detection, String>, Projector),
     Failed(String),
     Solved(Result<Solve, String>),
+}
+
+struct DepthWorker {
+    params_path: String,
+    pairs: mpsc::Sender<(Vec<u8>, Vec<u8>)>,
+    results: Receiver<Result<DepthResult, String>>,
+    in_flight: usize,
 }
 
 pub struct ScanApp {
@@ -34,6 +42,14 @@ pub struct ScanApp {
     last: Option<(String, FrameHeader)>,
     frames: usize,
     stats: Option<Stats>,
+    params_path: String,
+    stereo_frames: u32,
+    depth: Option<DepthWorker>,
+    pending_left: Option<Vec<u8>>,
+    cloud: Vec<[f64; 3]>,
+    depth_status: String,
+    depth_frames: usize,
+    depth_skipped: usize,
 }
 
 impl Default for ScanApp {
@@ -57,19 +73,69 @@ impl Default for ScanApp {
             last: None,
             frames: 0,
             stats: None,
+            params_path: "data/depth.json".to_owned(),
+            stereo_frames: 30,
+            depth: None,
+            pending_left: None,
+            cloud: Vec::new(),
+            depth_status: String::new(),
+            depth_frames: 0,
+            depth_skipped: 0,
         }
     }
 }
 
 impl ScanApp {
+    /// Load the depth parameters and start a worker that owns the device and runs one
+    /// depth frame per pair it is sent.
+    fn start_depth(&mut self, ctx: &egui::Context) -> Result<(), String> {
+        let setup = DepthSetup::load(Path::new(&self.params_path))?;
+        let frame = DepthFrame::new(false)?;
+        let adapter = frame.adapter.clone();
+        let params = setup.params();
+        let (pairs_tx, pairs_rx) = mpsc::channel::<(Vec<u8>, Vec<u8>)>();
+        let (results_tx, results_rx) = mpsc::channel();
+        let repaint = ctx.clone();
+        thread::spawn(move || {
+            for (left, right) in pairs_rx {
+                let cameras = (&setup.cameras.left, &setup.cameras.right);
+                let _ = results_tx.send(frame.depth(&params, cameras, &left, &right));
+                repaint.request_repaint();
+            }
+        });
+        self.depth = Some(DepthWorker {
+            params_path: self.params_path.clone(),
+            pairs: pairs_tx,
+            results: results_rx,
+            in_flight: 0,
+        });
+        self.depth_status = format!("depth frames on {adapter}");
+        Ok(())
+    }
+
     fn start(&mut self, ctx: &egui::Context) {
+        let stereo = self.set == "stereo";
+        if stereo
+            && self
+                .depth
+                .as_ref()
+                .is_none_or(|w| w.params_path != self.params_path)
+        {
+            if let Err(e) = self.start_depth(ctx) {
+                self.depth = None;
+                self.depth_status = format!("no depth frames: {e}");
+            }
+        }
+        self.pending_left = None;
+        self.depth_frames = 0;
+        self.depth_skipped = 0;
         let (tx, rx) = mpsc::channel();
         let node = self.node.clone();
         let request = SequenceRequest {
             set: self.set.clone(),
             pitch: self.pitch,
             steps: self.steps,
-            frames: 1,
+            frames: if stereo { self.stereo_frames } else { 1 },
         };
         let repaint = ctx.clone();
         thread::spawn(move || {
@@ -254,8 +320,54 @@ impl ScanApp {
         }
     }
 
+    /// Keep a left frame until its right arrives, then send the pair to the worker when it
+    /// is idle, or count the pair as skipped.
+    fn pair_frame(&mut self, name: &str, pixels: Vec<u8>) {
+        if name.ends_with("/left") {
+            self.pending_left = Some(pixels);
+            return;
+        }
+        let (Some(left), Some(worker)) = (self.pending_left.take(), self.depth.as_mut()) else {
+            return;
+        };
+        if worker.in_flight == 0 && worker.pairs.send((left, pixels)).is_ok() {
+            worker.in_flight += 1;
+        } else {
+            self.depth_skipped += 1;
+        }
+    }
+
+    fn poll_depth(&mut self) {
+        let Some(worker) = self.depth.as_mut() else {
+            return;
+        };
+        while let Ok(result) = worker.results.try_recv() {
+            worker.in_flight = worker.in_flight.saturating_sub(1);
+            match result {
+                Ok(d) => {
+                    let total: f64 = d.timings.iter().map(|(_, ms)| ms).sum();
+                    let stages: Vec<String> = d
+                        .timings
+                        .iter()
+                        .map(|(name, ms)| format!("{name} {ms:.0}"))
+                        .collect();
+                    self.depth_status = format!(
+                        "{} points in {total:.0} ms ({} ms)",
+                        d.points.len(),
+                        stages.join(", ")
+                    );
+                    self.cloud = d.points;
+                    self.depth_frames += 1;
+                }
+                Err(e) => self.depth_status = format!("depth frame failed: {e}"),
+            }
+        }
+    }
+
     fn poll(&mut self, ctx: &egui::Context) {
-        let Some(events) = &self.events else { return };
+        let Some(events) = self.events.take() else {
+            return;
+        };
         let mut done = false;
         while let Ok(event) = events.try_recv() {
             match event {
@@ -278,6 +390,9 @@ impl ScanApp {
                         }
                     }
                     self.frames += 1;
+                    if self.set == "stereo" {
+                        self.pair_frame(&name, pixels);
+                    }
                     self.last = Some((name, header));
                 }
                 Event::Finished(stats) => {
@@ -291,8 +406,8 @@ impl ScanApp {
                 }
             }
         }
-        if done {
-            self.events = None;
+        if !done {
+            self.events = Some(events);
         }
     }
 
@@ -303,6 +418,16 @@ impl ScanApp {
         ui.label("Pattern set");
         ui.radio_value(&mut self.set, "scan".to_owned(), "Scan");
         ui.radio_value(&mut self.set, "calibration".to_owned(), "Calibration");
+        ui.radio_value(&mut self.set, "stereo".to_owned(), "Stereo");
+        if self.set == "stereo" {
+            ui.add(
+                egui::DragValue::new(&mut self.stereo_frames)
+                    .range(1..=1000)
+                    .prefix("frames "),
+            );
+            ui.label("Depth parameters");
+            ui.text_edit_singleline(&mut self.params_path);
+        }
         ui.add(
             egui::DragValue::new(&mut self.pitch)
                 .range(4..=128)
@@ -359,14 +484,46 @@ impl ScanApp {
                 stats.missing, stats.in_order
             ));
         }
+        if !self.depth_status.is_empty() {
+            ui.label(&self.depth_status);
+        }
         if let Some(texture) = &self.preview {
             ui.add(egui::Image::new(texture).shrink_to_fit());
         }
     }
 
-    fn scene(ui: &mut egui::Ui) {
+    /// Draw the latest depth frame's points from the front, shaded by depth.
+    fn scene(&self, ui: &mut egui::Ui) {
         ui.heading("Scene");
-        ui.label("No point cloud loaded.");
+        if self.cloud.is_empty() {
+            ui.label("No depth frame yet.");
+            return;
+        }
+        let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+        for p in &self.cloud {
+            for (i, v) in p.iter().enumerate() {
+                lo[i] = lo[i].min(*v);
+                hi[i] = hi[i].max(*v);
+            }
+        }
+        ui.label(format!(
+            "{} points, depth {:.3} to {:.3} m, {} frames, {} skipped",
+            self.cloud.len(),
+            lo[2],
+            hi[2],
+            self.depth_frames,
+            self.depth_skipped
+        ));
+        let (response, painter) = ui.allocate_painter(ui.available_size(), egui::Sense::hover());
+        let rect = response.rect.shrink(4.0);
+        let span = [0, 1, 2].map(|i| (hi[i] - lo[i]).max(1e-9));
+        let scale = (f64::from(rect.width()) / span[0]).min(f64::from(rect.height()) / span[1]);
+        for p in &self.cloud {
+            let x = rect.left() + ((p[0] - lo[0]) * scale) as f32;
+            let y = rect.top() + ((p[1] - lo[1]) * scale) as f32;
+            let shade = (255.0 - 160.0 * (p[2] - lo[2]) / span[2]) as u8;
+            painter.circle_filled(egui::pos2(x, y), 1.5, egui::Color32::from_gray(shade));
+        }
     }
 }
 
@@ -375,6 +532,7 @@ impl eframe::App for ScanApp {
         let ctx = ui.ctx().clone();
         self.poll(&ctx);
         self.poll_calibration();
+        self.poll_depth();
         egui::Panel::left("configuration")
             .default_size(300.0)
             .show_inside(ui, |ui| {
@@ -382,7 +540,7 @@ impl eframe::App for ScanApp {
             });
         egui::Panel::right("scene")
             .default_size(240.0)
-            .show_inside(ui, Self::scene);
+            .show_inside(ui, |ui| self.scene(ui));
         egui::CentralPanel::default().show_inside(ui, |ui| self.preview(ui));
     }
 }
