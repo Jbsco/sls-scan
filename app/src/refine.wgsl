@@ -189,7 +189,7 @@ fn solve(u0: f32, v0: f32) -> u32 {
     for (var c = 0u; c < N; c++) {
         shared_q[c] += r[c] * scaling[c];
     }
-    if (!(abs(shared_q[0] - u0) < 4.0 && abs(shared_q[6] - v0) < 4.0)) {
+    if (!(abs(shared_q[0] - u0) < 32.0 && abs(shared_q[6] - v0) < 32.0)) {
         return 2u;
     }
     if (max(abs(r[0] * scaling[0]), abs(r[6] * scaling[6])) < 1e-5) {
