@@ -59,3 +59,10 @@ def test_unknown_pattern_set_returns_error(stand_in):
         kind, payload = node.receive(sock)
         assert kind == node.ERROR and "none" in json.loads(payload)["message"]
 
+
+def test_capture_command_saves_a_scan(stand_in, tmp_path):
+    host, port = stand_in
+    out = str(tmp_path / "view")
+    assert cli.main(["capture", "--node", f"{host}:{port}", "--set", "scan", "--pitch", "16",
+                     "--out", out]) == 0
+    assert cli.read_scan(out)["phase"].shape[0] == 4
