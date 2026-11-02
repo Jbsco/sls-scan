@@ -425,20 +425,25 @@ def stereo_capture(rig: StereoRig, scene: list, pattern: np.ndarray, rng: np.ran
             "right": render(rig.right, rig.right_rotation, rig.right_translation)}
 
 
+def stereo_board_view(rig: StereoRig, spec: calibrate.BoardSpec, r: np.ndarray, t: np.ndarray,
+                      rng: np.random.Generator) -> dict:
+    """Render one board pose (board to world) in both cameras under room light."""
+    images = {}
+    for side, camera, r_cam, t_cam in (("left", rig.left, rig.left_rotation, rig.left_translation),
+                                       ("right", rig.right, rig.right_rotation,
+                                        rig.right_translation)):
+        v = view(Rig(camera, rig.light, np.eye(3), np.zeros(3)), spec, r_cam @ r, r_cam @ t + t_cam)
+        image = v.albedo * 200.0 + rng.standard_normal(v.albedo.shape).astype(np.float32)
+        images[side] = np.clip(np.rint(image), 0, 255).astype(np.uint8)
+    return images
+
+
 def stereo_calibration_views(rig: StereoRig, spec: calibrate.BoardSpec, seed: int = 0,
                              crossing_m: float = 0.5):
     """Yield each board pose of board_poses seen by both cameras under room light."""
     rng = np.random.default_rng(seed)
     for r, t in board_poses(spec, crossing_m):
-        images = {}
-        for side, camera, r_cam, t_cam in (("left", rig.left, rig.left_rotation, rig.left_translation),
-                                           ("right", rig.right, rig.right_rotation,
-                                            rig.right_translation)):
-            v = view(Rig(camera, rig.light, np.eye(3), np.zeros(3)), spec, r_cam @ r,
-                     r_cam @ t + t_cam)
-            image = v.albedo * 200.0 + rng.standard_normal(v.albedo.shape).astype(np.float32)
-            images[side] = np.clip(np.rint(image), 0, 255).astype(np.uint8)
-        yield images
+        yield stereo_board_view(rig, spec, r, t, rng)
 
 
 def stereo_scenes(crossing_m: float = 0.5) -> dict:
