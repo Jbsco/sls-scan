@@ -162,6 +162,80 @@ def calibrate(views, spec: BoardSpec, projector_size: tuple[int, int],
     return Calibration(spec, camera, projector, stereo, len(proj_obj))
 
 
+@dataclass
+class StereoCalibration:
+    """Two cameras: left and right intrinsics, and the left-to-right rotation and translation."""
+
+    board: BoardSpec
+    left: Intrinsics
+    right: Intrinsics
+    stereo: Stereo
+    views: int
+
+
+def calibrate_stereo(views, spec: BoardSpec, min_corners: int = 6) -> StereoCalibration:
+    """Calibrate two cameras and their extrinsics from views of the board.
+
+    Each view is a mapping with "left" and "right" images of the board. Each camera is
+    calibrated from every view in which it sees the board, and the pair from the corners
+    both cameras see in the same view.
+    """
+    sides = {"left": ([], [], None), "right": ([], [], None)}
+    pair_obj, pair_left, pair_right = [], [], []
+    for view in views:
+        found = {}
+        for side in ("left", "right"):
+            image = view[side]
+            ids, corners = detect_corners(image, spec)
+            objs, imgs, _ = sides[side]
+            sides[side] = (objs, imgs, (image.shape[1], image.shape[0]))
+            if len(ids) >= min_corners:
+                objs.append(object_points(spec, ids))
+                imgs.append(corners)
+                found[side] = dict(zip(ids.tolist(), corners))
+        if len(found) == 2:
+            common = sorted(set(found["left"]) & set(found["right"]))
+            if len(common) >= min_corners:
+                pair_obj.append(object_points(spec, np.array(common)))
+                pair_left.append(np.array([found["left"][i] for i in common]))
+                pair_right.append(np.array([found["right"][i] for i in common]))
+    if len(pair_obj) < 3:
+        raise ValueError("stereo calibration needs at least three views with the board seen by both cameras")
+    left = calibrate_intrinsics(sides["left"][0], sides["left"][1], sides["left"][2])
+    right = calibrate_intrinsics(sides["right"][0], sides["right"][1], sides["right"][2])
+    rms, _, _, _, _, rotation, translation, _, _ = cv2.stereoCalibrate(
+        [o.astype(np.float32) for o in pair_obj], [p.astype(np.float32) for p in pair_left],
+        [p.astype(np.float32) for p in pair_right], left.matrix, left.distortion,
+        right.matrix, right.distortion, sides["left"][2], flags=cv2.CALIB_FIX_INTRINSIC)
+    return StereoCalibration(spec, left, right, Stereo(rotation, translation.reshape(-1), float(rms)),
+                             len(pair_obj))
+
+
+def save_stereo(path: str, cal: StereoCalibration) -> None:
+    """Write a stereo calibration as YAML."""
+    data = {"board": asdict(cal.board), "left": _intrinsics_dict(cal.left),
+            "right": _intrinsics_dict(cal.right),
+            "stereo": {"rotation": cal.stereo.rotation.tolist(),
+                       "translation_m": cal.stereo.translation.tolist(),
+                       "rms_px": cal.stereo.rms_px},
+            "views": cal.views}
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, sort_keys=False)
+
+
+def load_stereo(path: str) -> StereoCalibration:
+    """Read a stereo calibration written by save_stereo."""
+    with open(path, encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    stereo = data["stereo"]
+    return StereoCalibration(BoardSpec(**data["board"]), _intrinsics(data["left"]),
+                             _intrinsics(data["right"]),
+                             Stereo(np.array(stereo["rotation"], dtype=np.float64),
+                                    np.array(stereo["translation_m"], dtype=np.float64),
+                                    float(stereo["rms_px"])),
+                             int(data["views"]))
+
+
 def _intrinsics_dict(i: Intrinsics) -> dict:
     return {"width": i.width, "height": i.height, "matrix": i.matrix.tolist(),
             "distortion": i.distortion.tolist(), "rms_px": i.rms_px}
