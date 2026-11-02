@@ -253,3 +253,6 @@ own, so the application connects to it as it will to the Pi. `node.do` runs a vi
 bench through that container over the capture protocol, and a Node workflow runs it on
 every push and pull request. `verify.do` leaves it out, because it needs Docker and
 adds an image build to every local run.
+
+Amended 2026-11-01: the ruleset on `main` requires the node check, with style and test.
+
