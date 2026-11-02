@@ -297,6 +297,8 @@ def cmd_stereo_vectors(args: argparse.Namespace) -> int:
                                                 args.iterations)
     _, _, _, block_points, block_guesses = stereo.coarse_samples(
         cal, images["left"], images["right"], 0.4, 0.6, args.step, args.window, coarse="block")
+    small, lo, count = stereo.block_disparity_small(rl, rr, stereo.disparity_at(rect, 0.6),
+                                                    stereo.disparity_at(rect, 0.4))
     direct, direct_kept = stereo.direct_refine(rl, rr, block_points, block_guesses, args.window)
     os.makedirs(args.out, exist_ok=True)
     images["left"].tofile(os.path.join(args.out, "left-raw.bin"))
@@ -314,10 +316,14 @@ def cmd_stereo_vectors(args: argparse.Namespace) -> int:
     start.astype("<f4").tofile(os.path.join(args.out, "direct-samples.bin"))
     direct.astype("<f4").tofile(os.path.join(args.out, "direct-refined.bin"))
     direct_kept.astype(np.uint8).tofile(os.path.join(args.out, "direct-kept.bin"))
+    small.astype("<f4").tofile(os.path.join(args.out, "coarse.bin"))
     meta = {"width": int(rl.shape[1]), "height": int(rl.shape[0]), "window": args.window,
             "iterations": args.iterations, "samples": int(len(left_pts)),
             "direct_samples": int(len(block_points)), "max_move": 3.0,
-            "min_correlation": 0.95}
+            "min_correlation": 0.95,
+            "coarse": {"width": int(small.shape[1]), "height": int(small.shape[0]), "scale": 4,
+                       "block": 7, "lo": lo, "count": count, "min_correlation": 0.6,
+                       "margin": 0.05, "fill": 2}}
     with open(os.path.join(args.out, "meta.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f)
     print(f"stereo vectors of the {args.scene} scene written to {args.out}: {len(left_pts)} "

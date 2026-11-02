@@ -144,3 +144,5 @@ def test_stereo_vectors_command_writes_consistent_files(tmp_path):
     assert (out / "direct-samples.bin").stat().st_size == 32 * direct
     assert (out / "direct-refined.bin").stat().st_size == 8 * direct
     assert (out / "direct-kept.bin").stat().st_size == direct
+    coarse = meta["coarse"]
+    assert (out / "coarse.bin").stat().st_size == 4 * coarse["width"] * coarse["height"]

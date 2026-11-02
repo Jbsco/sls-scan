@@ -535,3 +535,20 @@ ball bar sphere without valid disparity, and it seems likely that fits on those 
 caps read the spacing long. NumPy takes 203 ms for block matching of a view and OpenCV
 4 ms for semi-global matching, so the affine path of `slscan scan-stereo` keeps
 semi-global matching.
+
+## D35. Block disparity on the GPU (2026-11-02)
+
+The block matching of D34 runs as four WGSL entry points (`app/src/coarse.wgsl`). One
+pass averages 4 × 4 pixels of both rectified images and rounds half to even, as OpenCV's
+area resize does for 8-bit images. One invocation per reduced pixel and disparity fills a
+correlation volume, with box sums over borders reflected as `cv2.boxFilter` reflects
+them. One pass per reduced pixel picks the disparity and applies the three checks. Two
+fill passes alternate between a pair of buffers.
+
+`sls-scan coarse-check` compares the kernel's reduced map with `block_disparity_small`
+in the stereo vectors. On the sphere, plate and ball bar views, validity agrees on every
+reduced pixel and disparities agree within 0.0001 reduced pixels. It seems likely that
+box sums of whole grey levels, exact in single precision, keep the two in step. A Radeon
+RX 7900 GRE matches 364 × 272 reduced pixels over 189 disparities in about 4.5 ms with
+upload and readback, where NumPy takes 203 ms (D34). Sample selection and triangulation
+are the CPU steps left in a depth frame.
