@@ -31,11 +31,12 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   (D20) and calibration from the panel (D21).
   Acceptance: pattern frames captured in order at the projector rate with no drops over
   a minute, and a calibration run end to end from the panel.
-- Phase 4, open. GPU decode and preview. WGSL kernels for phase decode, unwrapping,
+- Phase 4, in progress. GPU decode and preview. WGSL kernels for phase decode, unwrapping,
   triangulation and the coarse TSDF, the live point cloud and volume in the scene,
   the CPU fallback through lavapipe. Acceptance: 15 depth frames per second at 1 MP
   on either machine's GPU, 3 or more on the CPU fallback, and kernel outputs within
-  tolerance of the Phase 2 reference on recorded frames.
+  tolerance of the Phase 2 reference on recorded frames. The decode kernel is in place
+  and matches the reference (D22).
 - Phase 5, open. Many views and markers. Coded target detection in the application,
   view poses from the targets, ICP refinement, keyed targets defining the object's
   frame, a merged cloud. Acceptance: two scale bars in different orientations measure
