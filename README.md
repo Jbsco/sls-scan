@@ -124,7 +124,7 @@ acceptance tests: a flat plate, a sphere and the scale bars.
 | `docs/hardware.md` | Bill of materials, rig geometry and build notes |
 | `docs/accuracy.md` | Error model and acceptance tests |
 | `docs/pipeline.md` | Each stage with its inputs, outputs and file formats |
-| `tools/` | Markdown rendering check |
+| `tools/` | Markdown rendering check, prose check |
 | `style.do`, `test.do`, `verify.do` | The gates, runnable with `bash` or `redo` |
 | `DESIGN.md` | Numbered design decisions with their reasons |
 | `ROADMAP.md` | Phases with acceptance criteria, and open questions |
@@ -138,7 +138,7 @@ Rust toolchain and a Vulkan driver (or Mesa's lavapipe for the CPU path).
     python3 -m venv .venv && . .venv/bin/activate
     pip install -e '.[dev]'
     bash test.do                              # the pytest suite
-    bash style.do                             # markdown and sanitization
+    bash style.do                             # markdown, sanitization and prose
     bash verify.do                            # every gate, cheapest first
 
 A change is finished when `verify.do` is green, and CI runs the same gates on every push
