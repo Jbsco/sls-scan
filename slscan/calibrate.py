@@ -271,6 +271,19 @@ def load(path: str) -> Calibration:
                        int(data["views"]))
 
 
+def compare_stereo(a: "StereoCalibration", b: "StereoCalibration") -> dict:
+    """Return relative focal length changes of both cameras and the baseline change in
+    metres from a to b."""
+    def rel(x, y):
+        return abs(y - x) / abs(x)
+    return {"left_fx": rel(a.left.matrix[0, 0], b.left.matrix[0, 0]),
+            "left_fy": rel(a.left.matrix[1, 1], b.left.matrix[1, 1]),
+            "right_fx": rel(a.right.matrix[0, 0], b.right.matrix[0, 0]),
+            "right_fy": rel(a.right.matrix[1, 1], b.right.matrix[1, 1]),
+            "baseline_m": abs(float(np.linalg.norm(b.stereo.translation))
+                              - float(np.linalg.norm(a.stereo.translation)))}
+
+
 def compare(a: Calibration, b: Calibration) -> dict:
     """Return relative focal length changes and the baseline change in metres from a to b."""
     def rel(x, y):

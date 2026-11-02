@@ -537,10 +537,23 @@ def cmd_detect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _is_stereo(path: str) -> bool:
+    import yaml
+
+    with open(path, encoding="utf-8") as f:
+        return "left" in yaml.safe_load(f)
+
+
 def cmd_calibration_diff(args: argparse.Namespace) -> int:
-    d = calibrate.compare(calibrate.load(args.first), calibrate.load(args.second))
+    if _is_stereo(args.first):
+        d = calibrate.compare_stereo(calibrate.load_stereo(args.first),
+                                     calibrate.load_stereo(args.second))
+        keys = ("left_fx", "left_fy", "right_fx", "right_fy")
+    else:
+        d = calibrate.compare(calibrate.load(args.first), calibrate.load(args.second))
+        keys = ("camera_fx", "camera_fy", "projector_fx", "projector_fy")
     ok = True
-    for key in ("camera_fx", "camera_fy", "projector_fx", "projector_fy"):
+    for key in keys:
         within = d[key] <= args.focal_limit
         ok &= within
         print(f"{key} change {100.0 * d[key]:.3f} % (limit {100.0 * args.focal_limit:.3f} %)")
