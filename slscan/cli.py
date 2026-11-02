@@ -353,6 +353,10 @@ def cmd_depth_params(args: argparse.Namespace) -> int:
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(params, f)
     coarse = params["coarse"]
+    if args.json:
+        print(json.dumps({"out": args.out, "width": params["width"], "height": params["height"],
+                          "lo": coarse["lo"], "count": coarse["count"]}))
+        return 0
     print(f"depth parameters written to {args.out}: {params['width']} x {params['height']}, "
           f"reduced disparities {coarse['lo']} to {coarse['lo'] + coarse['count'] - 1}")
     return 0
@@ -661,6 +665,7 @@ def main(argv=None) -> int:
     p.add_argument("--step", type=int, default=8, help="sample spacing in pixels")
     p.add_argument("--window", type=int, default=25, help="matching window in pixels")
     p.add_argument("--out", default="data/depth.json")
+    p.add_argument("--json", action="store_true", help="print the result as one JSON object")
     p.set_defaults(func=cmd_depth_params)
 
     p = sub.add_parser("stereo-vectors",

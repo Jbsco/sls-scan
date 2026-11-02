@@ -162,6 +162,8 @@ def test_depth_params_command_matches_block_matching_search(tmp_path):
     lo, count = stereo.search_range(stereo.disparity_at(rect, 0.6), stereo.disparity_at(rect, 0.4))
     assert (params["coarse"]["lo"], params["coarse"]["count"]) == (lo, count)
     assert (params["width"], params["height"]) == (cal.left.width, cal.left.height)
+    assert cli.main(["depth-params", "--head", "stereo", "--out", str(out), "--json"]) == 0
+
 
 def test_detect_command_reads_a_named_image(tmp_path, capsys):
     head = synthetic.stereo_head()
