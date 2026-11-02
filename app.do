@@ -1,7 +1,8 @@
 #!/bin/bash
 # Application gate: formatting, lints and tests of the Rust application, its capture
 # client against the stand-in node over the capture protocol, and its GPU decode, stereo
-# rectification, coarse disparity and refinement against the NumPy and OpenCV references.
+# rectification, coarse disparity, refinement and depth frames against the NumPy and
+# OpenCV references.
 exec >&2
 if ! command -v cargo >/dev/null 2>&1; then
     echo "app: cargo not found - skipped"
@@ -28,6 +29,7 @@ python3 -m slscan.cli stereo-vectors --out "$SESSION/stereo" >/dev/null
 $RUN rectify-check "$SESSION/stereo"
 $RUN coarse-check "$SESSION/stereo"
 $RUN refine-check "$SESSION/stereo"
+$RUN depth-check "$SESSION/stereo"
 echo "app: all checks clean"
 [ -n "${3:-}" ] && touch "$3"
 exit 0
