@@ -1,0 +1,56 @@
+import os
+
+import cv2
+import numpy as np
+
+from slscan import calibrate, cli, patterns
+
+
+def test_calibration_patterns_command_writes_both_axes(tmp_path):
+    out = str(tmp_path / "patterns")
+    assert cli.main(["calibration-patterns", "--width", "64", "--height", "16", "--out", out]) == 0
+    names = sorted(os.listdir(out))
+    assert "white.png" in names
+    assert sum(n.startswith("columns_") for n in names) == 2 * patterns.bit_planes(64)
+    assert sum(n.startswith("rows_") for n in names) == 2 * patterns.bit_planes(16)
+    row = cv2.imread(os.path.join(out, "rows_000.png"), cv2.IMREAD_GRAYSCALE)
+    assert row.shape == (16, 64) and row[0, 0] == 0 and row[15, 0] == 255
+
+
+def test_board_command_writes_detectable_board(tmp_path):
+    out = str(tmp_path / "board.png")
+    args = ["board", "--squares-x", "5", "--squares-y", "4", "--square-mm", "20",
+            "--marker-mm", "15", "--dpi", "200", "--out", out]
+    assert cli.main(args) == 0
+    ids, _ = calibrate.detect_corners(cv2.imread(out, cv2.IMREAD_GRAYSCALE),
+                                      calibrate.BoardSpec(5, 4, 0.02, 0.015))
+    assert len(ids) == 4 * 3
+
+
+def test_read_views_orders_pose_files(tmp_path):
+    for pose in ("pose_001", "pose_000"):
+        d = tmp_path / pose
+        d.mkdir()
+        cv2.imwrite(str(d / "white.png"), np.full((4, 4), 200, dtype=np.uint8))
+        for axis in ("columns", "rows"):
+            for i in range(4):
+                cv2.imwrite(str(d / f"{axis}_{i:03d}.png"), np.full((4, 4), i, dtype=np.uint8))
+    views = list(cli.read_views(str(tmp_path)))
+    assert len(views) == 2
+    assert views[0]["columns"].shape == (4, 4, 4)
+    assert [int(v[0, 0]) for v in views[1]["rows"]] == [0, 1, 2, 3]
+
+
+def test_calibration_diff_command_flags_focal_change(tmp_path):
+    k = np.array([[1500.0, 0, 640], [0, 1500.0, 480], [0, 0, 1]])
+    intr = calibrate.Intrinsics(1280, 960, k, np.zeros(5), 0.1)
+    stereo = calibrate.Stereo(np.eye(3), np.array([-0.35, 0.0, 0.0]), 0.1)
+    first = calibrate.Calibration(calibrate.BoardSpec(), intr, intr, stereo, 12)
+    calibrate.save(str(tmp_path / "a.yaml"), first)
+    k2 = k.copy()
+    k2[0, 0] *= 1.002
+    second = calibrate.Calibration(calibrate.BoardSpec(), calibrate.Intrinsics(1280, 960, k2, np.zeros(5), 0.1),
+                                   intr, stereo, 12)
+    calibrate.save(str(tmp_path / "b.yaml"), second)
+    assert cli.main(["calibration-diff", str(tmp_path / "a.yaml"), str(tmp_path / "a.yaml")]) == 0
+    assert cli.main(["calibration-diff", str(tmp_path / "a.yaml"), str(tmp_path / "b.yaml")]) == 1
