@@ -286,12 +286,21 @@ def direct_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
     refined right points (N, 2) and a kept flag (N,)."""
     rect, rl, rr, points, guesses = coarse_samples(cal, left, right, near_m, far_m, step,
                                                    window, min_level)
+    refined, kept = direct_refine(rl, rr, points, guesses, window, max_move, min_correlation)
+    return rect, rl, rr, points, refined, kept
+
+
+def direct_refine(left: np.ndarray, right: np.ndarray, points: np.ndarray,
+                  guesses: np.ndarray, window: int = 25, max_move: float = 3.0,
+                  min_correlation: float = 0.95) -> tuple[np.ndarray, np.ndarray]:
+    """Refine rectified matches from their coarse guesses in the two stages of
+    direct_matches. Returns the refined right points (N, 2) and a kept flag (N,)."""
     start = np.repeat(np.eye(2)[None], len(points), axis=0)
-    affine, affine_kept = second_order_matches(rl, rr, points, guesses, start, window,
+    affine, affine_kept = second_order_matches(left, right, points, guesses, start, window,
                                                max_move=max_move,
                                                min_correlation=min_correlation, terms=3)
-    refined, kept = second_order_matches(rl, rr, points, affine, start, window)
-    return rect, rl, rr, points, refined, kept & affine_kept
+    refined, kept = second_order_matches(left, right, points, affine, start, window)
+    return refined, kept & affine_kept
 
 
 def triangulate(rect: Rectification, left_pts: np.ndarray, right_pts: np.ndarray,
