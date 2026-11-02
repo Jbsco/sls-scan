@@ -150,6 +150,14 @@ fn upper(c: u32, d: u32) -> u32 {
     return c * N - (c * (c + 1u)) / 2u + d;
 }
 
+fn outer(a: vec3<f32>, b: vec3<f32>) -> mat3x3<f32> {
+    return mat3x3<f32>(a * b.x, a * b.y, a * b.z);
+}
+
+fn store(row: u32, c: u32, d: u32, v: f32) {
+    acc[row + upper(c, d)] = v;
+}
+
 fn reduce(lane: u32, count: u32) {
     workgroupBarrier();
     for (var c = lane; c < count; c += LANES) {
@@ -282,37 +290,111 @@ fn refine(@builtin(workgroup_id) group: vec3<u32>,
         for (var c = 0u; c < N; c++) {
             q[c] = shared_q[c];
         }
-        for (var c = 0u; c < SUMS; c++) {
-            acc[lane * STRIDE + c] = 0.0;
-        }
+        var xx11 = mat3x3<f32>();
+        var xx12 = mat3x3<f32>();
+        var xx22 = mat3x3<f32>();
+        var xy11 = mat3x3<f32>();
+        var xy12 = mat3x3<f32>();
+        var xy21 = mat3x3<f32>();
+        var xy22 = mat3x3<f32>();
+        var yy11 = mat3x3<f32>();
+        var yy12 = mat3x3<f32>();
+        var yy22 = mat3x3<f32>();
+        var xg1 = vec3<f32>();
+        var xg2 = vec3<f32>();
+        var x11 = vec3<f32>();
+        var x12 = vec3<f32>();
+        var yg1 = vec3<f32>();
+        var yg2 = vec3<f32>();
+        var y11 = vec3<f32>();
+        var y12 = vec3<f32>();
+        var rx1 = vec3<f32>();
+        var rx2 = vec3<f32>();
+        var ry1 = vec3<f32>();
+        var ry2 = vec3<f32>();
+        var gg = 0.0;
+        var g1 = 0.0;
+        var ones = 0.0;
+        var rg = 0.0;
+        var r1 = 0.0;
         for (var k = lane; k < pixels; k += LANES) {
             let i = i32(k % params.window) - hw;
             let j = i32(k / params.window) - hw;
             let shape = shape_at(k, hw, scale);
-            var u = 0.0;
-            var v = 0.0;
-            for (var c = 0u; c < 6u; c++) {
-                u += q[c] * shape[c];
-                v += q[6u + c] * shape[c];
-            }
+            let s1 = vec3<f32>(shape[0], shape[1], shape[2]);
+            let s2 = vec3<f32>(shape[3], shape[4], shape[5]);
+            let u = dot(vec3<f32>(q[0], q[1], q[2]), s1) + dot(vec3<f32>(q[3], q[4], q[5]), s2);
+            let v = dot(vec3<f32>(q[6], q[7], q[8]), s1) + dot(vec3<f32>(q[9], q[10], q[11]), s2);
             let g = right_cubic(lx + f32(i) + u, ly + f32(j) + v);
             let f = left_linear(lx + f32(i), ly + f32(j));
             let residual = f - (q[12] * g.x + q[13]);
-            var jac = array<f32, 14>();
-            for (var c = 0u; c < 6u; c++) {
-                jac[c] = q[12] * g.y * shape[c];
-                jac[6u + c] = q[12] * g.z * shape[c];
-            }
-            jac[12] = g.x;
-            jac[13] = 1.0;
-            let row = lane * STRIDE;
-            for (var c = 0u; c < N; c++) {
-                acc[row + RHS + c] += jac[c] * residual;
-                for (var d = c; d < N; d++) {
-                    acc[row + upper(c, d)] += jac[c] * jac[d];
-                }
-            }
+            let jx = q[12] * g.y;
+            let jy = q[12] * g.z;
+            let o11 = outer(s1, s1);
+            let o12 = outer(s1, s2);
+            let o22 = outer(s2, s2);
+            xx11 += (jx * jx) * o11;
+            xx12 += (jx * jx) * o12;
+            xx22 += (jx * jx) * o22;
+            xy11 += (jx * jy) * o11;
+            xy12 += (jx * jy) * o12;
+            xy21 += (jx * jy) * transpose(o12);
+            xy22 += (jx * jy) * o22;
+            yy11 += (jy * jy) * o11;
+            yy12 += (jy * jy) * o12;
+            yy22 += (jy * jy) * o22;
+            xg1 += (jx * g.x) * s1;
+            xg2 += (jx * g.x) * s2;
+            x11 += jx * s1;
+            x12 += jx * s2;
+            yg1 += (jy * g.x) * s1;
+            yg2 += (jy * g.x) * s2;
+            y11 += jy * s1;
+            y12 += jy * s2;
+            rx1 += (jx * residual) * s1;
+            rx2 += (jx * residual) * s2;
+            ry1 += (jy * residual) * s1;
+            ry2 += (jy * residual) * s2;
+            gg += g.x * g.x;
+            g1 += g.x;
+            ones += 1.0;
+            rg += g.x * residual;
+            r1 += residual;
         }
+        let row = lane * STRIDE;
+        for (var i = 0u; i < 3u; i++) {
+            for (var j = 0u; j < 3u; j++) {
+                if (i <= j) {
+                    store(row, i, j, xx11[j][i]);
+                    store(row, i + 3u, j + 3u, xx22[j][i]);
+                    store(row, i + 6u, j + 6u, yy11[j][i]);
+                    store(row, i + 9u, j + 9u, yy22[j][i]);
+                }
+                store(row, i, j + 3u, xx12[j][i]);
+                store(row, i + 6u, j + 9u, yy12[j][i]);
+                store(row, i, j + 6u, xy11[j][i]);
+                store(row, i, j + 9u, xy12[j][i]);
+                store(row, i + 3u, j + 6u, xy21[j][i]);
+                store(row, i + 3u, j + 9u, xy22[j][i]);
+            }
+            store(row, i, 12u, xg1[i]);
+            store(row, i + 3u, 12u, xg2[i]);
+            store(row, i, 13u, x11[i]);
+            store(row, i + 3u, 13u, x12[i]);
+            store(row, i + 6u, 12u, yg1[i]);
+            store(row, i + 9u, 12u, yg2[i]);
+            store(row, i + 6u, 13u, y11[i]);
+            store(row, i + 9u, 13u, y12[i]);
+            acc[row + RHS + i] = rx1[i];
+            acc[row + RHS + 3u + i] = rx2[i];
+            acc[row + RHS + 6u + i] = ry1[i];
+            acc[row + RHS + 9u + i] = ry2[i];
+        }
+        store(row, 12u, 12u, gg);
+        store(row, 12u, 13u, g1);
+        store(row, 13u, 13u, ones);
+        acc[row + RHS + 12u] = rg;
+        acc[row + RHS + 13u] = r1;
         reduce(lane, SUMS);
         solve(lane, u0, v0);
         if (workgroupUniformLoad(&state) != 0u) {
