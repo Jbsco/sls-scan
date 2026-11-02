@@ -746,3 +746,19 @@ which covers most of the field, and two passes of the pose table, 24 poses, for 
 near-range head. Those are the command's defaults, and the test suite runs them.
 Synthetic views, stand-in captures and the published accuracy figures still use the
 90 × 60 mm board, so their numbers stay comparable with earlier entries.
+
+## D45. One view at a metre on the virtual bench (2026-11-02)
+
+Phase 2 asks for a plate under 0.2 mm RMS over 0.5 m and a scale bar within 0.2 mm in
+one view. `slscan stereo-bench` checks both with the metre head of `docs/hardware.md`:
+6 mm lenses on a 0.35 m baseline crossing at 1 m, calibrated from twelve poses of the
+A2 board. It matches directly (D32, D34) with 21 px windows.
+
+A 0.5 m plate tilted 10° and 15° measures 0.041 mm RMS over 467 × 476 mm. A scale bar of two 50.8 mm spheres
+400 mm apart, sampled every 4 px, reads +0.022, +0.070 and +0.040 mm on three noise
+seeds.
+
+Smaller spheres miss the limit. Spheres of 38.1 mm are about 66 px across at 1 m, which
+leaves 45 to 74 samples clear of their edges, and they read 0.2 to 0.96 mm long with
+21 and 25 px windows. Affine windows of 15 px bring them to 0.09 to 0.13 mm. We chose
+spheres of 50 mm or more for the metre scale bars, which the hardware notes list.
