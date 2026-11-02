@@ -55,6 +55,12 @@ writes, under the same file name: `white.png`, `columns_000.png` onward and
 | `stereo` | rotation and translation in metres from camera frame to projector frame, reprojection error |
 | `views` | poses used |
 
+The application runs these steps from its configuration panel (`DESIGN.md` D21).
+Capture pose runs a calibration sequence on the node and writes the next `pose_NNN`
+directory of a session. `slscan detect` reports the corners found in it, and Solve runs
+`slscan calibrate --json` and shows each error against its limit. `sls-scan calibrate`
+does the same without a window.
+
 `slscan calibration-diff a.yaml b.yaml` compares two calibrations against the
 repeatability limits of Phases 1 and 8: focal length within 0.1 % and baseline within
 0.2 mm.
