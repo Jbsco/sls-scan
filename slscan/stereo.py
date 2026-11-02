@@ -275,6 +275,25 @@ def affine_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
     return rect, rl, rr, left_pts, right_pts, warps
 
 
+def direct_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
+                   near_m: float, far_m: float, step: int = 8, window: int = 25,
+                   min_level: float = 6.0, max_move: float = 3.0,
+                   min_correlation: float = 0.95):
+    """Match the samples of coarse_samples by Gauss-Newton alone, without Lucas-Kanade or
+    ECC: affine windows from the coarse disparity, kept when they move under max_move px
+    and correlate at min_correlation or better, then second-order windows from there.
+    Returns the rectification, both rectified images, the left points (N, 2), their
+    refined right points (N, 2) and a kept flag (N,)."""
+    rect, rl, rr, points, guesses = coarse_samples(cal, left, right, near_m, far_m, step,
+                                                   window, min_level)
+    start = np.repeat(np.eye(2)[None], len(points), axis=0)
+    affine, affine_kept = second_order_matches(rl, rr, points, guesses, start, window,
+                                               max_move=max_move,
+                                               min_correlation=min_correlation, terms=3)
+    refined, kept = second_order_matches(rl, rr, points, affine, start, window)
+    return rect, rl, rr, points, refined, kept & affine_kept
+
+
 def triangulate(rect: Rectification, left_pts: np.ndarray, right_pts: np.ndarray,
                 near_m: float, far_m: float) -> np.ndarray:
     """Return points (N, 3) in metres in the left camera's frame for matched rectified
