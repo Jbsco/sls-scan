@@ -68,6 +68,24 @@ def test_scan_and_measure_commands_on_a_synthetic_plate(tmp_path, rig, spec):
     assert cli.main(["measure", cloud, "--shape", "plane"]) == 0
 
 
+def test_detect_command_counts_corners(tmp_path):
+    pose = tmp_path / "pose_000"
+    pose.mkdir()
+    board = ["--squares-x", "5", "--squares-y", "4", "--square-mm", "20", "--marker-mm", "15"]
+    assert cli.main(["board", *board, "--dpi", "200", "--out", str(pose / "white.png")]) == 0
+    assert cli.main(["detect", str(pose), *board]) == 0
+
+
+def test_detect_command_prints_json(tmp_path, capsys):
+    pose = tmp_path / "pose_000"
+    pose.mkdir()
+    board = ["--squares-x", "5", "--squares-y", "4", "--square-mm", "20", "--marker-mm", "15"]
+    cli.main(["board", *board, "--dpi", "200", "--out", str(pose / "white.png")])
+    capsys.readouterr()
+    assert cli.main(["detect", str(pose), *board, "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"corners": 12, "of": 12}
+
+
 def test_calibrate_command_prints_json(tmp_path, capsys, monkeypatch, calibration):
     monkeypatch.setattr(cli, "read_views", lambda directory: iter(()))
     monkeypatch.setattr(calibrate, "calibrate", lambda *args, **kwargs: calibration)

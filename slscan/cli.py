@@ -213,6 +213,23 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def cmd_detect(args: argparse.Namespace) -> int:
+    import json
+
+    import cv2
+
+    image = cv2.imread(os.path.join(args.pose, "white.png"), cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        print(json.dumps({"error": f"no white.png in {args.pose}"}) if args.json
+              else f"no white.png in {args.pose}")
+        return 1
+    ids, _ = calibrate.detect_corners(image, _spec(args))
+    total = (args.squares_x - 1) * (args.squares_y - 1)
+    print(json.dumps({"corners": len(ids), "of": total}) if args.json
+          else f"{len(ids)} of {total} corners")
+    return 0
+
+
 def cmd_calibration_diff(args: argparse.Namespace) -> int:
     d = calibrate.compare(calibrate.load(args.first), calibrate.load(args.second))
     ok = True
@@ -266,6 +283,12 @@ def main(argv=None) -> int:
     p.add_argument("--out", default="data/calibration.yaml")
     p.add_argument("--json", action="store_true", help="print the result as one JSON object")
     p.set_defaults(func=cmd_calibrate)
+
+    p = sub.add_parser("detect", help="count the board corners seen in one calibration pose")
+    p.add_argument("pose", help="pose directory with white.png")
+    _board_arguments(p)
+    p.add_argument("--json", action="store_true", help="print the result as one JSON object")
+    p.set_defaults(func=cmd_detect)
 
     p = sub.add_parser("calibration-diff", help="compare two calibrations against repeatability limits")
     p.add_argument("first")
