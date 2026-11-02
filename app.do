@@ -1,8 +1,8 @@
 #!/bin/bash
-# Application gate: formatting, lints and tests of the Rust application, its capture
-# client against the stand-in node over the capture protocol, stereo calibration from
-# captured board pairs, depth frames on captured pairs, and its GPU decode, stereo rectification, coarse disparity, refinement and depth
-# frames against the NumPy and OpenCV references.
+# Application gate: formatting, lints and tests of the Rust application; its capture
+# client, stereo calibration and fused depth frames against the stand-in node over the
+# capture protocol; and its GPU decode, rectification, coarse disparity, refinement,
+# depth frames and fusion against the NumPy and OpenCV references.
 exec >&2
 if ! command -v cargo >/dev/null 2>&1; then
     echo "app: cargo not found - skipped"
@@ -33,6 +33,8 @@ $RUN rectify-check "$SESSION/stereo"
 $RUN coarse-check "$SESSION/stereo"
 $RUN refine-check "$SESSION/stereo"
 $RUN depth-check "$SESSION/stereo"
+python3 -m slscan.cli fusion-vectors --out "$SESSION/fusion" >/dev/null
+$RUN fusion-check "$SESSION/fusion"
 echo "app: all checks clean"
 [ -n "${3:-}" ] && touch "$3"
 exit 0
