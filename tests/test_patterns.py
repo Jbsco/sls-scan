@@ -37,6 +37,17 @@ def test_gray_code_images_decode_to_their_columns():
     assert np.array_equal(columns, expected)
 
 
+def test_row_gray_code_images_decode_to_their_rows():
+    width, height = 4, 768
+    stack = patterns.gray_code_images(width, height, axis="rows")
+    planes = patterns.bit_planes(height)
+    assert stack.shape == (2 * planes, height, width)
+    bits = (stack[0::2] > 127).astype(np.uint8)
+    rows = patterns.decode_gray_bits(bits)
+    expected = np.broadcast_to(np.arange(height)[:, np.newaxis], (height, width))
+    assert np.array_equal(rows, expected)
+
+
 def test_phase_shift_images_recover_the_phase():
     width, height, pitch, steps = 256, 2, 32, 4
     stack = patterns.phase_shift_images(width, height, pitch, steps)

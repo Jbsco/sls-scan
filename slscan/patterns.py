@@ -36,22 +36,27 @@ def bit_planes(width: int) -> int:
     return max(1, math.ceil(math.log2(width)))
 
 
-def gray_code_images(width: int, height: int) -> np.ndarray:
-    """Return the Gray code column patterns as a uint8 stack.
+def gray_code_images(width: int, height: int, axis: str = "columns") -> np.ndarray:
+    """Return the Gray code patterns of one axis as a uint8 stack.
 
-    Shape is (2 * planes, height, width): plane k at index 2k and its inverse at
-    2k + 1, most significant plane first. Values are 0 and 255.
+    axis "columns" codes each projector column, "rows" each projector row. Shape is
+    (2 * planes, height, width): plane k at index 2k and its inverse at 2k + 1, most
+    significant plane first. Values are 0 and 255.
     """
-    planes = bit_planes(width)
-    columns = np.arange(width, dtype=np.int64)
-    codes = columns ^ (columns >> 1)
+    if axis not in ("columns", "rows"):
+        raise ValueError('axis is "columns" or "rows"')
+    length = width if axis == "columns" else height
+    planes = bit_planes(length)
+    index = np.arange(length, dtype=np.int64)
+    codes = index ^ (index >> 1)
     stack = np.empty((2 * planes, height, width), dtype=np.uint8)
     for k in range(planes):
         shift = planes - 1 - k
         bits = ((codes >> shift) & 1).astype(np.uint8) * 255
-        row = np.broadcast_to(bits, (height, width))
-        stack[2 * k] = row
-        stack[2 * k + 1] = 255 - row
+        line = bits if axis == "columns" else bits[:, np.newaxis]
+        image = np.broadcast_to(line, (height, width))
+        stack[2 * k] = image
+        stack[2 * k + 1] = 255 - image
     return stack
 
 
