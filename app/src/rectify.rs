@@ -1,7 +1,7 @@
 //! Stereo rectification on the GPU: one WGSL compute invocation per four output pixels,
 //! following OpenCV's undistort-rectify map and bilinear remap as `slscan/stereo.py` uses them.
 
-use crate::gpu::{open, read, words};
+use crate::gpu::{download, upload, Gpu};
 use eframe::wgpu;
 use eframe::wgpu::util::DeviceExt;
 
@@ -35,7 +35,12 @@ pub struct Rectifier {
 impl Rectifier {
     /// Open the first adapter wgpu offers, or a software one when `fallback` is set.
     pub fn new(fallback: bool) -> Result<Self, String> {
-        let (device, queue, adapter) = open(fallback, "rectify")?;
+        Ok(Self::with(&Gpu::open(fallback)?))
+    }
+
+    /// Build the kernel on a shared device.
+    pub fn with(gpu: &Gpu) -> Self {
+        let device = gpu.device.clone();
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("rectify"),
             source: wgpu::ShaderSource::Wgsl(include_str!("rectify.wgsl").into()),
@@ -48,12 +53,12 @@ impl Rectifier {
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             cache: None,
         });
-        Ok(Self {
+        Self {
             device,
-            queue,
+            queue: gpu.queue.clone(),
             pipeline,
-            adapter,
-        })
+            adapter: gpu.adapter.clone(),
+        }
     }
 
     /// Rectify one row-major 8-bit image of `width` by `height` pixels.
@@ -68,7 +73,27 @@ impl Rectifier {
         if raw.len() != pixels {
             return Err("image size does not match the parameters".into());
         }
+        let raw_buffer = upload(&self.device, "raw", raw);
+        let rectified = self.rectify_buffer(params, width, height, &raw_buffer)?;
+        let mut bytes = download(&self.device, &self.queue, &rectified, rectified.size())?;
+        bytes.truncate(pixels);
+        Ok(bytes)
+    }
+
+    /// Rectify an uploaded image into a new storage buffer of packed words, which stays
+    /// on the device for the kernels that follow.
+    pub fn rectify_buffer(
+        &self,
+        params: &RectifyParams,
+        width: u32,
+        height: u32,
+        raw: &wgpu::Buffer,
+    ) -> Result<wgpu::Buffer, String> {
+        let pixels = width as usize * height as usize;
         let words_out = pixels.div_ceil(4);
+        if raw.size() < (words_out * 4) as u64 {
+            return Err("image buffer is smaller than the parameters".into());
+        }
         let groups =
             u32::try_from(words_out.div_ceil(WORKGROUP as usize)).map_err(|e| e.to_string())?;
         let (x, y) = (
@@ -89,27 +114,17 @@ impl Rectifier {
         for v in floats {
             uniform.extend_from_slice(&v.to_le_bytes());
         }
-        let init = |label, contents: &[u8], usage| {
-            self.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(label),
-                    contents,
-                    usage,
-                })
-        };
-        let params_buffer = init("params", &uniform, wgpu::BufferUsages::UNIFORM);
-        let raw_buffer = init("raw", &words(raw), wgpu::BufferUsages::STORAGE);
-        let size = (words_out * 4) as u64;
+        let params_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("params"),
+                contents: &uniform,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
         let rectified = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("rectified"),
-            size,
+            size: (words_out * 4) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let readback = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("rectified read"),
-            size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -122,7 +137,7 @@ impl Rectifier {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: raw_buffer.as_entire_binding(),
+                    resource: raw.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -144,11 +159,8 @@ impl Rectifier {
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(x, y, 1);
         }
-        encoder.copy_buffer_to_buffer(&rectified, 0, &readback, 0, size);
         self.queue.submit([encoder.finish()]);
-        let mut bytes = read(&self.device, &readback)?;
-        bytes.truncate(pixels);
-        Ok(bytes)
+        Ok(rectified)
     }
 }
 

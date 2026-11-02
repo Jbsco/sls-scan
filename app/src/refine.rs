@@ -1,7 +1,7 @@
 //! Second-order refinement of stereo matches on the GPU: one WGSL workgroup per sample,
 //! following the NumPy reference `second_order_matches` in `slscan/stereo.py`.
 
-use crate::gpu::{open, read, words};
+use crate::gpu::{download, upload, Gpu};
 use eframe::wgpu;
 use eframe::wgpu::util::DeviceExt;
 
@@ -48,7 +48,12 @@ fn groups(n: usize) -> Result<(u32, u32), String> {
 impl Refiner {
     /// Open the first adapter wgpu offers, or a software one when `fallback` is set.
     pub fn new(fallback: bool) -> Result<Self, String> {
-        let (device, queue, adapter) = open(fallback, "refine")?;
+        Ok(Self::with(&Gpu::open(fallback)?))
+    }
+
+    /// Build the kernels on a shared device.
+    pub fn with(gpu: &Gpu) -> Self {
+        let device = gpu.device.clone();
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("refine"),
             source: wgpu::ShaderSource::Wgsl(include_str!("refine.wgsl").into()),
@@ -65,13 +70,29 @@ impl Refiner {
         };
         let gradients = pipeline("gradients");
         let refine = pipeline("refine");
-        Ok(Self {
+        Self {
             device,
-            queue,
+            queue: gpu.queue.clone(),
             gradients,
             refine,
-            adapter,
-        })
+            adapter: gpu.adapter.clone(),
+        }
+    }
+
+    fn check(
+        params: &RefineParams,
+        left: &[u8],
+        right: &[u8],
+        samples: &[f32],
+    ) -> Result<(), String> {
+        let pixels = params.width as usize * params.height as usize;
+        if left.len() != pixels
+            || right.len() != pixels
+            || !samples.len().is_multiple_of(SAMPLE_FLOATS)
+        {
+            return Err("image or sample sizes do not match the parameters".into());
+        }
+        Ok(())
     }
 
     /// Run refinement stages in order, each starting from the right points of the one before
@@ -84,6 +105,22 @@ impl Refiner {
         samples: &[f32],
         stages: &[Stage],
     ) -> Result<(Vec<[f32; 2]>, Vec<bool>), String> {
+        Self::check(base, left, right, samples)?;
+        let left_buffer = upload(&self.device, "left", left);
+        let right_buffer = upload(&self.device, "right", right);
+        self.stages_buffers(base, &left_buffer, &right_buffer, samples, stages)
+    }
+
+    /// Run refinement stages on an uploaded rectified pair, as `stages` does.
+    pub fn stages_buffers(
+        &self,
+        base: &RefineParams,
+        left: &wgpu::Buffer,
+        right: &wgpu::Buffer,
+        samples: &[f32],
+        stages: &[Stage],
+    ) -> Result<(Vec<[f32; 2]>, Vec<bool>), String> {
+        let gradients = self.gradients(base, right)?;
         let mut current = samples.to_vec();
         let mut kept = vec![true; samples.len() / SAMPLE_FLOATS];
         let mut points = Vec::new();
@@ -94,7 +131,8 @@ impl Refiner {
                 min_correlation,
                 ..base.clone()
             };
-            let (stage_points, stage_kept) = self.refine(&params, left, right, &current)?;
+            let (stage_points, stage_kept) =
+                self.run(&params, left, right, &gradients, &current)?;
             for (all, stage) in kept.iter_mut().zip(&stage_kept) {
                 *all &= *stage;
             }
@@ -115,32 +153,28 @@ impl Refiner {
         right: &[u8],
         samples: &[f32],
     ) -> Result<(Vec<[f32; 2]>, Vec<bool>), String> {
-        let pixels = params.width as usize * params.height as usize;
-        if left.len() != pixels
-            || right.len() != pixels
-            || !samples.len().is_multiple_of(SAMPLE_FLOATS)
-        {
-            return Err("image or sample sizes do not match the parameters".into());
-        }
-        let count = samples.len() / SAMPLE_FLOATS;
-        if count == 0 {
-            return Ok((Vec::new(), Vec::new()));
-        }
-        let (px, py) = groups(pixels)?;
-        let sample_groups = u32::try_from(count).map_err(|e| e.to_string())?;
-        let (sx, sy) = (
-            sample_groups.min(MAX_GROUPS),
-            sample_groups.div_ceil(MAX_GROUPS),
-        );
-        let mut uniform = Vec::with_capacity(32);
+        Self::check(params, left, right, samples)?;
+        let left_buffer = upload(&self.device, "left", left);
+        let right_buffer = upload(&self.device, "right", right);
+        let gradients = self.gradients(params, &right_buffer)?;
+        self.run(params, &left_buffer, &right_buffer, &gradients, samples)
+    }
+
+    fn uniform(
+        params: &RefineParams,
+        count: u32,
+        pixel_stride: u32,
+        sample_stride: u32,
+    ) -> Vec<u8> {
+        let mut uniform = Vec::with_capacity(48);
         for v in [
             params.width,
             params.height,
             params.window,
             params.iterations,
-            u32::try_from(count).map_err(|e| e.to_string())?,
-            px * WORKGROUP,
-            sx,
+            count,
+            pixel_stride,
+            sample_stride,
             params.terms,
         ] {
             uniform.extend_from_slice(&v.to_le_bytes());
@@ -150,6 +184,99 @@ impl Refiner {
         for v in [u32::from(params.min_correlation.is_some()), 0] {
             uniform.extend_from_slice(&v.to_le_bytes());
         }
+        uniform
+    }
+
+    fn bind(
+        &self,
+        pipeline: &wgpu::ComputePipeline,
+        entries: &[(u32, &wgpu::Buffer)],
+    ) -> wgpu::BindGroup {
+        let entries: Vec<wgpu::BindGroupEntry> = entries
+            .iter()
+            .map(|(binding, b)| wgpu::BindGroupEntry {
+                binding: *binding,
+                resource: b.as_entire_binding(),
+            })
+            .collect();
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("refine"),
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &entries,
+        })
+    }
+
+    /// Scharr gradients of an uploaded right image, as storage buffers on the device.
+    fn gradients(
+        &self,
+        params: &RefineParams,
+        right: &wgpu::Buffer,
+    ) -> Result<(wgpu::Buffer, wgpu::Buffer), String> {
+        let pixels = params.width as usize * params.height as usize;
+        if right.size() < (pixels.div_ceil(4) * 4) as u64 {
+            return Err("image buffer is smaller than the parameters".into());
+        }
+        let (px, py) = groups(pixels)?;
+        let params_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("params"),
+                contents: &Self::uniform(params, 0, px * WORKGROUP, 1),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let buffer = |label| {
+            self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: (pixels * 4) as u64,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            })
+        };
+        let (gx, gy) = (buffer("gx"), buffer("gy"));
+        let group = self.bind(
+            &self.gradients,
+            &[(0, &params_buffer), (2, right), (3, &gx), (4, &gy)],
+        );
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("gradients"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("gradients"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.gradients);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(px, py, 1);
+        }
+        self.queue.submit([encoder.finish()]);
+        Ok((gx, gy))
+    }
+
+    fn run(
+        &self,
+        params: &RefineParams,
+        left: &wgpu::Buffer,
+        right: &wgpu::Buffer,
+        gradients: &(wgpu::Buffer, wgpu::Buffer),
+        samples: &[f32],
+    ) -> Result<(Vec<[f32; 2]>, Vec<bool>), String> {
+        let count = samples.len() / SAMPLE_FLOATS;
+        if count == 0 || !samples.len().is_multiple_of(SAMPLE_FLOATS) {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let pixels = params.width as usize * params.height as usize;
+        if left.size() < (pixels.div_ceil(4) * 4) as u64 {
+            return Err("image buffer is smaller than the parameters".into());
+        }
+        let (px, _) = groups(pixels)?;
+        let sample_groups = u32::try_from(count).map_err(|e| e.to_string())?;
+        let (sx, sy) = (
+            sample_groups.min(MAX_GROUPS),
+            sample_groups.div_ceil(MAX_GROUPS),
+        );
         let sample_bytes: Vec<u8> = samples.iter().flat_map(|v| v.to_le_bytes()).collect();
         let init = |label, contents: &[u8], usage| {
             self.device
@@ -159,52 +286,30 @@ impl Refiner {
                     usage,
                 })
         };
-        let params_buffer = init("params", &uniform, wgpu::BufferUsages::UNIFORM);
-        let left_buffer = init("left", &words(left), wgpu::BufferUsages::STORAGE);
-        let right_buffer = init("right", &words(right), wgpu::BufferUsages::STORAGE);
+        let params_buffer = init(
+            "params",
+            &Self::uniform(params, sample_groups, px * WORKGROUP, sx),
+            wgpu::BufferUsages::UNIFORM,
+        );
         let samples_buffer = init("samples", &sample_bytes, wgpu::BufferUsages::STORAGE);
-        let buffer = |label, size: usize, usage| {
+        let buffer = |label, size: usize| {
             self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
                 size: size as u64,
-                usage,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             })
         };
-        let storage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC;
-        let readback = wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST;
-        let gx = buffer("gx", pixels * 4, wgpu::BufferUsages::STORAGE);
-        let gy = buffer("gy", pixels * 4, wgpu::BufferUsages::STORAGE);
-        let refined = buffer("refined", count * 8, storage);
-        let kept = buffer("kept", count * 4, storage);
-        let refined_read = buffer("refined read", count * 8, readback);
-        let kept_read = buffer("kept read", count * 4, readback);
-        let bind = |pipeline: &wgpu::ComputePipeline, entries: &[(u32, &wgpu::Buffer)]| {
-            let entries: Vec<wgpu::BindGroupEntry> = entries
-                .iter()
-                .map(|(binding, b)| wgpu::BindGroupEntry {
-                    binding: *binding,
-                    resource: b.as_entire_binding(),
-                })
-                .collect();
-            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("refine"),
-                layout: &pipeline.get_bind_group_layout(0),
-                entries: &entries,
-            })
-        };
-        let gradient_group = bind(
-            &self.gradients,
-            &[(0, &params_buffer), (2, &right_buffer), (3, &gx), (4, &gy)],
-        );
-        let refine_group = bind(
+        let refined = buffer("refined", count * 8);
+        let kept = buffer("kept", count * 4);
+        let group = self.bind(
             &self.refine,
             &[
                 (0, &params_buffer),
-                (1, &left_buffer),
-                (2, &right_buffer),
-                (3, &gx),
-                (4, &gy),
+                (1, left),
+                (2, right),
+                (3, &gradients.0),
+                (4, &gradients.1),
                 (5, &samples_buffer),
                 (6, &refined),
                 (7, &kept),
@@ -215,23 +320,18 @@ impl Refiner {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("refine"),
             });
-        for (pipeline, group, (x, y)) in [
-            (&self.gradients, &gradient_group, (px, py)),
-            (&self.refine, &refine_group, (sx, sy)),
-        ] {
+        {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("refine"),
                 timestamp_writes: None,
             });
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, group, &[]);
-            pass.dispatch_workgroups(x, y, 1);
+            pass.set_pipeline(&self.refine);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(sx, sy, 1);
         }
-        encoder.copy_buffer_to_buffer(&refined, 0, &refined_read, 0, (count * 8) as u64);
-        encoder.copy_buffer_to_buffer(&kept, 0, &kept_read, 0, (count * 4) as u64);
         self.queue.submit([encoder.finish()]);
-        let refined_bytes = read(&self.device, &refined_read)?;
-        let kept_bytes = read(&self.device, &kept_read)?;
+        let refined_bytes = download(&self.device, &self.queue, &refined, (count * 8) as u64)?;
+        let kept_bytes = download(&self.device, &self.queue, &kept, (count * 4) as u64)?;
         let points = refined_bytes
             .chunks_exact(8)
             .map(|c| {
