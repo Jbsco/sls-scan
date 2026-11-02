@@ -295,3 +295,26 @@ tracked.
 The CPU fallback of D11 is Mesa's lavapipe running the same kernel. Without an
 adapter, kernel checks skip unless `SLS_REQUIRE_GPU` is set, which makes a missing
 adapter a failure.
+
+## D23. The small-volume head (2026-11-01)
+
+A second head measures objects up to about 120 mm across, with 0.02 mm as its target.
+The HQ camera stays, behind a 25 mm lens at 0.5 m: f = 16,129 px at full resolution and
+a 126 × 95 mm field. The Global Shutter camera previews behind a 16 mm lens over a
+157 mm field. Both cameras keep their C and CS mounts, so the 1 m rig and this head
+share camera bodies and the capture node, and differ in lenses, projector and bar.
+
+Here the projector sets the noise floor. Depth error also reads z²·δu/(f_p·b), with δu
+the decode error in projector pixels and f_p the projector's focal length in pixels, so
+a projector image much wider than the field spends its pixels outside it. On the virtual
+bench, a projector image matched to the field, 150 mm at 0.5 m, gives a plate flatness
+of 7.6 µm RMS. A 360 mm image, the smallest a LightCrafter 4500 focuses at 0.5 m, gives
+17.1 µm. This head therefore needs DLP optics focused at 0.5 m with an image near
+150 mm wide.
+
+With a calibration recovered from synthetic views of a 90 × 60 mm board, sphere radius
+and ball bar spacing came within 3.4 µm. Real lenses, projector gamma, thermal drift
+and target accuracy add to that. The head needs a precision glass target, a
+low-expansion bar, and calibrated spheres and a ball bar for its acceptance. An
+aluminium bar shifts depth scale by about 0.01 mm per kelvin at this geometry.
+
