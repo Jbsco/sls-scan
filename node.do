@@ -15,12 +15,8 @@ cleanup() { docker stop "$NAME" >/dev/null 2>&1 || true; rm -rf "$OUT"; }
 trap cleanup EXIT
 docker build -q -t sls-scan-node . >/dev/null
 docker run -d --rm -p "127.0.0.1:$PORT:5600" --name "$NAME" sls-scan-node --scene plate >/dev/null
-for _ in $(seq 1 30); do
-    python3 -c "import socket; socket.create_connection(('127.0.0.1', $PORT), 1).close()" 2>/dev/null && break
-    sleep 1
-done
 for i in $(seq -f %03g 0 11); do
-    python3 -m slscan.cli capture --node "127.0.0.1:$PORT" --set calibration \
+    python3 -m slscan.cli capture --node "127.0.0.1:$PORT" --set calibration --wait 60 \
         --out "$OUT/calibration/pose_$i" >/dev/null
 done
 python3 -m slscan.cli calibrate "$OUT/calibration" --squares-x 9 --squares-y 6 --square-mm 40 \
