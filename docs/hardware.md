@@ -60,7 +60,7 @@ matter more than cost.
 - **Sync output.** Consumer units have none, so the capture node times the trigger
   from its own vertical blank. A DLP development kit (LightCrafter 4500 at 912 × 1140,
   LightCrafter 6500 at 1920 × 1080, binary patterns above 2 kHz, trigger in and out) is
-  the Phase 10 candidate for a preview at the camera's frame rate.
+  the Phase 11 candidate for a preview at the camera's frame rate.
 - **Used-market checks.** Lamp hours under half the rated life, no dead mirrors (a
   white field shows them as fixed black dots), the fan noise acceptable for an hour of
   scanning.
@@ -120,3 +120,57 @@ matter more than cost.
 - **Both cameras on the bar.** The preview and final cameras are calibrated to the
   projector on the same board in one session, so the preview's coverage and the final's
   views share the frame.
+
+## Small-volume head
+
+The second head of `DESIGN.md` D23 measures objects up to about 120 mm across at 0.5 m,
+with the same camera bodies and capture node as the 1 m rig.
+
+| Item | Specification | Notes |
+|---|---|---|
+| Final camera lens | 25 mm C-mount, 2/3" format or larger, focus to 0.25 m or closer: Waveshare 25 mm telephoto, or Commonlands CIL554 (25 mm, f/2.6) | HQ camera, f = 16,129 px, field 126 × 95 mm at 0.5 m |
+| Preview camera lens | 16 mm C-mount, 1" format, rated 10 MP, focus to 0.2 m: Raspberry Pi or Waveshare 16 mm telephoto | Global Shutter camera, f = 4,638 px, field 157 × 118 mm at 0.5 m |
+| Projector | DLP, image near 150 mm wide in focus at 0.5 m, 60 Hz or faster, trigger output preferred | Requirements below |
+| Bar | Steel or carbon fibre, 0.22 m baseline, toed in to cross at 0.5 m | Aluminium shifts depth scale about 0.01 mm per kelvin here |
+| Calibration target | ChArUco on glass or ceramic, 9 × 6 squares of 10 mm, certified feature positions | A printed board's scale error alone exceeds the target |
+| Acceptance artifacts | Matte 25 mm sphere, ball bar of two 12 mm spheres about 80 mm apart, 80 mm flat, each calibrated | Tests of VDI/VDE 2634 Part 2 |
+
+### Lenses
+
+- **Resolution.** Raspberry Pi rates its 6 mm CS lens at 3 MP for a 1/2" format and its
+  16 mm C lens at 10 MP for 1". IMX477 pixels of 1.55 µm sample up to 323 lp/mm, beyond
+  both. Phase shift reads fringes about a hundred pixels wide, so lens resolution limits
+  lateral detail and Gray code edges more than depth. A lens rated finer, such as the
+  Commonlands 16 mm (25 MP at 2.74 µm, -0.09 % distortion, focus to 125 mm), sharpens
+  both.
+- **Depth of field.** With 25 mm at f/8 and 0.5 m, about 40 mm stays within four
+  1.55 µm pixels of blur, and about 80 mm within four binned pixels. Diffraction at f/8
+  spreads a point over about seven 1.55 µm pixels, which fringes of that width tolerate.
+- **Locking.** Focus and iris are set at the working distance and locked before
+  calibration, as on the 1 m rig.
+
+### Projector requirements
+
+- **Image size.** About 150 mm wide in focus at 0.5 m, so 1280 projector columns span
+  the field. A wider image costs depth precision in proportion (D23).
+- **Candidates.** TI's LightCrafter 4500 focuses from 0.5 m with an image of at least
+  16.7 inches diagonal, about 0.36 m wide, and has trigger outputs and 8-bit patterns at
+  120 Hz. Its smallest image is still 2.4 times the field, and distributors list it as
+  discontinued. A close-up lens in front of its optics, or a light-control DLP module
+  with shorter-focus optics, closes the gap and is checked on the bench first. TI's
+  DLPDLCR230NPEVM focuses images of 30 to 120 inches diagonal and has no camera
+  triggers, which suits the 1 m rig instead.
+- **Trigger.** The Global Shutter camera takes its trigger on XTR, a 1.8 V input, after
+  R11 is removed from the board. The low pulse width sets the exposure (plus 14.26 µs)
+  and the pulse rate sets the frame rate. A projector trigger output or the capture
+  node's vertical-blank GPIO drives it through a divider. HQ and Global Shutter cameras
+  cannot be synchronised to each other, and neither path needs it.
+
+### Rates
+
+- **Preview.** 1456 × 1088 at 60 fps: 15 depth frames per second with four steps, 20
+  with three, on a 60 Hz projector. About 95 MB/s over gigabit Ethernet.
+- **Final views.** Full resolution at about 10 fps, a 26-frame sequence in about 2.6 s
+  per exposure. Frames are buffered on the Pi, since 123 MB/s exceeds gigabit Ethernet.
+- **Continuous sweeps.** Up to 2 mm/s for 0.02 mm per cycle with a matched projector
+  (D24).
