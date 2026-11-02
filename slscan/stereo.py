@@ -261,6 +261,21 @@ def affine_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
     return rect, rl, rr, left_pts, right_pts, warps
 
 
+def triangulate(rect: Rectification, left_pts: np.ndarray, right_pts: np.ndarray,
+                near_m: float, far_m: float) -> np.ndarray:
+    """Return points (N, 3) in metres in the left camera's frame for matched rectified
+    pixels, dropping any outside 0.8 near_m to 1.2 far_m."""
+    if len(left_pts) == 0:
+        return np.empty((0, 3))
+    right_pts = right_pts.copy()
+    right_pts[:, 1] = left_pts[:, 1]
+    x = cv2.triangulatePoints(rect.left_projection, rect.right_projection, left_pts.T,
+                              right_pts.T)
+    x = (x[:3] / x[3]).T
+    depth_ok = (x[:, 2] > near_m * 0.8) & (x[:, 2] < far_m * 1.2)
+    return x[depth_ok] @ rect.left_rotation
+
+
 def depth_points(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
                  near_m: float, far_m: float, step: int = 8, window: int = 21,
                  min_level: float = 6.0, order: int = 1) -> tuple[np.ndarray, Rectification]:
@@ -270,10 +285,4 @@ def depth_points(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
                                                               step, window, min_level)
     if order == 2:
         left_pts, right_pts = refine_second_order(rl, rr, left_pts, right_pts, warps, window)
-    if len(left_pts) == 0:
-        return np.empty((0, 3)), rect
-    right_pts[:, 1] = left_pts[:, 1]
-    x = cv2.triangulatePoints(rect.left_projection, rect.right_projection, left_pts.T, right_pts.T)
-    x = (x[:3] / x[3]).T
-    depth_ok = (x[:, 2] > near_m * 0.8) & (x[:, 2] < far_m * 1.2)
-    return x[depth_ok] @ rect.left_rotation, rect
+    return triangulate(rect, left_pts, right_pts, near_m, far_m), rect
