@@ -121,6 +121,10 @@ residuals and rig drift, is 0.2 to 0.5 mm over the 1 m field. Over a few metres,
 targets and scale bars, 0.5 to 1 mm. `docs/accuracy.md` derives these and sets the
 acceptance tests: a flat plate, a sphere and the scale bars.
 
+A small-volume head with a 25 mm lens at 0.5 m targets 0.02 mm over objects up to about
+120 mm across, and supports continuous sweeps at up to 2 mm/s (`DESIGN.md` D23 and D24,
+`docs/hardware.md`).
+
 ## Repository layout
 
 | Path | Contents |

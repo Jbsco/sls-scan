@@ -58,7 +58,13 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
 - Phase 9, open. Applications. An interior a few metres across, a pattern and the mold
   taken from it, small parts on a turntable with a known axis. Acceptance per job: scale bars within
   the Phase 5 figure and datum residuals within the Phase 7 figure.
-- Phase 10, candidates. HDR capture, color texture, a second camera for occlusion, a
+- Phase 10, open. Small-volume head (D23, D24). Lenses for both cameras, a projector
+  focused at 0.5 m with an image near 150 mm wide, a low-expansion bar, a glass target,
+  and continuous sweeps at near range. Acceptance on the bench: an 80 mm flat fits a
+  plane under 0.01 mm RMS, a 25 mm sphere's radius lands within 0.01 mm, and a ball
+  bar's spacing within 0.02 mm. A continuous sweep at 2 mm/s fuses to a model whose ball
+  bar is within 0.02 mm.
+- Phase 11, candidates. HDR capture, color texture, a second camera for occlusion, a
   kilohertz DLP for faster preview, a one-shot coverage pattern, the Haskell reference
   core, Futhark kernels, a tethered mirrorless camera for the final path.
 

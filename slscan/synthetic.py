@@ -44,20 +44,47 @@ def pinhole(width: int, height: int, f: float, cx: float, cy: float) -> Pinhole:
     return Pinhole(width, height, np.array([[f, 0.0, cx], [0.0, f, cy], [0.0, 0.0, 1.0]]))
 
 
-def reference_rig(baseline_m: float = 0.35, crossing_m: float = 1.0) -> Rig:
+def toed_in_rig(camera: Pinhole, projector: Pinhole, baseline_m: float, crossing_m: float) -> Rig:
     """A camera and a projector toed in so their axes cross at crossing_m."""
-    camera = pinhole(1280, 960, 1500.0, 643.0, 478.0)
-    projector = pinhole(1024, 768, 1400.0, 512.0, 480.0)
     toe = math.degrees(math.atan2(-baseline_m, crossing_m))
-    r_projector_in_camera = rotation(0.0, toe)
-    r = r_projector_in_camera.T
+    r = rotation(0.0, toe).T
     t = -r @ np.array([baseline_m, 0.0, 0.0])
     return Rig(camera, projector, r, t)
 
 
-def board_poses(spec: calibrate.BoardSpec) -> list:
-    """Return board poses (rotation, translation) around the crossing point, tilted in turn."""
+def reference_rig(baseline_m: float = 0.35, crossing_m: float = 1.0) -> Rig:
+    """The 1 m rig: a 1280 × 960 camera at f = 1500 px and a 1024 × 768 projector."""
+    return toed_in_rig(pinhole(1280, 960, 1500.0, 643.0, 478.0),
+                       pinhole(1024, 768, 1400.0, 512.0, 480.0), baseline_m, crossing_m)
+
+
+def small_volume_rig(projector_width_m: float = 0.15) -> Rig:
+    """The small-volume head: the HQ camera in its 2 × 2 binned mode (2028 × 1520, 3.1 µm)
+    behind a 25 mm lens, f = 8,065 px, and a 1280 × 800 projector whose image is
+    projector_width_m wide at 0.5 m, on a 0.22 m baseline crossing at 0.5 m."""
+    f_projector = 1280 * 0.5 / projector_width_m
+    return toed_in_rig(pinhole(2028, 1520, 25.0 / 0.0031, 1016.0, 758.0),
+                       pinhole(1280, 800, f_projector, 640.0, 400.0), 0.22, 0.5)
+
+
+def small_volume_preview_rig(projector_width_m: float = 0.15) -> Rig:
+    """The small-volume head's preview: the Global Shutter camera (1456 × 1088, 3.45 µm)
+    behind a 16 mm lens, f = 4,638 px, with the projector of small_volume_rig."""
+    f_projector = 1280 * 0.5 / projector_width_m
+    return toed_in_rig(pinhole(1456, 1088, 16.0 / 0.00345, 728.0, 544.0),
+                       pinhole(1280, 800, f_projector, 640.0, 400.0), 0.22, 0.5)
+
+
+SMALL_BOARD = calibrate.BoardSpec(9, 6, 0.010, 0.0075)
+
+
+def board_poses(spec: calibrate.BoardSpec, crossing_m: float = 1.0) -> list:
+    """Return board poses (rotation, translation) around the crossing point, tilted in turn.
+
+    Offsets scale with the board width against a 0.36 m board, and distances with crossing_m.
+    """
     size = np.array([spec.squares_x * spec.square_m, spec.squares_y * spec.square_m, 0.0])
+    k = size[0] / 0.36
     table = [(0, 0, 0, 0.0, 0.0, 1.0), (20, 0, 0, 0.0, 0.03, 1.0), (-20, 0, 0, 0.0, -0.03, 1.0),
              (0, 20, 0, 0.03, 0.0, 1.0), (0, -20, 0, -0.03, 0.0, 1.0),
              (15, 15, 5, 0.04, 0.03, 0.9), (-15, 15, -5, 0.04, -0.03, 0.95),
@@ -66,7 +93,7 @@ def board_poses(spec: calibrate.BoardSpec) -> list:
     poses = []
     for ax, ay, az, x, y, z in table:
         r = rotation(ax, ay, az)
-        poses.append((r, np.array([x, y, z]) - r @ (size / 2.0)))
+        poses.append((r, np.array([k * x, k * y, crossing_m * z]) - r @ (size / 2.0)))
     return poses
 
 
@@ -86,8 +113,15 @@ class View:
 
 
 def view(rig: Rig, spec: calibrate.BoardSpec, r: np.ndarray, t: np.ndarray,
-         px_per_square: int = 64, black: float = 0.12, background: float = 0.1) -> View:
-    """Render the board print's albedo in the camera and the plane's projector mapping."""
+         px_per_square: int = 0, black: float = 0.12, background: float = 0.1) -> View:
+    """Render the board print's albedo in the camera and the plane's projector mapping.
+
+    The print is rendered at px_per_square, or when it is 0 at about the camera's sampling
+    of a square at the board's distance, so the warp neither aliases nor blurs it much.
+    """
+    if px_per_square <= 0:
+        seen = rig.camera.matrix[0, 0] * spec.square_m / max(float(t[2]), 1e-6)
+        px_per_square = int(min(256, max(64, round(seen))))
     margin = px_per_square
     printed = calibrate.board_image(spec, px_per_square, margin).astype(np.float32) / 255.0
     printed = black + (1.0 - black) * printed
@@ -128,10 +162,11 @@ def calibration_view(rig: Rig, spec: calibrate.BoardSpec, r: np.ndarray, t: np.n
             "view": v}
 
 
-def calibration_views(rig: Rig, spec: calibrate.BoardSpec, seed: int = 0):
+def calibration_views(rig: Rig, spec: calibrate.BoardSpec, seed: int = 0,
+                      crossing_m: float = 1.0):
     """Yield every board pose of board_poses as a calibration view, one at a time."""
     rng = np.random.default_rng(seed)
-    for r, t in board_poses(spec):
+    for r, t in board_poses(spec, crossing_m):
         yield calibration_view(rig, spec, r, t, rng)
 
 
@@ -261,3 +296,45 @@ def acceptance_scenes() -> dict:
             "sphere": [Ball(np.array([0.02, -0.01, 1.0]), 0.05)],
             "ball-bar": [Ball(np.array([-0.15, 0.02, 1.0]), 0.025),
                          Ball(np.array([0.15, -0.02, 1.02]), 0.025)]}
+
+
+def small_volume_scenes() -> dict:
+    """Return the virtual bench scenes scaled to the small-volume head at 0.5 m: an 80 mm
+    plate, a 25 mm sphere and a ball bar of two 12 mm spheres about 80 mm apart."""
+    return {"plate": [Plate(np.array([0.0, 0.0, 0.5]), rotation(10, -15), 0.04, 0.04)],
+            "sphere": [Ball(np.array([0.003, -0.002, 0.5]), 0.0125)],
+            "ball-bar": [Ball(np.array([-0.04, 0.004, 0.5]), 0.006),
+                         Ball(np.array([0.04, -0.004, 0.502]), 0.006)]}
+
+
+def moving_plate_error(rig: Rig, cal: calibrate.Calibration, plate: Plate, velocity: np.ndarray,
+                       rate_hz: float = 60.0, steps: int = 4, pitch: int = 16,
+                       seed: int = 0) -> float:
+    """Return the RMS depth error in metres of one phase-shift cycle on a moving plate.
+
+    Frame i is rendered with the plate moved by velocity × i / rate_hz. The wrapped phase is
+    unwrapped against the true column at mid-cycle, as the preview path unwraps against its
+    model, and the points are compared with the plate at mid-cycle.
+    """
+    rng = np.random.default_rng(seed)
+
+    def moved(t):
+        return Plate(plate.centre + velocity * t, plate.axes, plate.half_u, plate.half_v,
+                     plate.albedo)
+
+    frames, lit = [], None
+    for i in range(steps):
+        sv = scene_view(rig, [moved(i / rate_hz)])
+        values = 127.5 + 127.5 * np.cos(2.0 * math.pi * (np.where(sv.lit, sv.u, 0.0) / pitch
+                                                         + i / steps))
+        frames.append(capture_scene(sv, values, rng))
+        lit = sv.lit if lit is None else lit & sv.lit
+    middle = moved((steps - 1) / 2.0 / rate_hz)
+    sv = scene_view(rig, [middle])
+    wrapped = patterns.wrapped_phase(np.stack(frames).astype(np.float64)).ravel()
+    columns = patterns.unwrap_with_columns(wrapped, sv.u, pitch)
+    mask = (lit & sv.lit & (np.abs(columns - sv.u) < pitch / 2.0)).reshape(sv.shape)
+    from . import triangulate
+    points, _ = triangulate.triangulate(columns.reshape(sv.shape), mask, cal)
+    distance = (points - middle.centre) @ middle.axes[:, 2]
+    return float(np.sqrt(np.mean(distance ** 2)))

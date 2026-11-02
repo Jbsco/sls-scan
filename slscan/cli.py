@@ -85,8 +85,9 @@ def cmd_measure(args: argparse.Namespace) -> int:
     points = geometry.read_ply(args.cloud)
     if args.shape == "plane":
         _, _, rms = geometry.fit_plane(points)
-        print(f"plane RMS residual {1000.0 * rms:.3f} mm (limit {1000.0 * PLATE_LIMIT_M:.1f} mm)")
-        return 0 if rms < PLATE_LIMIT_M else 1
+        limit = args.limit_mm / 1000.0
+        print(f"plane RMS residual {1000.0 * rms:.3f} mm (limit {args.limit_mm:g} mm)")
+        return 0 if rms < limit else 1
     if args.shape == "sphere":
         centre, radius, rms = geometry.fit_sphere(points)
         print(f"sphere radius {1000.0 * radius:.3f} mm, form RMS {1000.0 * rms:.3f} mm, "
@@ -98,18 +99,25 @@ def cmd_measure(args: argparse.Namespace) -> int:
     return 0
 
 
+HEADS = {
+    "reference": (synthetic.reference_rig, synthetic.acceptance_scenes,
+                  calibrate.BoardSpec(9, 6, 0.04, 0.03), 1.0),
+    "small": (synthetic.small_volume_rig, synthetic.small_volume_scenes, synthetic.SMALL_BOARD, 0.5),
+}
+
+
 def cmd_simulate(args: argparse.Namespace) -> int:
-    rig = synthetic.reference_rig()
-    spec = calibrate.BoardSpec(9, 6, 0.04, 0.03)
+    make_rig, make_scenes, spec, crossing = HEADS[args.head]
+    rig = make_rig()
     import cv2
 
-    for i, view in enumerate(synthetic.calibration_views(rig, spec, args.seed)):
+    for i, view in enumerate(synthetic.calibration_views(rig, spec, args.seed, crossing)):
         pose = os.path.join(args.out, "calibration", f"pose_{i:03d}")
         os.makedirs(pose, exist_ok=True)
         cv2.imwrite(os.path.join(pose, "white.png"), view["white"])
         _write_stack(view["columns"], os.path.join(pose, "columns_"))
         _write_stack(view["rows"], os.path.join(pose, "rows_"))
-    scenes = synthetic.acceptance_scenes()
+    scenes = make_scenes()
     for name, scene in scenes.items():
         captures, _ = synthetic.scan_captures(rig, scene, pitch=args.pitch, seed=args.seed)
         write_scan(os.path.join(args.out, name), captures)
@@ -119,8 +127,9 @@ def cmd_simulate(args: argparse.Namespace) -> int:
     print(f"true sphere radius {1000.0 * sphere.radius:.3f} mm, "
           f"true ball bar spacing {1000.0 * np.linalg.norm(bar[0].centre - bar[1].centre):.3f} mm")
     print("next:")
-    print(f"  slscan calibrate {args.out}/calibration --squares-x 9 --squares-y 6 --square-mm 40 "
-          f"--marker-mm 30 --projector-width {rig.projector.width} "
+    print(f"  slscan calibrate {args.out}/calibration --squares-x {spec.squares_x} "
+          f"--squares-y {spec.squares_y} --square-mm {1000.0 * spec.square_m:g} "
+          f"--marker-mm {1000.0 * spec.marker_m:g} --projector-width {rig.projector.width} "
           f"--projector-height {rig.projector.height} --out {args.out}/calibration.yaml")
     for name, shape in (("plate", "plane"), ("sphere", "sphere"), ("ball-bar", "ball-bar")):
         print(f"  slscan scan {args.out}/{name} --calibration {args.out}/calibration.yaml "
@@ -180,6 +189,23 @@ def cmd_decode_vectors(args: argparse.Namespace) -> int:
     with open(os.path.join(args.out, "meta.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f)
     print(f"decode vectors of the {args.scene} scene written to {args.out}")
+    return 0
+
+
+def cmd_motion_error(args: argparse.Namespace) -> int:
+    make_rig, make_scenes, spec, _ = HEADS[args.head]
+    rig = synthetic.small_volume_preview_rig() if args.head == "small" else make_rig()
+    cal = synthetic.true_calibration(rig, spec)
+    plate = make_scenes()["plate"][0]
+    steps_ms = 1000.0 * args.steps / args.rate
+    print(f"{args.head} head, {args.rate:g} Hz, {args.steps} steps ({steps_ms:.0f} ms cycle), "
+          f"pitch {args.pitch}: RMS depth error of one cycle")
+    for speed in (float(s) for s in args.speeds.split(",")):
+        errors = [synthetic.moving_plate_error(rig, cal, plate, speed / 1000.0 * np.array(d),
+                                               args.rate, args.steps, args.pitch)
+                  for d in ((1.0, 0.0, 0.0), (0.0, 0.0, 1.0))]
+        print(f"  {speed:g} mm/s: across the axis {1e6 * errors[0]:.1f} µm, "
+              f"along the axis {1e6 * errors[1]:.1f} µm")
     return 0
 
 
@@ -331,13 +357,24 @@ def main(argv=None) -> int:
     p = sub.add_parser("measure", help="fit an acceptance artifact to a point cloud")
     p.add_argument("cloud")
     p.add_argument("--shape", choices=("plane", "sphere", "ball-bar"), required=True)
+    p.add_argument("--limit-mm", type=float, default=1000.0 * PLATE_LIMIT_M,
+                   help="plane RMS limit in mm")
     p.set_defaults(func=cmd_measure)
 
     p = sub.add_parser("simulate", help="write synthetic calibration and scan captures")
+    p.add_argument("--head", choices=sorted(HEADS), default="reference")
     p.add_argument("--out", default="data/simulated")
     p.add_argument("--pitch", type=int, default=16, help="phase shift pitch for the 1024-column virtual projector")
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_simulate)
+
+    p = sub.add_parser("motion-error", help="depth error of one phase cycle on a moving plate")
+    p.add_argument("--head", choices=sorted(HEADS), default="small")
+    p.add_argument("--rate", type=float, default=60.0, help="projector frame rate in Hz")
+    p.add_argument("--steps", type=int, default=4)
+    p.add_argument("--pitch", type=int, default=16)
+    p.add_argument("--speeds", default="0,1,2,5", help="sweep speeds in mm/s, comma separated")
+    p.set_defaults(func=cmd_motion_error)
 
     p = sub.add_parser("decode-vectors", help="write a synthetic scan and its reference decode")
     p.add_argument("--out", default="data/decode-vectors")
