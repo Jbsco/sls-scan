@@ -11,6 +11,7 @@ path with a calibrated projector is the option for edge-sharp static scans.
 |---|---|---|---|
 | Stereo calibration | `calibrate.py` | board images from both cameras | `stereo.yaml`: both cameras' matrices and distortion, left-to-right rotation and translation, board scale |
 | Stereo matching | `stereo.py` | left and right images, `stereo.yaml` | a point cloud per frame (PLY) in the left camera's frame |
+| Track and fuse | `track.py` | depth frames in order | a pose per frame and the fused model |
 | Patterns (phase shift) | `patterns.py` | projector width and height, phase pitch and steps | pattern image stack and decode tables |
 | Projector calibration | `calibrate.py` | board images, projected-code images on the board | `calibration.yaml`: camera matrix, distortion, projector matrix, extrinsics, board scale |
 | Capture | `capture.py` | pattern stack, exposure list | one directory per view with the images and a manifest |
@@ -33,6 +34,14 @@ an affine window of 21 pixels fitted with ECC. A sample is kept when its window 
 lit, matched surface, correlates at 0.95 or better, and lands within 3 pixels of its
 guess. `--near` and `--far` bound the depth search, and `--step` and `--window` set
 density and the trade between noise and curvature bias (`docs/accuracy.md`).
+
+## Track and fuse
+
+`track.fuse` aligns each depth frame to the model by point-to-plane ICP, starting from
+the previous pose advanced by the last motion, then adds its points to the model as
+averages over 0.5 mm voxels (`DESIGN.md` D26). `slscan sweep-bench` runs a synthetic
+sweep through matching, tracking and fusion and compares poses and artifacts with the
+truth.
 
 ## Patterns
 

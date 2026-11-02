@@ -36,6 +36,8 @@ synthetic captures, for active stereo (`DESIGN.md` D25) and for the phase-shift 
 (D15 and D17). Phase 3 is in progress: the capture protocol, a stand-in node, and the
 application shell with its capture client, three panels and calibration runs. Phase 4
 has a decode kernel for the phase-shift option, with stereo matching on the GPU next.
+Phase 5 has ICP tracking and point fusion, verified on a synthetic sweep (D26).
+
 Bench acceptance of each phase waits on the hardware in `docs/hardware.md`.
 
 ## Applications

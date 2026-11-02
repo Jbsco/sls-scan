@@ -359,3 +359,20 @@ This supersedes the projector parts of D13 and D23. The capture node takes two G
 Shutter cameras on its two connectors, fired by one trigger pulse. The motion limits of
 D24 apply to the phase-shift path only. That path and its code stay, as an option for
 edge-sharp static scans with a calibrated projector.
+
+## D26. Tracking and fusion reference (2026-11-02)
+
+Each depth frame is aligned to the model by point-to-plane ICP, starting from the
+previous frame's pose advanced by the last frame-to-frame motion. Its points then join
+the model, kept as averages over 0.5 mm voxels, and model normals come from the twelve
+nearest points. The model's frame is the first frame's left camera frame. SciPy's
+KD-tree finds the nearest points.
+
+The synthetic sweep has 25 frames, yawing ±25° and pitching ±8° around a mat with a ball
+bar and a sphere. Its fused ball bar spacing lands within 5 µm of the truth, with a true
+or a recovered calibration. Tracked poses drift by up to 0.34 mm against the truth, and
+the model stays self-consistent because every frame is aligned to it. The fused mat
+measures 20 to 24 µm RMS, and the spheres keep the window curvature bias of D25.
+
+ICP converges for a few millimetres and degrees of motion between frames, which a sweep
+at 30 fps stays well inside. Markers on the mat, a TSDF and loop closure come next.

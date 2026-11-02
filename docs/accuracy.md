@@ -139,3 +139,17 @@ Window size trades curvature bias against noise, with the true calibration:
 | 21 px, 2.3 mm | 42 µm | 9 µm |
 | 15 px, 1.6 mm | 22 µm | 17 µm |
 | 11 px, 1.2 mm | 11 µm | 35 µm |
+
+## Continuous sweep
+
+A synthetic sweep of 25 frames by the active stereo head, yawing ±25° and pitching ±8°
+around a mat with a ball bar of two 25 mm spheres and a 16 mm sphere, tracked and fused
+as in `DESIGN.md` D26. Command: `slscan sweep-bench`, with `--recovered` for the
+recovered calibration.
+
+| Measure | True calibration | Recovered calibration |
+|---|---|---|
+| Pose drift against truth | 107 µm, 0.047° | 344 µm, 0.051° |
+| Fused ball bar spacing | -3.9 µm | +4.4 µm |
+| Fused mat flatness | 19.9 µm RMS | 23.9 µm RMS |
+| Ball bar sphere radii | -116 and -76 µm | -120 and -76 µm |

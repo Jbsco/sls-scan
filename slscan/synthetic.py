@@ -185,7 +185,8 @@ class Plate:
         denominator = directions @ normal
         with np.errstate(divide="ignore", invalid="ignore"):
             t = ((self.centre - origin) @ normal) / denominator
-        local = (origin + t[:, np.newaxis] * directions - self.centre) @ self.axes[:, :2]
+        with np.errstate(invalid="ignore"):
+            local = (origin + t[:, np.newaxis] * directions - self.centre) @ self.axes[:, :2]
         inside = (np.abs(local[:, 0]) <= self.half_u) & (np.abs(local[:, 1]) <= self.half_v)
         return np.where(np.isfinite(t) & (t > 0) & inside, t, np.inf)
 
@@ -448,3 +449,38 @@ def stereo_scenes(crossing_m: float = 0.5) -> dict:
             "sphere": [Ball(np.array([0.003, -0.002, z]), 0.0125)],
             "ball-bar": [Ball(np.array([-0.04, 0.004, z]), 0.0125),
                          Ball(np.array([0.04, -0.004, z + 0.002]), 0.0125)]}
+
+
+def sweep_poses(frames: int, yaw_deg: float = 25.0, pitch_deg: float = 8.0,
+                distance_m: float = 0.5) -> list:
+    """Head poses (world to head) along an arc around a target at distance_m ahead of the
+    first pose, yawing from -yaw_deg to +yaw_deg and pitching through ±pitch_deg."""
+    target = np.array([0.0, 0.0, distance_m])
+    poses = []
+    for i in range(frames):
+        s = i / max(frames - 1, 1)
+        yaw = -yaw_deg + 2.0 * yaw_deg * s
+        pitch = pitch_deg * math.sin(2.0 * math.pi * s)
+        orient = rotation(pitch, yaw)
+        centre = target - orient @ np.array([0.0, 0.0, distance_m])
+        r = orient.T
+        poses.append((r, -r @ centre))
+    return poses
+
+
+def sweep_scene(distance_m: float = 0.5) -> dict:
+    """A part on a mat for sweep tests, in the world frame of sweep_poses: a 140 mm mat, a
+    ball bar of two 25 mm spheres about 80 mm apart, and a 16 mm sphere."""
+    z = distance_m
+    return {"mat": Plate(np.array([0.0, 0.0, z + 0.02]), np.eye(3), 0.07, 0.07),
+            "ball-bar": [Ball(np.array([-0.04, 0.005, z]), 0.0125),
+                         Ball(np.array([0.04, -0.005, z + 0.002]), 0.0125)],
+            "sphere": Ball(np.array([0.0, -0.04, z + 0.008]), 0.008)}
+
+
+def sweep_captures(rig: StereoRig, scene: dict, poses: list, pattern: np.ndarray, seed: int = 0):
+    """Yield the stereo capture at each head pose; the pattern light moves with the head."""
+    rng = np.random.default_rng(seed)
+    shapes = [scene["mat"], *scene["ball-bar"], scene["sphere"]]
+    for r, t in poses:
+        yield stereo_capture(rig, transform_scene(shapes, r, t), pattern, rng)
