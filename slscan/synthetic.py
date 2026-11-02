@@ -78,10 +78,14 @@ def small_volume_preview_rig(projector_width_m: float = 0.15) -> Rig:
 SMALL_BOARD = calibrate.BoardSpec(9, 6, 0.010, 0.0075)
 
 
-def board_poses(spec: calibrate.BoardSpec, crossing_m: float = 1.0) -> list:
+def board_poses(spec: calibrate.BoardSpec, crossing_m: float = 1.0,
+                rng: np.random.Generator | None = None, jitter_deg: float = 0.0,
+                jitter_m: float = 0.0) -> list:
     """Return board poses (rotation, translation) around the crossing point, tilted in turn.
 
     Offsets scale with the board width against a 0.36 m board, and distances with crossing_m.
+    With rng, each pose's three angles and its position move by uniform amounts up to
+    jitter_deg and jitter_m, as a person holding the board would place it.
     """
     size = np.array([spec.squares_x * spec.square_m, spec.squares_y * spec.square_m, 0.0])
     k = size[0] / 0.36
@@ -92,8 +96,12 @@ def board_poses(spec: calibrate.BoardSpec, crossing_m: float = 1.0) -> list:
              (25, 10, 0, 0.0, 0.0, 1.1), (-10, 25, 0, 0.0, 0.0, 0.9), (10, -25, 15, 0.02, 0.02, 1.0)]
     poses = []
     for ax, ay, az, x, y, z in table:
+        offset = np.zeros(3)
+        if rng is not None:
+            ax, ay, az = np.array([ax, ay, az]) + rng.uniform(-jitter_deg, jitter_deg, 3)
+            offset = rng.uniform(-jitter_m, jitter_m, 3)
         r = rotation(ax, ay, az)
-        poses.append((r, np.array([k * x, k * y, crossing_m * z]) - r @ (size / 2.0)))
+        poses.append((r, np.array([k * x, k * y, crossing_m * z]) + offset - r @ (size / 2.0)))
     return poses
 
 
@@ -439,11 +447,17 @@ def stereo_board_view(rig: StereoRig, spec: calibrate.BoardSpec, r: np.ndarray, 
 
 
 def stereo_calibration_views(rig: StereoRig, spec: calibrate.BoardSpec, seed: int = 0,
-                             crossing_m: float = 0.5):
-    """Yield each board pose of board_poses seen by both cameras under room light."""
+                             crossing_m: float = 0.5, jitter_deg: float = 0.0,
+                             jitter_m: float = 0.0, passes: int = 1):
+    """Yield each board pose of board_poses seen by both cameras under room light, passes
+    times over. With a jitter, the poses move by seeded random amounts, so each seed is its
+    own session and each pass its own set of poses."""
     rng = np.random.default_rng(seed)
-    for r, t in board_poses(spec, crossing_m):
-        yield stereo_board_view(rig, spec, r, t, rng)
+    jittered = jitter_deg > 0.0 or jitter_m > 0.0
+    for _ in range(passes):
+        poses = board_poses(spec, crossing_m, rng if jittered else None, jitter_deg, jitter_m)
+        for r, t in poses:
+            yield stereo_board_view(rig, spec, r, t, rng)
 
 
 def stereo_scenes(crossing_m: float = 0.5) -> dict:
