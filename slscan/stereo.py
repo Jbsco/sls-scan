@@ -120,12 +120,23 @@ def refine(left: np.ndarray, right: np.ndarray, points: np.ndarray, guesses: np.
 def refine_second_order(left: np.ndarray, right: np.ndarray, left_points: np.ndarray,
                         right_points: np.ndarray, affine: np.ndarray, window: int = 21,
                         iterations: int = 20, batch: int = 1024) -> tuple[np.ndarray, np.ndarray]:
-    """Refine matches with second-order windows by Gauss-Newton.
+    """Return the left points that second_order_matches keeps, with their refined right
+    points."""
+    refined, kept = second_order_matches(left, right, left_points, right_points, affine,
+                                         window, iterations, batch)
+    return left_points[kept], refined[kept]
+
+
+def second_order_matches(left: np.ndarray, right: np.ndarray, left_points: np.ndarray,
+                         right_points: np.ndarray, affine: np.ndarray, window: int = 21,
+                         iterations: int = 20,
+                         batch: int = 1024) -> tuple[np.ndarray, np.ndarray]:
+    """Refine every match with a second-order window by Gauss-Newton.
 
     Each window maps to the right image through a quadratic displacement field, 12
     parameters, with an intensity gain and offset, starting from the affine match. Returns
-    the left points and their refined right points. A match is dropped when its solve
-    fails or its column moves 1 px or more from the affine match.
+    the refined right points (N, 2) and a kept flag (N,). A match is not kept when its
+    solve fails or its column moves 1 px or more from the affine match.
     """
     hw = window // 2
     dy, dx = np.mgrid[-hw:hw + 1, -hw:hw + 1].astype(np.float32)
@@ -134,7 +145,7 @@ def refine_second_order(left: np.ndarray, right: np.ndarray, left_points: np.nda
     lf, rf = left.astype(np.float32), right.astype(np.float32)
     gx = cv2.Scharr(rf, cv2.CV_32F, 1, 0) / 32.0
     gy = cv2.Scharr(rf, cv2.CV_32F, 0, 1) / 32.0
-    out_left, out_right = [], []
+    out_right, out_kept = [], []
     for start in range(0, len(left_points), batch):
         lp = left_points[start:start + batch]
         rp = right_points[start:start + batch]
@@ -182,11 +193,11 @@ def refine_second_order(left: np.ndarray, right: np.ndarray, left_points: np.nda
             active = active[moving]
         ok &= np.all(np.isfinite(p.reshape(n, -1)), axis=1)
         ok &= np.abs(p[:, 0, 0] - (rp[:, 0] - lp[:, 0])) < 1.0
-        out_left.append(lp[ok])
-        out_right.append(np.column_stack([lp[ok, 0] + p[ok, 0, 0], lp[ok, 1] + p[ok, 1, 0]]))
-    if not out_left:
-        return np.empty((0, 2)), np.empty((0, 2))
-    return np.vstack(out_left), np.vstack(out_right)
+        out_kept.append(ok)
+        out_right.append(np.column_stack([lp[:, 0] + p[:, 0, 0], lp[:, 1] + p[:, 1, 0]]))
+    if not out_right:
+        return np.empty((0, 2)), np.empty(0, dtype=bool)
+    return np.vstack(out_right), np.concatenate(out_kept)
 
 
 def affine_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
