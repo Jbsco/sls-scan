@@ -2,6 +2,7 @@ use slscan_app::calibration;
 use slscan_app::client::{self, Event};
 use slscan_app::gpu;
 use slscan_app::protocol::SequenceRequest;
+use slscan_app::refine;
 use slscan_app::ui::ScanApp;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -293,12 +294,133 @@ fn decode_check(args: &[String]) -> ExitCode {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct StereoMeta {
+    width: u32,
+    height: u32,
+    window: u32,
+    iterations: u32,
+    samples: usize,
+}
+
+fn floats(bytes: &[u8]) -> Vec<f32> {
+    bytes
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+fn refine_check(args: &[String]) -> ExitCode {
+    let Some(dir) = args.first().map(PathBuf::from) else {
+        eprintln!("usage: sls-scan refine-check <vector directory> [--fallback]");
+        return ExitCode::FAILURE;
+    };
+    let fallback = args.iter().any(|a| a == "--fallback");
+    let read = |name: &str| std::fs::read(dir.join(name));
+    let (meta, left, right, samples, refined, kept) = match (
+        read("meta.json"),
+        read("left.bin"),
+        read("right.bin"),
+        read("samples.bin"),
+        read("refined.bin"),
+        read("kept.bin"),
+    ) {
+        (Ok(m), Ok(l), Ok(r), Ok(s), Ok(f), Ok(k)) => (m, l, r, s, f, k),
+        _ => {
+            eprintln!("stereo vectors missing in {}", dir.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let meta: StereoMeta = match serde_json::from_slice(&meta) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("meta.json: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let samples = floats(&samples);
+    let reference = floats(&refined);
+    if samples.len() != meta.samples * refine::SAMPLE_FLOATS
+        || reference.len() != 2 * meta.samples
+        || kept.len() != meta.samples
+    {
+        eprintln!("stereo vectors do not match meta.json");
+        return ExitCode::FAILURE;
+    }
+    let refiner = match refine::Refiner::new(fallback) {
+        Ok(r) => r,
+        Err(e) if std::env::var_os("SLS_REQUIRE_GPU").is_none() => {
+            println!("no GPU adapter, refine check skipped: {e}");
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            eprintln!("no GPU adapter: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let params = refine::RefineParams {
+        width: meta.width,
+        height: meta.height,
+        window: meta.window,
+        iterations: meta.iterations,
+    };
+    let mut timings = Vec::new();
+    let mut result = None;
+    for _ in 0..3 {
+        let start = Instant::now();
+        match refiner.refine(&params, &left, &right, &samples) {
+            Ok(r) => result = Some(r),
+            Err(e) => {
+                eprintln!("refine failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+        timings.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    let Some((points, gpu_kept)) = result else {
+        return ExitCode::FAILURE;
+    };
+    let reference_kept: Vec<bool> = kept.iter().map(|&k| k != 0).collect();
+    let mismatched = gpu_kept
+        .iter()
+        .zip(&reference_kept)
+        .filter(|(a, b)| a != b)
+        .count();
+    let max_difference = points
+        .iter()
+        .zip(reference.chunks_exact(2))
+        .zip(gpu_kept.iter().zip(&reference_kept))
+        .filter(|(_, (a, b))| **a && **b)
+        .map(|((p, r), _)| (p[0] - r[0]).abs().max((p[1] - r[1]).abs()))
+        .fold(0.0f32, f32::max);
+    let fraction = mismatched as f64 / meta.samples.max(1) as f64;
+    let fastest = timings.iter().copied().fold(f64::INFINITY, f64::min);
+    println!("adapter {}", refiner.adapter);
+    println!(
+        "{} samples refined with {} px windows in {fastest:.1} ms (fastest of three, with upload and readback)",
+        meta.samples, meta.window
+    );
+    println!(
+        "kept disagreements {mismatched} of {} ({:.2} %), largest difference {max_difference:.5} px",
+        meta.samples,
+        100.0 * fraction
+    );
+    if fraction <= 0.005 && max_difference <= 0.01 {
+        println!("refine check: GPU matches the NumPy reference");
+        ExitCode::SUCCESS
+    } else {
+        println!("refine check: GPU differs from the NumPy reference");
+        ExitCode::FAILURE
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("capture") => return headless_capture(&args[2..]),
         Some("calibrate") => return headless_calibrate(&args[2..]),
         Some("decode-check") => return decode_check(&args[2..]),
+        Some("refine-check") => return refine_check(&args[2..]),
         _ => {}
     }
     let options = eframe::NativeOptions::default();
