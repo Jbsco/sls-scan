@@ -114,3 +114,26 @@ Global Shutter camera, 60 Hz, four steps, projector image 150 mm.
 
 These figures leave out lens and projector errors, thermal drift and target accuracy,
 which only the bench measures.
+
+## Active stereo
+
+These results are the active stereo head of `DESIGN.md` D25 on the virtual bench. Two
+Global Shutter cameras sit behind 16 mm lenses on a 0.2 m baseline crossing at 0.5 m.
+An uncalibrated light throws a random-dot pattern on uncoated artifacts, and the
+calibration is recovered from twelve synthetic poses of a 90 × 60 mm board. Commands: `slscan simulate --head stereo`, then
+the printed calibrate-stereo, scan-stereo and measure steps.
+
+| Test | Result | Truth or target |
+|---|---|---|
+| Calibration | 0.076 and 0.065 px, baseline 200.19 mm | under 0.3 px, 200 mm |
+| Flat plate, 80 mm, tilted | 8 µm RMS | under 20 µm |
+| Sphere radius | 12.395 mm | 12.500 mm |
+| Ball bar spacing, 25 mm spheres | 80.404 mm | 80.424 mm |
+
+Window size trades curvature bias against noise, with the true calibration:
+
+| Window | Points inside a 25 mm sphere | Plate RMS |
+|---|---|---|
+| 21 px, 2.3 mm | 42 µm | 9 µm |
+| 15 px, 1.6 mm | 22 µm | 17 µm |
+| 11 px, 1.2 mm | 11 µm | 35 µm |
