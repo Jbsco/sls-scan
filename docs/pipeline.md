@@ -121,7 +121,8 @@ The live path trades resolution and code length for rate. The projector cycles t
 four phase-shifted sinusoids at one pitch, and the global-shutter camera captures each
 at the projector rate. Every complete cycle gives a depth frame: phase decode,
 unwrapping against the previous frame and the fused model, triangulation, and TSDF
-integration at a coarse voxel size, all in WGSL kernels.
+integration at a coarse voxel size, all in WGSL kernels. The decode kernel is
+`app/src/decode.wgsl`, and it matches the NumPy decode (`DESIGN.md` D22).
 
 Poses come from coded targets seen in the camera frames, refined by ICP against the
 model. The scene draws the volume and the live cloud as the rig moves, which shows
