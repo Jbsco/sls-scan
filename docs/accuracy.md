@@ -69,3 +69,21 @@ calibration and recorded with the scan.
 
 A scan's report contains the scale bar lengths, the plate RMS from the day's calibration
 check and the datum residuals, so no result is quoted without its error.
+
+## Virtual bench
+
+The same tests run on synthetic captures (`DESIGN.md` D17). The virtual rig is a
+1280 × 960 camera at f = 1500 px and a 1024 × 768 projector at 0.35 m baseline, with
+sensor noise of one grey level and phase pitch 16. Its calibration is recovered from
+twelve synthetic board poses. Results from `slscan simulate` on 2026-11-01:
+
+| Test | Result | Truth or limit |
+|---|---|---|
+| Camera and projector reprojection | 0.096 and 0.092 px | under 0.3 and 0.5 px |
+| Baseline | 349.85 mm | 350 mm |
+| Flat plate, 0.5 m, tilted | 0.116 mm RMS | under 0.2 mm |
+| Sphere radius, form | 50.010 mm, 0.035 mm RMS | 50.000 mm |
+| Ball bar spacing | 303.281 mm | 303.315 mm |
+
+A synthetic pass checks the arithmetic. It says nothing about lens, projector gamma or
+rig flex, which only the bench measures.
