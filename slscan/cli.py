@@ -295,7 +295,9 @@ def cmd_stereo_vectors(args: argparse.Namespace) -> int:
                                                return_warps=True)
     refined, kept = stereo.second_order_matches(rl, rr, left_pts, right_pts, warps, args.window,
                                                 args.iterations)
-    direct, direct_kept = stereo.direct_refine(rl, rr, points, guesses, args.window)
+    _, _, _, block_points, block_guesses = stereo.coarse_samples(
+        cal, images["left"], images["right"], 0.4, 0.6, args.step, args.window, coarse="block")
+    direct, direct_kept = stereo.direct_refine(rl, rr, block_points, block_guesses, args.window)
     os.makedirs(args.out, exist_ok=True)
     images["left"].tofile(os.path.join(args.out, "left-raw.bin"))
     images["right"].tofile(os.path.join(args.out, "right-raw.bin"))
@@ -307,18 +309,20 @@ def cmd_stereo_vectors(args: argparse.Namespace) -> int:
     samples.astype("<f4").tofile(os.path.join(args.out, "samples.bin"))
     refined.astype("<f4").tofile(os.path.join(args.out, "refined.bin"))
     kept.astype(np.uint8).tofile(os.path.join(args.out, "kept.bin"))
-    start = np.column_stack([points, guesses, np.tile([1.0, 0.0, 0.0, 1.0], (len(points), 1))])
+    start = np.column_stack([block_points, block_guesses,
+                             np.tile([1.0, 0.0, 0.0, 1.0], (len(block_points), 1))])
     start.astype("<f4").tofile(os.path.join(args.out, "direct-samples.bin"))
     direct.astype("<f4").tofile(os.path.join(args.out, "direct-refined.bin"))
     direct_kept.astype(np.uint8).tofile(os.path.join(args.out, "direct-kept.bin"))
     meta = {"width": int(rl.shape[1]), "height": int(rl.shape[0]), "window": args.window,
             "iterations": args.iterations, "samples": int(len(left_pts)),
-            "direct_samples": int(len(points)), "max_move": 3.0, "min_correlation": 0.95}
+            "direct_samples": int(len(block_points)), "max_move": 3.0,
+            "min_correlation": 0.95}
     with open(os.path.join(args.out, "meta.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f)
     print(f"stereo vectors of the {args.scene} scene written to {args.out}: {len(left_pts)} "
           f"affine matches, {int(kept.sum())} kept by second-order refinement, "
-          f"{int(direct_kept.sum())} of {len(points)} kept by direct refinement")
+          f"{int(direct_kept.sum())} of {len(block_points)} kept by direct refinement")
     return 0
 
 
