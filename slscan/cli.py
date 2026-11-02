@@ -159,6 +159,30 @@ def cmd_capture(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_decode_vectors(args: argparse.Namespace) -> int:
+    """Write a synthetic scan and its NumPy decode as raw files for the GPU kernels."""
+    import json
+
+    rig = synthetic.reference_rig()
+    captures, _ = synthetic.scan_captures(rig, synthetic.acceptance_scenes()[args.scene],
+                                          pitch=args.pitch, seed=args.seed)
+    columns, mask = decode.decode_columns(captures["gray"], captures["phase"],
+                                          rig.projector.width, args.pitch)
+    os.makedirs(args.out, exist_ok=True)
+    captures["gray"].tofile(os.path.join(args.out, "gray.bin"))
+    captures["phase"].tofile(os.path.join(args.out, "phase.bin"))
+    columns.astype("<f4").tofile(os.path.join(args.out, "columns.bin"))
+    mask.astype(np.uint8).tofile(os.path.join(args.out, "mask.bin"))
+    meta = {"width": rig.camera.width, "height": rig.camera.height,
+            "planes": int(captures["gray"].shape[0] // 2), "steps": int(captures["phase"].shape[0]),
+            "projector_width": rig.projector.width, "pitch": args.pitch, "min_contrast": 10.0,
+            "min_modulation": 10.0, "max_disagreement": 1.0}
+    with open(os.path.join(args.out, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+    print(f"decode vectors of the {args.scene} scene written to {args.out}")
+    return 0
+
+
 def cmd_board(args: argparse.Namespace) -> int:
     import cv2
 
@@ -314,6 +338,13 @@ def main(argv=None) -> int:
     p.add_argument("--pitch", type=int, default=16, help="phase shift pitch for the 1024-column virtual projector")
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_simulate)
+
+    p = sub.add_parser("decode-vectors", help="write a synthetic scan and its reference decode")
+    p.add_argument("--out", default="data/decode-vectors")
+    p.add_argument("--scene", choices=sorted(synthetic.acceptance_scenes()), default="plate")
+    p.add_argument("--pitch", type=int, default=16)
+    p.add_argument("--seed", type=int, default=0)
+    p.set_defaults(func=cmd_decode_vectors)
 
     p = sub.add_parser("node-sim", help="run a stand-in capture node serving synthetic frames")
     p.add_argument("--host", default="127.0.0.1")
