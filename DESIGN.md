@@ -552,3 +552,29 @@ box sums of whole grey levels, exact in single precision, keep the two in step. 
 RX 7900 GRE matches 364 × 272 reduced pixels over 189 disparities in about 4.5 ms with
 upload and readback, where NumPy takes 203 ms (D34). Sample selection and triangulation
 are the CPU steps left in a depth frame.
+
+## D36. A depth frame from a raw pair (2026-11-02)
+
+`app/src/depth.rs` measures one raw stereo pair. Rectification, block disparity and both
+stages of direct matching run on the GPU, and sample selection and triangulation run on
+the CPU. Selection uses summed-area tables. A pixel is lit when its 5 × 5 sum reaches
+138, which is where `cv2.blur` rounds to 6 or more. Triangulation solves OpenCV's linear
+system by least squares in double precision, which matched `cv2.triangulatePoints`
+within 0.00001 µm in NumPy.
+
+`sls-scan depth-check` runs the path on the raw stereo vectors and compares its points
+with `direct_matches` and `triangulate`. Both keep the same samples. On a Radeon RX 7900
+GRE, with upload and readback at every stage:
+
+| View | Points | Frame | Refinement | Point distance, median and largest |
+|---|---|---|---|---|
+| Sphere | 303 | 46 ms | 35 ms | 0.005 µm, 0.78 µm |
+| Ball bar | 615 | 57 ms | 46 ms | 0.005 µm, 2.8 µm |
+| Plate | 6374 | 276 ms | 265 ms | 0.006 µm, 2.2 µm |
+
+By δz = z²·δd/(f·b) with z = 0.5 m, f = 4405 px and b = 0.2 m, 2.8 µm is 0.01 px of
+disparity. It seems likely that those few samples start from guesses rounded to single
+precision and settle slightly differently. Refinement takes almost all of a plate frame,
+which runs four times over the 66 ms that 15 depth frames per second allow (Phase 4).
+Each kernel also opens its own device and reads its output back, which a shared device
+would avoid.

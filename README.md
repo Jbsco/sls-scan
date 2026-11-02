@@ -37,7 +37,8 @@ synthetic captures, for active stereo (`DESIGN.md` D25) and for the phase-shift 
 application shell with its capture client, three panels and calibration runs.
 
 Phase 4 has GPU kernels for the phase-shift decode (D22), stereo rectification (D31),
-block disparity (D35) and second-order stereo refinement (D29). Phase 5 has ICP tracking and point fusion, verified on a synthetic
+block disparity (D35) and second-order stereo refinement (D29), chained into a depth
+frame from a raw pair (D36). Phase 5 has ICP tracking and point fusion, verified on a synthetic
 sweep (D26). Phase 9 has second-order matching windows, which follow curved surfaces
 (D28).
 

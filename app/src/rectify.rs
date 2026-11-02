@@ -17,6 +17,12 @@ pub struct RectifyParams {
     pub centre: [f32; 2],
     /// k1, k2, p1, p2, k3.
     pub distortion: [f32; 5],
+    /// Rectified projection, 3 x 4 row-major, for triangulation.
+    #[serde(default)]
+    pub projection: [f64; 12],
+    /// Rectifying rotation, 3 x 3 row-major, for triangulation.
+    #[serde(default)]
+    pub rotation: [f64; 9],
 }
 
 pub struct Rectifier {
@@ -167,6 +173,8 @@ mod tests {
             focal: [f, f],
             centre: [cx, cy],
             distortion,
+            projection: [0.0; 12],
+            rotation: [0.0; 9],
         }
     }
 

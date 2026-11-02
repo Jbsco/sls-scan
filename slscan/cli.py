@@ -317,13 +317,20 @@ def cmd_stereo_vectors(args: argparse.Namespace) -> int:
     direct.astype("<f4").tofile(os.path.join(args.out, "direct-refined.bin"))
     direct_kept.astype(np.uint8).tofile(os.path.join(args.out, "direct-kept.bin"))
     small.astype("<f4").tofile(os.path.join(args.out, "coarse.bin"))
+    matched = block_points[direct_kept]
+    cloud, in_range = stereo.triangulate(rect, matched, direct[direct_kept], 0.4, 0.6,
+                                         return_kept=True)
+    np.column_stack([matched[in_range], cloud]).astype("<f8").tofile(
+        os.path.join(args.out, "depth.bin"))
     meta = {"width": int(rl.shape[1]), "height": int(rl.shape[0]), "window": args.window,
             "iterations": args.iterations, "samples": int(len(left_pts)),
             "direct_samples": int(len(block_points)), "max_move": 3.0,
             "min_correlation": 0.95,
             "coarse": {"width": int(small.shape[1]), "height": int(small.shape[0]), "scale": 4,
                        "block": 7, "lo": lo, "count": count, "min_correlation": 0.6,
-                       "margin": 0.05, "fill": 2}}
+                       "margin": 0.05, "fill": 2},
+            "depth": {"near": 0.4, "far": 0.6, "step": args.step, "min_level": 6.0,
+                      "points": int(len(cloud))}}
     with open(os.path.join(args.out, "meta.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f)
     print(f"stereo vectors of the {args.scene} scene written to {args.out}: {len(left_pts)} "

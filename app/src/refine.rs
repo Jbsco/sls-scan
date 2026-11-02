@@ -12,6 +12,9 @@ const MAX_GROUPS: u32 = 65_535;
 /// row-major.
 pub const SAMPLE_FLOATS: usize = 8;
 
+/// Shape terms, move limit and correlation gate of one refinement stage.
+pub type Stage = (u32, f32, Option<f32>);
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct RefineParams {
     pub width: u32,
@@ -69,6 +72,38 @@ impl Refiner {
             refine,
             adapter,
         })
+    }
+
+    /// Run refinement stages in order, each starting from the right points of the one before
+    /// with an identity shape. A sample is kept when every stage keeps it.
+    pub fn stages(
+        &self,
+        base: &RefineParams,
+        left: &[u8],
+        right: &[u8],
+        samples: &[f32],
+        stages: &[Stage],
+    ) -> Result<(Vec<[f32; 2]>, Vec<bool>), String> {
+        let mut current = samples.to_vec();
+        let mut kept = vec![true; samples.len() / SAMPLE_FLOATS];
+        let mut points = Vec::new();
+        for &(terms, max_move, min_correlation) in stages {
+            let params = RefineParams {
+                terms,
+                max_move,
+                min_correlation,
+                ..base.clone()
+            };
+            let (stage_points, stage_kept) = self.refine(&params, left, right, &current)?;
+            for (all, stage) in kept.iter_mut().zip(&stage_kept) {
+                *all &= *stage;
+            }
+            for (sample, point) in current.chunks_exact_mut(SAMPLE_FLOATS).zip(&stage_points) {
+                sample[2..8].copy_from_slice(&[point[0], point[1], 1.0, 0.0, 0.0, 1.0]);
+            }
+            points = stage_points;
+        }
+        Ok((points, kept))
     }
 
     /// Refine affine matches on a rectified pair of row-major images. Returns each sample's

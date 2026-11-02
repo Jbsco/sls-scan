@@ -4,6 +4,7 @@
 pub mod calibration;
 pub mod client;
 pub mod coarse;
+pub mod depth;
 pub mod gpu;
 pub mod protocol;
 pub mod rectify;
