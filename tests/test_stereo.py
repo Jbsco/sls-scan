@@ -83,3 +83,17 @@ def test_unlit_scene_gives_no_points(head, stereo_calibration):
     images = capture(head, synthetic.stereo_scenes()["plate"], dark)
     points, _ = stereo.depth_points(stereo_calibration, images["left"], images["right"], 0.4, 0.6)
     assert len(points) == 0
+
+
+def test_second_order_windows_remove_curvature_bias(head, pattern):
+    truth = synthetic.true_stereo_calibration(head, BOARD)
+    ball = synthetic.stereo_scenes()["sphere"][0]
+    centre = synthetic.to_left(head, ball.centre[None])[0]
+    images = capture(head, [ball], pattern)
+    points, _ = stereo.depth_points(truth, images["left"], images["right"], 0.4, 0.6, step=6,
+                                    window=25, order=2)
+    offset = np.mean(np.linalg.norm(points - centre, axis=1) - ball.radius)
+    _, radius, _ = geometry.fit_sphere(points)
+    assert len(points) > 400
+    assert abs(offset) < 0.000005
+    assert abs(radius - ball.radius) < 0.00002
