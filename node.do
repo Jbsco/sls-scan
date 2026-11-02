@@ -1,6 +1,7 @@
 #!/bin/bash
 # Virtual bench over the capture protocol: the stand-in node in a container serves a
-# calibration capture and a plate scan, and the pipeline calibrates, scans and measures.
+# calibration capture and a plate scan, then a stereo calibration and a stereo sweep, and
+# the pipeline calibrates, scans, measures and fuses.
 exec >&2
 if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
     echo "node: docker not available - skipped"
@@ -25,6 +26,15 @@ python3 -m slscan.cli capture --node "127.0.0.1:$PORT" --set scan --pitch 16 --o
 python3 -m slscan.cli scan "$OUT/plate" --calibration "$OUT/calibration.yaml" --pitch 16 \
     --out "$OUT/plate.ply"
 python3 -m slscan.cli measure "$OUT/plate.ply" --shape plane
+for i in $(seq -f %03g 0 11); do
+    python3 -m slscan.cli capture --node "127.0.0.1:$PORT" --set stereo-calibration \
+        --out "$OUT/stereo-calibration/pose_$i" >/dev/null
+done
+python3 -m slscan.cli calibrate-stereo "$OUT/stereo-calibration" --squares-x 9 --squares-y 6 \
+    --square-mm 10 --marker-mm 7.5 --out "$OUT/stereo.yaml"
+python3 -m slscan.cli capture --node "127.0.0.1:$PORT" --set stereo --frames 3 --out "$OUT/sweep"
+python3 -m slscan.cli fuse "$OUT/sweep" --calibration "$OUT/stereo.yaml" --step 16 \
+    --out "$OUT/model.ply"
 echo "node: virtual bench over the capture protocol clean"
 [ -n "${3:-}" ] && touch "$3"
 exit 0

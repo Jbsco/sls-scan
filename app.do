@@ -19,6 +19,7 @@ trap 'kill "$NODE" 2>/dev/null || true; rm -rf "$SESSION"' EXIT
 RUN="cargo run --locked --quiet --manifest-path app/Cargo.toml --"
 $RUN capture --node "127.0.0.1:$PORT" --set scan --pitch 16 --wait 30
 $RUN capture --node "127.0.0.1:$PORT" --set calibration --wait 30
+$RUN capture --node "127.0.0.1:$PORT" --set stereo --frames 3 --wait 30
 $RUN calibrate --node "127.0.0.1:$PORT" --wait 30 --poses 6 --out "$SESSION" \
     --squares-x 9 --squares-y 6 --square-mm 40 --marker-mm 30
 python3 -m slscan.cli decode-vectors --out "$SESSION/vectors" >/dev/null

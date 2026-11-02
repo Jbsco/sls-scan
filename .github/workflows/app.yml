@@ -21,7 +21,7 @@ jobs:
 
       - name: Install the package without the mesh tools
         run: |
-          pip install numpy==2.5.4 opencv-contrib-python-headless==5.0.0.93 pyyaml==6.0.3
+          pip install numpy==2.5.4 opencv-contrib-python-headless==5.0.0.93 pyyaml==6.0.3 scipy
           pip install --no-deps -e .
 
       - name: Install Mesa Vulkan drivers for the software adapter
