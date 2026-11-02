@@ -38,7 +38,8 @@ application shell with its capture client, three panels and calibration runs.
 
 Phase 4 has GPU kernels for the phase-shift decode (D22), stereo rectification (D31),
 block disparity (D35) and second-order stereo refinement (D29). They chain into a depth
-frame from a raw pair at 15 frames per second on a desktop GPU (D36, D38). Phase 5 has ICP tracking and point fusion, verified on a synthetic
+frame from a raw pair at 15 frames per second on a desktop GPU (D36, D38). The
+application runs that path live on stereo captures and draws each frame's points (D40). Phase 5 has ICP tracking and point fusion, verified on a synthetic
 sweep (D26). Phase 9 has second-order matching windows, which follow curved surfaces
 (D28).
 
