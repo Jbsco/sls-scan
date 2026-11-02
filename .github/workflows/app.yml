@@ -24,6 +24,9 @@ jobs:
           pip install numpy==2.5.4 opencv-contrib-python-headless==5.0.0.93 pyyaml==6.0.3
           pip install --no-deps -e .
 
+      - name: Install Mesa Vulkan drivers for the software adapter
+        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
+
       - name: Install pinned toolchain
         working-directory: app
         run: rustup show
@@ -33,6 +36,8 @@ jobs:
           workspaces: app
 
       - name: Run app gate
+        env:
+          SLS_REQUIRE_GPU: "1"
         run: |
           set -o pipefail
           bash app.do 2>&1 | tee app-output.log
