@@ -362,6 +362,36 @@ def cmd_depth_params(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_fusion_vectors(args: argparse.Namespace) -> int:
+    """Write the depth frames of a short synthetic sweep and their NumPy tracking and fusion
+    as raw files for the application."""
+    import json
+
+    from . import track
+
+    rig = synthetic.stereo_head()
+    cal = synthetic.true_stereo_calibration(rig, synthetic.SMALL_BOARD)
+    pattern = synthetic.random_dots(rig.light.width, rig.light.height, 3.0, 1.0,
+                                    np.random.default_rng(args.seed))
+    poses = synthetic.sweep_poses(args.frames, args.yaw, args.pitch)
+    frames = [stereo.depth_points(cal, im["left"], im["right"], 0.4, 0.6, args.step)[0]
+              for im in synthetic.sweep_captures(rig, synthetic.sweep_scene(), poses, pattern,
+                                                 args.seed)]
+    voxel = args.voxel_mm / 1000.0
+    tracked, model = track.fuse(frames, voxel)
+    os.makedirs(args.out, exist_ok=True)
+    np.concatenate(frames).astype("<f8").tofile(os.path.join(args.out, "frames.bin"))
+    np.array([np.concatenate([r.ravel(), t]) for r, t in tracked]).astype("<f8").tofile(
+        os.path.join(args.out, "poses.bin"))
+    model.astype("<f8").tofile(os.path.join(args.out, "model.bin"))
+    meta = {"counts": [int(len(f)) for f in frames], "voxel": voxel, "model": int(len(model))}
+    with open(os.path.join(args.out, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+    print(f"fusion vectors written to {args.out}: {len(frames)} frames of "
+          f"{min(meta['counts'])} to {max(meta['counts'])} points, {len(model)} fused points")
+    return 0
+
+
 def cmd_motion_error(args: argparse.Namespace) -> int:
     make_rig, make_scenes, spec, _ = HEADS[args.head]
     rig = synthetic.small_volume_preview_rig() if args.head == "small" else make_rig()
@@ -667,6 +697,18 @@ def main(argv=None) -> int:
     p.add_argument("--out", default="data/depth.json")
     p.add_argument("--json", action="store_true", help="print the result as one JSON object")
     p.set_defaults(func=cmd_depth_params)
+
+    p = sub.add_parser("fusion-vectors",
+                       help="write the depth frames of a short synthetic sweep and their "
+                            "reference tracking and fusion")
+    p.add_argument("--out", default="data/fusion-vectors")
+    p.add_argument("--frames", type=int, default=6)
+    p.add_argument("--yaw", type=float, default=5.0, help="yaw amplitude in degrees")
+    p.add_argument("--pitch", type=float, default=2.0, help="pitch amplitude in degrees")
+    p.add_argument("--step", type=int, default=16, help="sample spacing in pixels")
+    p.add_argument("--voxel-mm", type=float, default=0.5)
+    p.add_argument("--seed", type=int, default=0)
+    p.set_defaults(func=cmd_fusion_vectors)
 
     p = sub.add_parser("stereo-vectors",
                        help="write a stereo view with its rectification, its affine matches "
