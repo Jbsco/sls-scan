@@ -1,8 +1,8 @@
 #!/bin/bash
 # Application gate: formatting, lints and tests of the Rust application; its capture
-# client, stereo calibration and fused depth frames against the stand-in node over the
-# capture protocol; and its GPU decode, rectification, coarse disparity, refinement,
-# depth frames and fusion against the NumPy and OpenCV references.
+# client, stereo calibration, fused depth frames and recorded-pair replay against the
+# stand-in node over the capture protocol; and its GPU decode, rectification, coarse
+# disparity, refinement, depth frames and fusion against the NumPy and OpenCV references.
 exec >&2
 if ! command -v cargo >/dev/null 2>&1; then
     echo "app: cargo not found - skipped"
@@ -25,6 +25,12 @@ $RUN capture --node "127.0.0.1:$PORT" --set stereo --frames 150 --rate 30 --wait
 $RUN calibrate --node "127.0.0.1:$PORT" --set stereo --wait 30 --poses 12 --out "$SESSION/stereo" \
     --squares-x 9 --squares-y 6 --square-mm 10 --marker-mm 7.5
 $RUN depth --node "127.0.0.1:$PORT" --params "$SESSION/stereo/depth.json" --frames 2 --wait 30
+$RUN capture --node "127.0.0.1:$PORT" --set stereo --frames 2 --wait 30 --out "$SESSION/recorded"
+python3 -m slscan.cli depth-params --calibration "$SESSION/stereo/stereo.yaml" --step 16 \
+    --out "$SESSION/replay.json" >/dev/null
+python3 -m slscan.cli replay-reference "$SESSION/recorded" --params "$SESSION/replay.json" \
+    --calibration "$SESSION/stereo/stereo.yaml" >/dev/null
+$RUN replay --frames "$SESSION/recorded" --params "$SESSION/replay.json"
 $RUN calibrate --node "127.0.0.1:$PORT" --wait 30 --poses 6 --out "$SESSION" \
     --squares-x 9 --squares-y 6 --square-mm 40 --marker-mm 30
 python3 -m slscan.cli decode-vectors --out "$SESSION/vectors" >/dev/null
