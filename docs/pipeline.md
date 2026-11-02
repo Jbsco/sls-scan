@@ -39,6 +39,10 @@ reads curved surfaces slightly inside. `--near` and `--far` bound the depth sear
 `--step` and `--window` set density and the trade between noise and curvature bias
 (`docs/accuracy.md`).
 
+`stereo.direct_matches` matches by Gauss-Newton alone: an affine window from the coarse
+disparity, kept on its correlation, then a second-order window (`DESIGN.md` D32). It is
+the reference for the GPU path, which has no Lucas-Kanade or ECC stage.
+
 ## Track and fuse
 
 `track.fuse` aligns each depth frame to the model by point-to-plane ICP, starting from
