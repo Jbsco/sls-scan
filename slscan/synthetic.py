@@ -388,6 +388,24 @@ def stereo_head(lens_mm: float = 16.0, baseline_m: float = 0.2, crossing_m: floa
                      camera, r_right, -r_right @ np.array([baseline_m / 2.0, 0.0, 0.0]), light)
 
 
+def metre_head() -> StereoRig:
+    """The metre head of docs/hardware.md: 6 mm lenses on a 0.35 m baseline crossing at 1 m,
+    and a pattern light 0.9 m wide there."""
+    return stereo_head(6.0, 0.35, 1.0, light_width_m=0.9)
+
+
+METRE_BOARD = calibrate.BoardSpec()
+
+
+def metre_scenes(crossing_m: float = 1.0) -> dict:
+    """Uncoated Phase 2 artifacts at crossing_m in the rig's frame: a 0.5 m plate, and a
+    scale bar of two 50.8 mm spheres about 400 mm apart."""
+    z = crossing_m
+    return {"plate": [Plate(np.array([0.0, 0.0, z]), rotation(10, -15), 0.25, 0.25)],
+            "scale-bar": [Ball(np.array([-0.2, 0.01, z]), 0.0254),
+                          Ball(np.array([0.2, -0.01, z + 0.01]), 0.0254)]}
+
+
 def stereo_extrinsics(rig: StereoRig) -> tuple[np.ndarray, np.ndarray]:
     """Rotation and translation from the left camera's frame to the right camera's."""
     r = rig.right_rotation @ rig.left_rotation.T
