@@ -2,6 +2,7 @@ use slscan_app::calibration;
 use slscan_app::client::{self, Event};
 use slscan_app::gpu;
 use slscan_app::protocol::SequenceRequest;
+use slscan_app::rectify;
 use slscan_app::refine;
 use slscan_app::ui::ScanApp;
 use std::path::PathBuf;
@@ -414,6 +415,104 @@ fn refine_check(args: &[String]) -> ExitCode {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct Rectifications {
+    left: rectify::RectifyParams,
+    right: rectify::RectifyParams,
+}
+
+fn rectify_check(args: &[String]) -> ExitCode {
+    let Some(dir) = args.first().map(PathBuf::from) else {
+        eprintln!("usage: sls-scan rectify-check <vector directory> [--fallback]");
+        return ExitCode::FAILURE;
+    };
+    let fallback = args.iter().any(|a| a == "--fallback");
+    let read = |name: &str| std::fs::read(dir.join(name));
+    let (meta, params, files) = match (
+        read("meta.json"),
+        read("rectify.json"),
+        [
+            read("left-raw.bin"),
+            read("right-raw.bin"),
+            read("left.bin"),
+            read("right.bin"),
+        ],
+    ) {
+        (Ok(m), Ok(p), [Ok(a), Ok(b), Ok(c), Ok(d)]) => (m, p, [a, b, c, d]),
+        _ => {
+            eprintln!("stereo vectors missing in {}", dir.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let (meta, params): (StereoMeta, Rectifications) = match (
+        serde_json::from_slice(&meta),
+        serde_json::from_slice(&params),
+    ) {
+        (Ok(m), Ok(p)) => (m, p),
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("vector metadata: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let rectifier = match rectify::Rectifier::new(fallback) {
+        Ok(r) => r,
+        Err(e) if std::env::var_os("SLS_REQUIRE_GPU").is_none() => {
+            println!("no GPU adapter, rectify check skipped: {e}");
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            eprintln!("no GPU adapter: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let [left_raw, right_raw, left_ref, right_ref] = files;
+    let mut fastest = f64::INFINITY;
+    let mut outputs = Vec::new();
+    for _ in 0..3 {
+        let start = Instant::now();
+        let pair = [(&params.left, &left_raw), (&params.right, &right_raw)]
+            .map(|(p, raw)| rectifier.rectify(p, meta.width, meta.height, raw));
+        fastest = fastest.min(start.elapsed().as_secs_f64() * 1000.0);
+        outputs = Vec::new();
+        for r in pair {
+            match r {
+                Ok(o) => outputs.push(o),
+                Err(e) => {
+                    eprintln!("rectify failed: {e}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
+    }
+    let mut largest = 0u8;
+    let mut differing = 0usize;
+    for (out, reference) in outputs.iter().zip([&left_ref, &right_ref]) {
+        for (a, b) in out.iter().zip(reference.iter()) {
+            let d = a.abs_diff(*b);
+            largest = largest.max(d);
+            differing += usize::from(d > 0);
+        }
+    }
+    let pixels = 2 * meta.width as usize * meta.height as usize;
+    let fraction = differing as f64 / pixels as f64;
+    println!("adapter {}", rectifier.adapter);
+    println!(
+        "two {} × {} images rectified in {fastest:.1} ms (fastest of three, with upload and readback)",
+        meta.width, meta.height
+    );
+    println!(
+        "pixels differing {differing} of {pixels} ({:.4} %), largest difference {largest}",
+        100.0 * fraction
+    );
+    if largest <= 1 && fraction <= 1e-3 {
+        println!("rectify check: GPU matches the OpenCV reference");
+        ExitCode::SUCCESS
+    } else {
+        println!("rectify check: GPU differs from the OpenCV reference");
+        ExitCode::FAILURE
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
@@ -421,6 +520,7 @@ fn main() -> ExitCode {
         Some("calibrate") => return headless_calibrate(&args[2..]),
         Some("decode-check") => return decode_check(&args[2..]),
         Some("refine-check") => return refine_check(&args[2..]),
+        Some("rectify-check") => return rectify_check(&args[2..]),
         _ => {}
     }
     let options = eframe::NativeOptions::default();
