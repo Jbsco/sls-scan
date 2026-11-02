@@ -88,8 +88,21 @@ def coarse_disparity(left: np.ndarray, right: np.ndarray, d_min: float, d_max: f
 def block_disparity(left: np.ndarray, right: np.ndarray, d_min: float, d_max: float,
                     scale: int = 4, block: int = 7, min_correlation: float = 0.6,
                     margin: float = 0.05, fill: int = 2) -> np.ndarray:
-    """Block matching by normalized cross-correlation at 1/scale resolution, returned at
-    full resolution (NaN where no match).
+    """Block matching of block_disparity_small, returned at full resolution in pixels (NaN
+    where no match)."""
+    small, _, _ = block_disparity_small(left, right, d_min, d_max, scale, block,
+                                        min_correlation, margin, fill)
+    d = cv2.resize(small, (left.shape[1], left.shape[0]), interpolation=cv2.INTER_NEAREST)
+    return d * scale
+
+
+def block_disparity_small(left: np.ndarray, right: np.ndarray, d_min: float, d_max: float,
+                          scale: int = 4, block: int = 7, min_correlation: float = 0.6,
+                          margin: float = 0.05,
+                          fill: int = 2) -> tuple[np.ndarray, int, int]:
+    """Block matching by normalized cross-correlation at 1/scale resolution. Returns the
+    disparity map in 1/scale pixels (NaN where no match), the lowest disparity searched and
+    the number of disparities searched.
 
     A disparity is kept when its correlation reaches min_correlation, beats every
     disparity more than one step away by margin, and the right pixel picks it back within
@@ -149,8 +162,7 @@ def block_disparity(left: np.ndarray, right: np.ndarray, d_min: float, d_max: fl
         count = cv2.boxFilter(valid, -1, (3, 3), normalize=False)
         holes = ~np.isfinite(d) & (count >= 3)
         d[holes] = total[holes] / count[holes]
-    d = cv2.resize(d, (left.shape[1], left.shape[0]), interpolation=cv2.INTER_NEAREST)
-    return d * scale
+    return d, lo, n
 
 
 def refine(left: np.ndarray, right: np.ndarray, points: np.ndarray, guesses: np.ndarray,
