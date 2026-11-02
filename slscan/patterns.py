@@ -147,6 +147,16 @@ def phase_modulation(samples: np.ndarray) -> np.ndarray:
     return 2.0 / steps * np.hypot(numerator, denominator)
 
 
+def unwrap_with_columns(phase: np.ndarray, columns: np.ndarray, pitch: int) -> np.ndarray:
+    """Return the float column nearest the Gray code column with the given wrapped phase.
+
+    The phase fixes the position inside a period and the Gray code column picks the
+    period, so a Gray code error under half a period does not move the result.
+    """
+    fraction = phase * pitch / (2.0 * math.pi)
+    return fraction + pitch * np.round((columns - fraction) / pitch)
+
+
 def unwrap_columns(phase: np.ndarray, period_index: np.ndarray, pitch: int) -> np.ndarray:
     """Combine a wrapped phase and a Gray code period index into a float column."""
     return period_index.astype(np.float64) * pitch + phase * pitch / (2.0 * math.pi)
