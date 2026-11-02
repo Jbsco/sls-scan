@@ -69,6 +69,7 @@ impl ScanApp {
             set: self.set.clone(),
             pitch: self.pitch,
             steps: self.steps,
+            frames: 1,
         };
         let repaint = ctx.clone();
         thread::spawn(move || {

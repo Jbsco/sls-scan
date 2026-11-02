@@ -376,3 +376,16 @@ measures 20 to 24 µm RMS, and the spheres keep the window curvature bias of D25
 
 ICP converges for a few millimetres and degrees of motion between frames, which a sweep
 at 30 fps stays well inside. Markers on the mat, a TSDF and loop closure come next.
+
+## D27. Stereo sets on the capture protocol (2026-11-02)
+
+Stereo capture uses the SLS1 protocol unchanged. Two sets carry it: `stereo`, a sequence
+of frame pairs with its count in the request's `frames` field, and `stereo-calibration`,
+one board pair. The set fixes the frame order, left then right per pair, so the frame
+header needs no camera field. Both frames of a pair have the trigger's timestamp, and a
+request without `frames` gets one pair.
+
+The stand-in renders a sweep around a part on a mat, about 2° per frame as a sweep at
+30 fps would move, and the next board pose for each stereo-calibration sequence.
+`slscan fuse` runs matching, tracking and fusion on a captured sweep, and fails when no
+frames overlap, which is the sign of a sweep too fast to track.

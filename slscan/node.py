@@ -22,6 +22,7 @@ FRAME_HEADER = struct.Struct("<IIHqHHB")
 HELLO, SEQUENCE, FRAME, END, ERROR = 1, 2, 3, 4, 5
 MONO8 = 0
 FRAME_PERIOD_NS = 16_666_667
+STEREO_PERIOD_NS = 33_333_333
 
 
 def send(sock: socket.socket, kind: int, payload: bytes) -> None:
@@ -63,8 +64,16 @@ def parse_frame(payload: bytes) -> tuple[dict, np.ndarray]:
             "timestamp_ns": timestamp_ns}, pixels
 
 
-def pattern_names(pattern_set: str, width: int, height: int, steps: int) -> list[str]:
-    """Return the capture file names of a pattern set, in projection order."""
+def pattern_names(pattern_set: str, width: int, height: int, steps: int,
+                  frames: int = 1) -> list[str]:
+    """Return the capture file names of a pattern set, in sequence order.
+
+    A stereo set is frames pairs, left then right, each pair from one trigger. A
+    stereo-calibration set is one board pair."""
+    if pattern_set == "stereo":
+        return [f"frame_{i:03d}/{side}" for i in range(frames) for side in ("left", "right")]
+    if pattern_set == "stereo-calibration":
+        return ["left", "right"]
     if pattern_set == "calibration":
         return (["white"] + [f"columns_{i:03d}" for i in range(2 * patterns.bit_planes(width))]
                 + [f"rows_{i:03d}" for i in range(2 * patterns.bit_planes(height))])
@@ -97,15 +106,15 @@ def connect(host: str, port: int, wait: float = 0.0,
 
 
 def capture(host: str, port: int, pattern_set: str, out: str, pitch: int = 32,
-            steps: int = 4, timeout: float = 60.0, wait: float = 0.0) -> dict:
+            steps: int = 4, timeout: float = 60.0, wait: float = 0.0, frames: int = 1) -> dict:
     """Run one sequence on a node and save its frames as PNG files under out."""
     import cv2
 
     sock, hello = connect(host, port, wait, timeout)
     with sock:
         projector = hello["projector"]
-        names = pattern_names(pattern_set, projector["width"], projector["height"], steps)
-        request = {"set": pattern_set, "pitch": pitch, "steps": steps}
+        names = pattern_names(pattern_set, projector["width"], projector["height"], steps, frames)
+        request = {"set": pattern_set, "pitch": pitch, "steps": steps, "frames": frames}
         send(sock, SEQUENCE, json.dumps(request).encode())
         os.makedirs(out, exist_ok=True)
         indices, stamps = [], []
@@ -120,7 +129,9 @@ def capture(host: str, port: int, pattern_set: str, out: str, pitch: int = 32,
             header, image = parse_frame(payload)
             indices.append(header["index"])
             stamps.append(header["timestamp_ns"])
-            cv2.imwrite(os.path.join(out, names[header["index"]] + ".png"), image)
+            path = os.path.join(out, names[header["index"]] + ".png")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            cv2.imwrite(path, image)
     missing = sorted(set(range(len(names))) - set(indices))
     return {"node": hello, "frames": len(indices), "missing": missing,
             "in_order": indices == sorted(indices), "timestamps_ns": stamps}
@@ -138,7 +149,13 @@ class StandIn(socketserver.ThreadingTCPServer):
         self.scene = synthetic.acceptance_scenes()[scene]
         self.poses = synthetic.board_poses(self.spec)
         self.next_pose = 0
+        self.stereo = synthetic.stereo_head()
+        self.stereo_spec = synthetic.SMALL_BOARD
+        self.stereo_poses = synthetic.board_poses(self.stereo_spec, 0.5)
+        self.next_stereo_pose = 0
         self.rng = np.random.default_rng(seed)
+        self.dots = synthetic.random_dots(self.stereo.light.width, self.stereo.light.height, 3.0,
+                                          1.0, np.random.default_rng(seed))
         self.seed = seed
         super().__init__(address, _Handler)
 
@@ -148,9 +165,34 @@ class StandIn(socketserver.ThreadingTCPServer):
                                                   "height": r.projector.height,
                                                   "refresh_hz": 60},
                 "cameras": [{"name": "final", "width": r.camera.width,
-                             "height": r.camera.height, "format": "mono8"}]}
+                             "height": r.camera.height, "format": "mono8"},
+                            {"name": "left", "width": self.stereo.left.width,
+                             "height": self.stereo.left.height, "format": "mono8"},
+                            {"name": "right", "width": self.stereo.right.width,
+                             "height": self.stereo.right.height, "format": "mono8"}]}
 
-    def frames(self, request: dict) -> list:
+    def frames(self, request: dict) -> tuple[list, list]:
+        """Return the images of a sequence and the timestamp of each, in nanoseconds."""
+        if request["set"] == "stereo":
+            count = int(request.get("frames", 1))
+            poses = synthetic.sweep_poses(count, yaw_deg=min(25.0, float(count)),
+                                          pitch_deg=min(8.0, 0.3 * count))
+            images, stamps = [], []
+            captures = synthetic.sweep_captures(self.stereo, synthetic.sweep_scene(), poses,
+                                                self.dots, self.seed)
+            for i, pair in enumerate(captures):
+                images += [pair["left"], pair["right"]]
+                stamps += [i * STEREO_PERIOD_NS] * 2
+            return images, stamps
+        if request["set"] == "stereo-calibration":
+            r, t = self.stereo_poses[self.next_stereo_pose % len(self.stereo_poses)]
+            self.next_stereo_pose += 1
+            pair = synthetic.stereo_board_view(self.stereo, self.stereo_spec, r, t, self.rng)
+            return [pair["left"], pair["right"]], [0, 0]
+        images = self._pattern_frames(request)
+        return images, [i * FRAME_PERIOD_NS for i in range(len(images))]
+
+    def _pattern_frames(self, request: dict) -> list:
         if request["set"] == "calibration":
             r, t = self.poses[self.next_pose % len(self.poses)]
             self.next_pose += 1
@@ -177,12 +219,11 @@ class _Handler(socketserver.BaseRequestHandler):
                 send(self.request, ERROR, json.dumps({"message": "expected SEQUENCE"}).encode())
                 continue
             try:
-                frames = server.frames(json.loads(payload))
+                frames, stamps = server.frames(json.loads(payload))
             except (ValueError, KeyError) as e:
                 send(self.request, ERROR, json.dumps({"message": str(e)}).encode())
                 continue
-            for index, image in enumerate(frames):
-                stamp = index * FRAME_PERIOD_NS
+            for index, (image, stamp) in enumerate(zip(frames, stamps)):
                 send(self.request, FRAME, frame_payload(sequence, index, 0, stamp, image))
             send(self.request, END, json.dumps({"sequence": sequence, "frames": len(frames)}).encode())
             sequence += 1
