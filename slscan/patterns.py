@@ -60,6 +60,26 @@ def gray_code_images(width: int, height: int, axis: str = "columns") -> np.ndarr
     return stack
 
 
+def binarize_pairs(captured: np.ndarray, min_contrast: float) -> tuple[np.ndarray, np.ndarray]:
+    """Binarize captured pattern and inverse pairs.
+
+    captured has shape (2 * planes, ...) in the order of gray_code_images. Returns the
+    bit planes (planes, ...) as uint8 and a mask of the elements whose every pair
+    differs by at least min_contrast.
+    """
+    captured = np.asarray(captured)
+    if captured.ndim < 1 or captured.shape[0] < 2 or captured.shape[0] % 2:
+        raise ValueError("captured needs pattern and inverse pairs")
+    planes = captured.shape[0] // 2
+    bits = np.empty((planes,) + captured.shape[1:], dtype=np.uint8)
+    mask = np.ones(captured.shape[1:], dtype=bool)
+    for k in range(planes):
+        diff = captured[2 * k].astype(np.float32) - captured[2 * k + 1].astype(np.float32)
+        bits[k] = diff > 0
+        mask &= np.abs(diff) >= min_contrast
+    return bits, mask
+
+
 def decode_gray_bits(bits: np.ndarray) -> np.ndarray:
     """Decode a stack of binary planes, most significant first, to column indices.
 

@@ -48,6 +48,16 @@ def test_row_gray_code_images_decode_to_their_rows():
     assert np.array_equal(rows, expected)
 
 
+def test_binarize_pairs_masks_low_contrast():
+    stack = patterns.gray_code_images(64, 2).astype(np.float64)
+    captured = 20.0 + 0.5 * stack
+    captured[:, 1, :10] = 40.0
+    bits, mask = patterns.binarize_pairs(captured, min_contrast=10.0)
+    assert np.array_equal(patterns.decode_gray_bits(bits)[0], np.arange(64))
+    assert mask[0].all()
+    assert not mask[1, :10].any() and mask[1, 10:].all()
+
+
 def test_phase_shift_images_recover_the_phase():
     width, height, pitch, steps = 256, 2, 32, 4
     stack = patterns.phase_shift_images(width, height, pitch, steps)
