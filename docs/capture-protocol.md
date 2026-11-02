@@ -16,7 +16,7 @@ Each message is a header followed by its payload. Integers are little-endian.
 | Type | Name | Direction | Payload |
 |---|---|---|---|
 | 1 | HELLO | node to application | JSON: node name, projector size and refresh rate, cameras with size and format |
-| 2 | SEQUENCE | application to node | JSON: set (`stereo`, `stereo-calibration`, `scan` or `calibration`), frame pairs for a stereo set, phase pitch, phase steps |
+| 2 | SEQUENCE | application to node | JSON: set (`stereo`, `stereo-calibration`, `scan` or `calibration`), frame pairs and trigger rate for a stereo set, phase pitch, phase steps |
 | 3 | FRAME | node to application | frame header, then pixels row by row |
 | 4 | END | node to application | JSON: sequence number and frame count |
 | 5 | ERROR | node to application | JSON: message |
@@ -48,6 +48,12 @@ A `stereo` set is a sequence of frame pairs, its count in the request's `frames`
 (one when absent). Each pair is the left then the right frame of one trigger, both with
 the trigger's timestamp, saved as `frame_000/left.png` and `frame_000/right.png` onward.
 A `stereo-calibration` set is one board pair, saved as `left.png` and `right.png`.
+
+A stereo request may carry `rate_hz`, the trigger rate in pairs per second, with 0 or
+absent for as fast as the node can. A node drops a pair whose trigger time passed more
+than one period before it can send it, so a client that falls behind sees missing
+indices. The stand-in plays a short pre-rendered sweep in a loop at that rate
+(`DESIGN.md` D46).
 
 Pattern order follows the capture layouts of `docs/pipeline.md`. A scan set is the
 column Gray codes with their inverses, then the phase shifts (`gray_000` onward, then
