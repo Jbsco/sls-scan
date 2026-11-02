@@ -16,6 +16,7 @@ run () {
 }
 run "style + sanitization" bash style.do
 run "tests"                bash test.do
+run "application"          bash app.do
 echo "=========================================="
 if [ "$fail" -ne 0 ]; then
   echo "verify: one or more gates failed"
