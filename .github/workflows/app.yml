@@ -1,0 +1,39 @@
+name: App
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  app:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the package without the mesh tools
+        run: |
+          pip install numpy==2.5.4 opencv-contrib-python-headless==5.0.0.93 pyyaml==6.0.3
+          pip install --no-deps -e .
+
+      - name: Install pinned toolchain
+        working-directory: app
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: app
+
+      - name: Run app gate
+        run: |
+          set -o pipefail
+          bash app.do 2>&1 | tee app-output.log
+          grep -q "app: all checks clean" app-output.log
