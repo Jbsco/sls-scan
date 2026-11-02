@@ -339,6 +339,25 @@ def cmd_stereo_vectors(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_depth_params(args: argparse.Namespace) -> int:
+    """Write the depth frame parameters of a stereo calibration for the application."""
+    import json
+
+    if args.head:
+        head = synthetic.stereo_head()
+        cal = synthetic.true_stereo_calibration(head, synthetic.SMALL_BOARD)
+    else:
+        cal = calibrate.load_stereo(args.calibration)
+    params = stereo.depth_parameters(cal, args.near, args.far, args.step, args.window)
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump(params, f)
+    coarse = params["coarse"]
+    print(f"depth parameters written to {args.out}: {params['width']} x {params['height']}, "
+          f"reduced disparities {coarse['lo']} to {coarse['lo'] + coarse['count'] - 1}")
+    return 0
+
+
 def cmd_motion_error(args: argparse.Namespace) -> int:
     make_rig, make_scenes, spec, _ = HEADS[args.head]
     rig = synthetic.small_volume_preview_rig() if args.head == "small" else make_rig()
@@ -629,6 +648,19 @@ def main(argv=None) -> int:
     p.add_argument("--pitch", type=int, default=16)
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_decode_vectors)
+
+    p = sub.add_parser("depth-params",
+                       help="write the depth frame parameters of a stereo calibration for "
+                            "the application")
+    p.add_argument("--calibration", default="data/stereo.yaml")
+    p.add_argument("--head", choices=("stereo",),
+                   help="use the synthetic head's true calibration instead")
+    p.add_argument("--near", type=float, default=0.4, help="nearest surface in metres")
+    p.add_argument("--far", type=float, default=0.6, help="farthest surface in metres")
+    p.add_argument("--step", type=int, default=8, help="sample spacing in pixels")
+    p.add_argument("--window", type=int, default=25, help="matching window in pixels")
+    p.add_argument("--out", default="data/depth.json")
+    p.set_defaults(func=cmd_depth_params)
 
     p = sub.add_parser("stereo-vectors",
                        help="write a stereo view with its rectification, its affine matches "
