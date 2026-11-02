@@ -1,6 +1,6 @@
 #!/bin/bash
 # Style and hygiene gate: markdown that renders in the local viewer, no local paths,
-# vehicle names or private material, and prose that stays readable.
+# downstream project names or private material, and prose that stays readable.
 exec >&2
 FAIL=0
 
@@ -24,15 +24,15 @@ if [ -n "$PATHS" ]; then
     echo "$PATHS" | sed 's/^/    /'
     FAIL=1
 fi
-# A vehicle's name belongs in its own repository.
-VEHICLES=$(git ls-files -z | xargs -0 grep -nliE 'wd21|pathfinder|nissan|hardbody' 2>/dev/null \
+# Downstream project names belong in their own repositories.
+DOWNSTREAM=$(git ls-files -z | xargs -0 grep -nliE 'wd21|pathfinder|nissan|hardbody' 2>/dev/null \
            | grep -v '^style.do$' || true)
-if [ -n "$VEHICLES" ]; then
-    echo "  vehicle named in the repository:"
-    echo "$VEHICLES" | sed 's/^/    /'
+if [ -n "$DOWNSTREAM" ]; then
+    echo "  downstream project named in the repository:"
+    echo "$DOWNSTREAM" | sed 's/^/    /'
     FAIL=1
 fi
-[ -z "$PATHS$VEHICLES" ] && echo "  clean"
+[ -z "$PATHS$DOWNSTREAM" ] && echo "  clean"
 
 echo "== 3/3  Prose"
 if [ -n "$MD" ]; then
