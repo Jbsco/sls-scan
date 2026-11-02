@@ -18,6 +18,12 @@ pub struct RefineParams {
     pub height: u32,
     pub window: u32,
     pub iterations: u32,
+    /// Shape terms per axis: 3 for affine windows, 6 for second-order windows.
+    pub terms: u32,
+    /// A sample is not kept when its column moves this far or farther from its start.
+    pub max_move: f32,
+    /// A sample is not kept when its final window correlates below this.
+    pub min_correlation: Option<f32>,
 }
 
 pub struct Refiner {
@@ -100,8 +106,13 @@ impl Refiner {
             u32::try_from(count).map_err(|e| e.to_string())?,
             px * WORKGROUP,
             sx,
-            0,
+            params.terms,
         ] {
+            uniform.extend_from_slice(&v.to_le_bytes());
+        }
+        uniform.extend_from_slice(&params.max_move.to_le_bytes());
+        uniform.extend_from_slice(&params.min_correlation.unwrap_or(0.0).to_le_bytes());
+        for v in [u32::from(params.min_correlation.is_some()), 0] {
             uniform.extend_from_slice(&v.to_le_bytes());
         }
         let sample_bytes: Vec<u8> = samples.iter().flat_map(|v| v.to_le_bytes()).collect();
@@ -239,6 +250,9 @@ mod tests {
             height,
             window: 25,
             iterations: 20,
+            terms: 6,
+            max_move: 1.0,
+            min_correlation: None,
         };
         let samples = [48.0, 32.0, 46.0, 32.0, 1.0, 0.0, 0.0, 1.0];
         let (points, kept) = match refiner.refine(&params, &left, &right, &samples) {
@@ -266,6 +280,9 @@ mod tests {
             height: 64,
             window: 25,
             iterations: 20,
+            terms: 6,
+            max_move: 1.0,
+            min_correlation: None,
         };
         let flat = vec![100u8; 64 * 64];
         let samples = [32.0, 32.0, 30.0, 32.0, 1.0, 0.0, 0.0, 1.0];

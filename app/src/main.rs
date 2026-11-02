@@ -364,6 +364,9 @@ fn refine_check(args: &[String]) -> ExitCode {
         height: meta.height,
         window: meta.window,
         iterations: meta.iterations,
+        terms: 6,
+        max_move: 1.0,
+        min_correlation: None,
     };
     let mut timings = Vec::new();
     let mut result = None;

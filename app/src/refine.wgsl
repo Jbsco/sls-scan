@@ -6,6 +6,10 @@ struct Params {
     count: u32,
     pixel_stride: u32,
     sample_stride: u32,
+    terms: u32,
+    max_move: f32,
+    min_correlation: f32,
+    gate: u32,
     pad0: u32,
 }
 
@@ -130,6 +134,13 @@ fn left_linear(x: f32, y: f32) -> f32 {
     return out;
 }
 
+fn shape_at(k: u32, hw: i32, scale: f32) -> array<f32, 6> {
+    let a = f32(i32(k % params.window) - hw) / scale;
+    let b = f32(i32(k / params.window) - hw) / scale;
+    let quad = select(0.0, 1.0, params.terms > 3u);
+    return array<f32, 6>(1.0, a, b, quad * 0.5 * a * a, quad * a * b, quad * 0.5 * b * b);
+}
+
 fn upper(c: u32, d: u32) -> u32 {
     return c * N - (c * (c + 1u)) / 2u + d;
 }
@@ -142,6 +153,10 @@ fn solve(u0: f32, v0: f32) -> u32 {
         r[c] = sums[RHS + c];
         for (var d = c; d < N; d++) {
             m[c * N + d] = sums[upper(c, d)];
+        }
+        if (params.terms <= 3u && c < 12u && c % 6u >= 3u) {
+            m[c * N + c] = 1.0;
+            r[c] = 0.0;
         }
         if (!(m[c * N + c] > 0.0)) {
             return 2u;
@@ -237,9 +252,7 @@ fn refine(@builtin(workgroup_id) group: vec3<u32>,
         for (var k = lane; k < pixels; k += LANES) {
             let i = i32(k % params.window) - hw;
             let j = i32(k / params.window) - hw;
-            let a = f32(i) / scale;
-            let b = f32(j) / scale;
-            let shape = array<f32, 6>(1.0, a, b, 0.5 * a * a, a * b, 0.5 * b * b);
+            let shape = shape_at(k, hw, scale);
             var u = 0.0;
             var v = 0.0;
             for (var c = 0u; c < 6u; c++) {
@@ -290,9 +303,53 @@ fn refine(@builtin(workgroup_id) group: vec3<u32>,
             break;
         }
     }
+    var correlated = true;
+    if (params.gate != 0u) {
+        var q = array<f32, 14>();
+        for (var c = 0u; c < N; c++) {
+            q[c] = shared_q[c];
+        }
+        var moments = array<f32, 5>();
+        for (var k = lane; k < pixels; k += LANES) {
+            let i = i32(k % params.window) - hw;
+            let j = i32(k / params.window) - hw;
+            let shape = shape_at(k, hw, scale);
+            var u = 0.0;
+            var v = 0.0;
+            for (var c = 0u; c < 6u; c++) {
+                u += q[c] * shape[c];
+                v += q[6u + c] * shape[c];
+            }
+            let f = left_linear(lx + f32(i), ly + f32(j)) - 128.0;
+            let g = right_cubic(lx + f32(i) + u, ly + f32(j) + v).x - 128.0;
+            moments[0] += f;
+            moments[1] += g;
+            moments[2] += f * f;
+            moments[3] += g * g;
+            moments[4] += f * g;
+        }
+        for (var c = 0u; c < 5u; c++) {
+            partial[lane * CHUNK + c] = moments[c];
+        }
+        workgroupBarrier();
+        for (var stride = LANES / 2u; stride > 0u; stride /= 2u) {
+            if (lane < stride) {
+                for (var c = 0u; c < 5u; c++) {
+                    partial[lane * CHUNK + c] += partial[(lane + stride) * CHUNK + c];
+                }
+            }
+            workgroupBarrier();
+        }
+        let n = f32(pixels);
+        let vf = partial[2] - partial[0] * partial[0] / n;
+        let vg = partial[3] - partial[1] * partial[1] / n;
+        let cov = partial[4] - partial[0] * partial[1] / n;
+        correlated = cov / sqrt(max(vf * vg, 1e-12)) >= params.min_correlation;
+    }
     if (lane == 0u) {
         refined[2u * s] = lx + shared_q[0];
         refined[2u * s + 1u] = ly + shared_q[6];
-        kept[s] = select(0u, 1u, state != 2u && abs(shared_q[0] - u0) < 1.0);
+        let moved = abs(shared_q[0] - u0) < params.max_move;
+        kept[s] = select(0u, 1u, state != 2u && moved && correlated);
     }
 }
