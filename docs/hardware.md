@@ -89,7 +89,7 @@ the first two lines when optics and dynamic range matter more than cost.
   and the DLP's temperature drift in the first minutes.
 - Carry the calibration board flat. A bowed board calibrates a bowed camera.
 - Check the calibration after any knock, and before and after carrying the rig to a job
-  (`ROADMAP.md` Phase 5 acceptance).
+  (`ROADMAP.md` Phase 8 acceptance).
 
 ## Surface preparation
 

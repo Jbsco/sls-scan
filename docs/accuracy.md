@@ -60,7 +60,7 @@ calibration and recorded with the scan.
   bowl shape is visible in the residual map (a bowl means a distortion residual).
 - **Scale bar.** Two bars with targets at caliper-measured spacing, placed in different
   orientations. Each measures within 0.2 mm in a single view (Phase 2) and within
-  0.5 mm after a multi-view scan (Phase 3).
+  0.5 mm after a multi-view scan (Phase 5).
 - **Sphere.** A bearing ball or a sprayed sphere of known diameter, scanned from four
   sides. The merged cloud fits its diameter within 0.3 mm, which tests the
   registration as well as the views.
