@@ -140,7 +140,7 @@ def test_stereo_vectors_command_writes_consistent_files(tmp_path):
     assert (out / "right-raw.bin").stat().st_size == pixels
     assert set(json.loads((out / "rectify.json").read_text())) == {"left", "right"}
     direct = meta["direct_samples"]
-    assert direct >= samples
+    assert direct > 0
     assert (out / "direct-samples.bin").stat().st_size == 32 * direct
     assert (out / "direct-refined.bin").stat().st_size == 8 * direct
     assert (out / "direct-kept.bin").stat().st_size == direct

@@ -490,7 +490,7 @@ drops.
 
 NumPy takes about twice as long, since every sample runs two Gauss-Newton passes. Both
 paths read this ball bar 18 to 27 µm long in single views, and affine windows alone read
-it 12 to 16 µm short. The source of that bias is open.
+it 12 to 16 µm short. D34 traces the long reading to coverage of the spheres.
 
 ## D33. Direct matching on the GPU (2026-11-02)
 
@@ -509,3 +509,29 @@ The kernel abandons a sample whose iterate strays 32 px from its start. Second-o
 iterates started with an identity shape pass 2 px on the way to some matches that NumPy
 keeps, so this guard sits well above any move limit. Coarse disparity and sample
 selection remain on the CPU.
+
+## D34. Block matching for the coarse disparity (2026-11-02)
+
+Direct matching takes its coarse disparity from `slscan.stereo.block_disparity`. It
+correlates 7 px blocks at quarter resolution over the whole disparity range and refines
+the best disparity by a parabola. A disparity is kept when it correlates at 0.6 or
+better, leads every disparity more than one step away by 0.05, and the right pixel picks
+it back within one step. Two passes then fill each hole that has three or more valid
+neighbours. Every step suits a GPU kernel, and the Rust application has no OpenCV
+for semi-global matching.
+
+Block matching is also the better start. Over three noise seeds, with 25 px windows and a
+sample every 8 px:
+
+| Calibration and start | Ball bar points | Ball bar spacing | Sphere radius | Sphere form |
+|---|---|---|---|---|
+| True, semi-global | 231 to 237 | +17.7 to +25.0 µm | +3.7 to +6.0 µm | 6.6 to 6.9 µm RMS |
+| True, block | 615 to 617 | +1.0 to +2.7 µm | -0.4 to +1.5 µm | 6.6 to 7.0 µm RMS |
+| Recovered, semi-global | 240 to 241 | +7.0 to +14.1 µm | -13.2 to -12.0 µm | 11.0 to 11.7 µm RMS |
+| Recovered, block | 612 to 616 | +2.4 to +3.9 µm | -10.4 to -6.6 µm | 6.6 to 7.1 µm RMS |
+
+The plate measures 9.1 µm RMS from either start. Semi-global matching leaves much of each
+ball bar sphere without valid disparity, and it seems likely that fits on those partial
+caps read the spacing long. NumPy takes 203 ms for block matching of a view and OpenCV
+4 ms for semi-global matching, so the affine path of `slscan scan-stereo` keeps
+semi-global matching.

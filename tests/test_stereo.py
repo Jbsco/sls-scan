@@ -141,7 +141,7 @@ def test_direct_matches_keep_the_affine_matches(head, pattern):
                                                           0.4, 0.6, step=12, window=25)
     reference, kept = stereo.second_order_matches(rl, rr, left, right, warps, 25)
     rect, _, _, points, refined, direct_kept = stereo.direct_matches(
-        truth, images["left"], images["right"], 0.4, 0.6, step=12)
+        truth, images["left"], images["right"], 0.4, 0.6, step=12, coarse="sgbm")
     index = {tuple(p): i for i, p in enumerate(points)}
     pairs = [(index[tuple(p)], i) for i, p in enumerate(left) if kept[i]]
     both = [(d, r) for d, r in pairs if direct_kept[d]]
@@ -153,18 +153,25 @@ def test_direct_matches_keep_the_affine_matches(head, pattern):
     assert abs(np.mean(np.linalg.norm(cloud - centre, axis=1) - ball.radius)) < 0.000005
 
 
-def test_direct_matches_measure_the_ball_bar_like_affine_matches(head, pattern):
+def test_direct_matches_from_block_disparity_measure_the_ball_bar(head, pattern):
     truth = synthetic.true_stereo_calibration(head, BOARD)
-    images = capture(head, synthetic.stereo_scenes()["ball-bar"], pattern)
-
-    def spacing(cloud):
-        labels = geometry.split_two(cloud)
-        centres = [geometry.fit_sphere(cloud[labels == i])[0] for i in (0, 1)]
-        return np.linalg.norm(centres[0] - centres[1])
-
-    reference, _ = stereo.depth_points(truth, images["left"], images["right"], 0.4, 0.6, 8, 25,
-                                       order=2)
+    bar = synthetic.stereo_scenes()["ball-bar"]
+    images = capture(head, bar, pattern)
     rect, _, _, points, refined, kept = stereo.direct_matches(truth, images["left"],
                                                               images["right"], 0.4, 0.6)
-    direct = stereo.triangulate(rect, points[kept], refined[kept], 0.4, 0.6)
-    assert abs(spacing(direct) - spacing(reference)) < 0.00001
+    cloud = stereo.triangulate(rect, points[kept], refined[kept], 0.4, 0.6)
+    labels = geometry.split_two(cloud)
+    centres = [geometry.fit_sphere(cloud[labels == i])[0] for i in (0, 1)]
+    spacing = np.linalg.norm(centres[0] - centres[1])
+    assert abs(spacing - np.linalg.norm(bar[0].centre - bar[1].centre)) < 0.00001
+
+
+def test_block_disparity_starts_within_reach_of_refinement(head, pattern):
+    truth = synthetic.true_stereo_calibration(head, BOARD)
+    images = capture(head, synthetic.stereo_scenes()["plate"], pattern)
+    rect, rl, rr, points, guesses = stereo.coarse_samples(truth, images["left"], images["right"],
+                                                          0.4, 0.6, step=16, window=25,
+                                                          coarse="block")
+    refined, kept = stereo.direct_refine(rl, rr, points, guesses, 25)
+    assert len(points) > 1000 and kept.mean() > 0.99
+    assert np.percentile(np.abs(refined[kept, 0] - guesses[kept, 0]), 99) < 2.0

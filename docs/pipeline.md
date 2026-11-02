@@ -40,8 +40,10 @@ reads curved surfaces slightly inside. `--near` and `--far` bound the depth sear
 (`docs/accuracy.md`).
 
 `stereo.direct_matches` matches by Gauss-Newton alone: an affine window from the coarse
-disparity, kept on its correlation, then a second-order window (`DESIGN.md` D32). It is
-the reference for the GPU path, which has no Lucas-Kanade or ECC stage.
+disparity, kept on its correlation, then a second-order window (`DESIGN.md` D32). Its
+coarse disparity comes from block matching by normalized cross-correlation at quarter
+resolution (D34). It is the reference for the GPU path, which has no Lucas-Kanade or ECC
+stage.
 
 ## Track and fuse
 
