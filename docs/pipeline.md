@@ -179,6 +179,9 @@ parameters, its affine matches, its coarse samples and their NumPy refinements.
 `sls-scan rectify-check`, `sls-scan coarse-check` and `sls-scan refine-check`, each
 given that directory, compare the kernels with them.
 
+`app/src/depth.rs` chains the kernels into a depth frame from a raw pair, and `sls-scan
+depth-check` compares its points with the NumPy reference (D36).
+
 ## Application
 
 The Rust application owns the loop: triggered capture of frame pairs from the capture
