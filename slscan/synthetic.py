@@ -338,3 +338,113 @@ def moving_plate_error(rig: Rig, cal: calibrate.Calibration, plate: Plate, veloc
     points, _ = triangulate.triangulate(columns.reshape(sv.shape), mask, cal)
     distance = (points - middle.centre) @ middle.axes[:, 2]
     return float(np.sqrt(np.mean(distance ** 2)))
+
+
+def transform_scene(scene: list, r: np.ndarray, t: np.ndarray) -> list:
+    """Return the scene's shapes moved into another frame, x' = r x + t."""
+    moved = []
+    for s in scene:
+        if isinstance(s, Plate):
+            moved.append(Plate(r @ s.centre + t, r @ s.axes, s.half_u, s.half_v, s.albedo))
+        else:
+            moved.append(Ball(r @ s.centre + t, s.radius, s.albedo))
+    return moved
+
+
+@dataclass(frozen=True)
+class StereoRig:
+    """Two cameras and an uncalibrated pattern light. The world is the rig's centre, where
+    the light sits looking along +z; each rotation and translation takes world to device."""
+
+    left: Pinhole
+    left_rotation: np.ndarray
+    left_translation: np.ndarray
+    right: Pinhole
+    right_rotation: np.ndarray
+    right_translation: np.ndarray
+    light: Pinhole
+
+
+def stereo_head(lens_mm: float = 16.0, baseline_m: float = 0.2, crossing_m: float = 0.5,
+                light_width_m: float = 0.3) -> StereoRig:
+    """Two Global Shutter cameras (1456 × 1088, 3.45 µm) toed in to cross at crossing_m, and
+    a 1024 × 768 pattern light between them whose image is light_width_m wide there."""
+    f = lens_mm / 0.00345
+    camera = pinhole(1456, 1088, f, 727.5, 543.5)
+    half = math.degrees(math.atan2(baseline_m / 2.0, crossing_m))
+    r_left = rotation(0.0, half).T
+    r_right = rotation(0.0, -half).T
+    light = pinhole(1024, 768, 1024 * crossing_m / light_width_m, 511.5, 383.5)
+    return StereoRig(camera, r_left, -r_left @ np.array([-baseline_m / 2.0, 0.0, 0.0]),
+                     camera, r_right, -r_right @ np.array([baseline_m / 2.0, 0.0, 0.0]), light)
+
+
+def stereo_extrinsics(rig: StereoRig) -> tuple[np.ndarray, np.ndarray]:
+    """Rotation and translation from the left camera's frame to the right camera's."""
+    r = rig.right_rotation @ rig.left_rotation.T
+    return r, rig.right_translation - r @ rig.left_translation
+
+
+def true_stereo_calibration(rig: StereoRig, spec: calibrate.BoardSpec) -> "calibrate.StereoCalibration":
+    """Return the rig's own parameters as a stereo calibration with zero distortion."""
+    def intrinsics(p):
+        return calibrate.Intrinsics(p.width, p.height, p.matrix.copy(), np.zeros(5), 0.0)
+    r, t = stereo_extrinsics(rig)
+    return calibrate.StereoCalibration(spec, intrinsics(rig.left), intrinsics(rig.right),
+                                       calibrate.Stereo(r, t, 0.0), 0)
+
+
+def to_left(rig: StereoRig, points: np.ndarray) -> np.ndarray:
+    """Move world points (N, 3) into the left camera's frame."""
+    return points @ rig.left_rotation.T + rig.left_translation
+
+
+def random_dots(width: int, height: int, blob_px: float, defocus_px: float,
+                rng: np.random.Generator) -> np.ndarray:
+    """Return a binary random-dot pattern, softened by defocus, as float32 in 0 to 1."""
+    noise = cv2.GaussianBlur(rng.random((height, width)).astype(np.float32), (0, 0), blob_px / 2.0)
+    dots = (noise > np.median(noise)).astype(np.float32)
+    return cv2.GaussianBlur(dots, (0, 0), defocus_px) if defocus_px > 0 else dots
+
+
+def stereo_capture(rig: StereoRig, scene: list, pattern: np.ndarray, rng: np.random.Generator,
+                   ambient: float = 15.0, gain: float = 200.0, noise: float = 1.0) -> dict:
+    """Render the scene lit by the pattern in both cameras at the same instant."""
+    def render(camera, r_cam, t_cam):
+        shapes = transform_scene(scene, r_cam, t_cam)
+        sv = scene_view(Rig(camera, rig.light, r_cam.T, -r_cam.T @ t_cam), shapes)
+        u = np.where(sv.lit, sv.u, -1.0).astype(np.float32).reshape(sv.shape)
+        v = np.where(sv.lit, sv.v, -1.0).astype(np.float32).reshape(sv.shape)
+        lit = cv2.remap(pattern, u, v, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT,
+                        borderValue=0.0).ravel()
+        image = sv.albedo * (ambient + gain * np.where(sv.lit, lit, 0.0))
+        image = image + noise * rng.standard_normal(image.shape)
+        return np.clip(np.rint(image), 0, 255).astype(np.uint8).reshape(sv.shape)
+    return {"left": render(rig.left, rig.left_rotation, rig.left_translation),
+            "right": render(rig.right, rig.right_rotation, rig.right_translation)}
+
+
+def stereo_calibration_views(rig: StereoRig, spec: calibrate.BoardSpec, seed: int = 0,
+                             crossing_m: float = 0.5):
+    """Yield each board pose of board_poses seen by both cameras under room light."""
+    rng = np.random.default_rng(seed)
+    for r, t in board_poses(spec, crossing_m):
+        images = {}
+        for side, camera, r_cam, t_cam in (("left", rig.left, rig.left_rotation, rig.left_translation),
+                                           ("right", rig.right, rig.right_rotation,
+                                            rig.right_translation)):
+            v = view(Rig(camera, rig.light, np.eye(3), np.zeros(3)), spec, r_cam @ r,
+                     r_cam @ t + t_cam)
+            image = v.albedo * 200.0 + rng.standard_normal(v.albedo.shape).astype(np.float32)
+            images[side] = np.clip(np.rint(image), 0, 255).astype(np.uint8)
+        yield images
+
+
+def stereo_scenes(crossing_m: float = 0.5) -> dict:
+    """Uncoated acceptance artifacts at crossing_m in the rig's frame: an 80 mm plate, a
+    25 mm sphere and a ball bar of two 25 mm spheres about 80 mm apart."""
+    z = crossing_m
+    return {"plate": [Plate(np.array([0.0, 0.0, z]), rotation(10, -15), 0.04, 0.04)],
+            "sphere": [Ball(np.array([0.003, -0.002, z]), 0.0125)],
+            "ball-bar": [Ball(np.array([-0.04, 0.004, z]), 0.0125),
+                         Ball(np.array([0.04, -0.004, z + 0.002]), 0.0125)]}
