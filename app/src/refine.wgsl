@@ -24,11 +24,16 @@ struct Params {
 
 const N: u32 = 14u;
 const LANES: u32 = 64u;
-const CHUNK: u32 = 40u;
 const RHS: u32 = 105u;
+const SUMS: u32 = 119u;
+// Each lane's accumulator row is 119 long, odd, so lanes land on different memory banks.
+const STRIDE: u32 = 119u;
 
-var<workgroup> partial: array<f32, 2560>;
+var<workgroup> acc: array<f32, 7616>;
 var<workgroup> sums: array<f32, 120>;
+var<workgroup> chol: array<f32, 196>;
+var<workgroup> rhs: array<f32, 14>;
+var<workgroup> scaling: array<f32, 14>;
 var<workgroup> shared_q: array<f32, 14>;
 var<workgroup> state: u32;
 
@@ -145,72 +150,102 @@ fn upper(c: u32, d: u32) -> u32 {
     return c * N - (c * (c + 1u)) / 2u + d;
 }
 
-fn solve(u0: f32, v0: f32) -> u32 {
-    var m = array<f32, 196>();
-    var r = array<f32, 14>();
-    var scaling = array<f32, 14>();
-    for (var c = 0u; c < N; c++) {
-        r[c] = sums[RHS + c];
-        for (var d = c; d < N; d++) {
-            m[c * N + d] = sums[upper(c, d)];
+fn reduce(lane: u32, count: u32) {
+    workgroupBarrier();
+    for (var c = lane; c < count; c += LANES) {
+        var total = 0.0;
+        for (var l = 0u; l < LANES; l++) {
+            total += acc[l * STRIDE + c];
         }
+        sums[c] = total;
+    }
+    workgroupBarrier();
+}
+
+fn solve(lane: u32, u0: f32, v0: f32) {
+    if (lane < N) {
+        let c = lane;
+        for (var d = c; d < N; d++) {
+            chol[c * N + d] = sums[upper(c, d)];
+        }
+        rhs[c] = sums[RHS + c];
         if (params.terms <= 3u && c < 12u && c % 6u >= 3u) {
-            m[c * N + c] = 1.0;
-            r[c] = 0.0;
+            chol[c * N + c] = 1.0;
+            rhs[c] = 0.0;
         }
-        if (!(m[c * N + c] > 0.0)) {
-            return 2u;
-        }
-        scaling[c] = inverseSqrt(m[c * N + c]);
+        let diag = chol[c * N + c];
+        scaling[c] = select(0.0, inverseSqrt(diag), diag > 0.0);
     }
-    for (var c = 0u; c < N; c++) {
-        r[c] *= scaling[c];
-        for (var d = c; d < N; d++) {
-            m[c * N + d] *= scaling[c] * scaling[d];
-        }
-    }
-    for (var c = 0u; c < N; c++) {
-        var pivot = m[c * N + c];
-        for (var k = 0u; k < c; k++) {
-            pivot -= m[k * N + c] * m[k * N + c];
-        }
-        if (!(pivot > 1e-10)) {
-            return 2u;
-        }
-        m[c * N + c] = sqrt(pivot);
-        for (var d = c + 1u; d < N; d++) {
-            var e = m[c * N + d];
-            for (var k = 0u; k < c; k++) {
-                e -= m[k * N + c] * m[k * N + d];
+    workgroupBarrier();
+    if (lane == 0u) {
+        state = 0u;
+        for (var c = 0u; c < N; c++) {
+            if (!(chol[c * N + c] > 0.0)) {
+                state = 2u;
             }
-            m[c * N + d] = e / m[c * N + c];
         }
     }
+    if (workgroupUniformLoad(&state) == 2u) {
+        return;
+    }
+    if (lane < N) {
+        let c = lane;
+        rhs[c] *= scaling[c];
+        for (var d = c; d < N; d++) {
+            chol[c * N + d] *= scaling[c] * scaling[d];
+        }
+    }
+    workgroupBarrier();
     for (var c = 0u; c < N; c++) {
-        var e = r[c];
-        for (var k = 0u; k < c; k++) {
-            e -= m[k * N + c] * r[k];
+        if (lane == 0u) {
+            var pivot = chol[c * N + c];
+            for (var k = 0u; k < c; k++) {
+                pivot -= chol[k * N + c] * chol[k * N + c];
+            }
+            if (pivot > 1e-10) {
+                chol[c * N + c] = sqrt(pivot);
+            } else {
+                state = 2u;
+            }
         }
-        r[c] = e / m[c * N + c];
-    }
-    for (var c = N; c > 0u; c--) {
-        let row = c - 1u;
-        var e = r[row];
-        for (var k = row + 1u; k < N; k++) {
-            e -= m[row * N + k] * r[k];
+        if (workgroupUniformLoad(&state) == 2u) {
+            return;
         }
-        r[row] = e / m[row * N + row];
+        if (lane > c && lane < N) {
+            let d = lane;
+            var e = chol[c * N + d];
+            for (var k = 0u; k < c; k++) {
+                e -= chol[k * N + c] * chol[k * N + d];
+            }
+            chol[c * N + d] = e / chol[c * N + c];
+        }
+        workgroupBarrier();
     }
-    for (var c = 0u; c < N; c++) {
-        shared_q[c] += r[c] * scaling[c];
+    if (lane == 0u) {
+        for (var c = 0u; c < N; c++) {
+            var e = rhs[c];
+            for (var k = 0u; k < c; k++) {
+                e -= chol[k * N + c] * rhs[k];
+            }
+            rhs[c] = e / chol[c * N + c];
+        }
+        for (var c = N; c > 0u; c--) {
+            let row = c - 1u;
+            var e = rhs[row];
+            for (var k = row + 1u; k < N; k++) {
+                e -= chol[row * N + k] * rhs[k];
+            }
+            rhs[row] = e / chol[row * N + row];
+        }
+        for (var c = 0u; c < N; c++) {
+            shared_q[c] += rhs[c] * scaling[c];
+        }
+        if (!(abs(shared_q[0] - u0) < 32.0 && abs(shared_q[6] - v0) < 32.0)) {
+            state = 2u;
+        } else if (max(abs(rhs[0] * scaling[0]), abs(rhs[6] * scaling[6])) < 1e-5) {
+            state = 1u;
+        }
     }
-    if (!(abs(shared_q[0] - u0) < 32.0 && abs(shared_q[6] - v0) < 32.0)) {
-        return 2u;
-    }
-    if (max(abs(r[0] * scaling[0]), abs(r[6] * scaling[6])) < 1e-5) {
-        return 1u;
-    }
-    return 0u;
 }
 
 @compute @workgroup_size(64)
@@ -247,8 +282,9 @@ fn refine(@builtin(workgroup_id) group: vec3<u32>,
         for (var c = 0u; c < N; c++) {
             q[c] = shared_q[c];
         }
-        // Explicit initializers zero these sums on every iteration.
-        var acc = array<f32, 120>();
+        for (var c = 0u; c < SUMS; c++) {
+            acc[lane * STRIDE + c] = 0.0;
+        }
         for (var k = lane; k < pixels; k += LANES) {
             let i = i32(k % params.window) - hw;
             let j = i32(k / params.window) - hw;
@@ -269,36 +305,16 @@ fn refine(@builtin(workgroup_id) group: vec3<u32>,
             }
             jac[12] = g.x;
             jac[13] = 1.0;
+            let row = lane * STRIDE;
             for (var c = 0u; c < N; c++) {
-                acc[RHS + c] += jac[c] * residual;
+                acc[row + RHS + c] += jac[c] * residual;
                 for (var d = c; d < N; d++) {
-                    acc[upper(c, d)] += jac[c] * jac[d];
+                    acc[row + upper(c, d)] += jac[c] * jac[d];
                 }
             }
         }
-        for (var chunk = 0u; chunk < 3u; chunk++) {
-            for (var c = 0u; c < CHUNK; c++) {
-                partial[lane * CHUNK + c] = acc[chunk * CHUNK + c];
-            }
-            workgroupBarrier();
-            for (var stride = LANES / 2u; stride > 0u; stride /= 2u) {
-                if (lane < stride) {
-                    for (var c = 0u; c < CHUNK; c++) {
-                        partial[lane * CHUNK + c] += partial[(lane + stride) * CHUNK + c];
-                    }
-                }
-                workgroupBarrier();
-            }
-            if (lane == 0u) {
-                for (var c = 0u; c < CHUNK; c++) {
-                    sums[chunk * CHUNK + c] = partial[c];
-                }
-            }
-            workgroupBarrier();
-        }
-        if (lane == 0u) {
-            state = solve(u0, v0);
-        }
+        reduce(lane, SUMS);
+        solve(lane, u0, v0);
         if (workgroupUniformLoad(&state) != 0u) {
             break;
         }
@@ -329,21 +345,13 @@ fn refine(@builtin(workgroup_id) group: vec3<u32>,
             moments[4] += f * g;
         }
         for (var c = 0u; c < 5u; c++) {
-            partial[lane * CHUNK + c] = moments[c];
+            acc[lane * STRIDE + c] = moments[c];
         }
-        workgroupBarrier();
-        for (var stride = LANES / 2u; stride > 0u; stride /= 2u) {
-            if (lane < stride) {
-                for (var c = 0u; c < 5u; c++) {
-                    partial[lane * CHUNK + c] += partial[(lane + stride) * CHUNK + c];
-                }
-            }
-            workgroupBarrier();
-        }
+        reduce(lane, 5u);
         let n = f32(pixels);
-        let vf = partial[2] - partial[0] * partial[0] / n;
-        let vg = partial[3] - partial[1] * partial[1] / n;
-        let cov = partial[4] - partial[0] * partial[1] / n;
+        let vf = sums[2] - sums[0] * sums[0] / n;
+        let vg = sums[3] - sums[1] * sums[1] / n;
+        let cov = sums[4] - sums[0] * sums[1] / n;
         correlated = cov / sqrt(max(vf * vg, 1e-12)) >= params.min_correlation;
     }
     if (lane == 0u) {
