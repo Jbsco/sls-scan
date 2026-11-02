@@ -30,10 +30,14 @@ the corners both see, then writes `stereo.yaml`.
 A stereo view is a directory with `left.png` and `right.png` under the pattern light.
 `slscan scan-stereo <view>` rectifies both, takes a coarse disparity from semi-global
 matching at quarter resolution, and refines a sample every 8 pixels by Lucas-Kanade and
-an affine window of 21 pixels fitted with ECC. A sample is kept when its window lies on
-lit, matched surface, correlates at 0.95 or better, and lands within 3 pixels of its
-guess. `--near` and `--far` bound the depth search, and `--step` and `--window` set
-density and the trade between noise and curvature bias (`docs/accuracy.md`).
+an affine window fitted with ECC. A sample is kept when its window lies on lit, matched
+surface, correlates at 0.95 or better, and lands within 3 pixels of its guess.
+
+A second-order window of 25 pixels, fitted by Gauss-Newton, then follows the surface's
+curvature (`DESIGN.md` D28). `--order 1` stops at the affine window, which is faster and
+reads curved surfaces slightly inside. `--near` and `--far` bound the depth search, and
+`--step` and `--window` set density and the trade between noise and curvature bias
+(`docs/accuracy.md`).
 
 ## Track and fuse
 
@@ -41,9 +45,12 @@ density and the trade between noise and curvature bias (`docs/accuracy.md`).
 the previous pose advanced by the last motion, then adds its points to the model as
 averages over 0.5 mm voxels (`DESIGN.md` D26). A captured sweep is a directory of
 `frame_000` onward, each with `left.png` and `right.png` (D27), and `slscan fuse <sweep>`
-matches, tracks and fuses it into one PLY file. `slscan sweep-bench` runs a synthetic
-sweep through matching, tracking and fusion and compares poses and artifacts with the
-truth.
+matches, tracks and fuses it into one PLY file.
+
+`slscan sweep-bench` runs a synthetic sweep through matching, tracking and fusion and
+compares poses and artifacts with the truth. `slscan fuse` and `slscan sweep-bench`
+match with affine windows of 21 pixels by default, for speed, and take `--order 2` for
+second-order windows.
 
 ## Patterns
 

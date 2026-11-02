@@ -66,12 +66,14 @@ def coarse_disparity(left: np.ndarray, right: np.ndarray, d_min: float, d_max: f
 
 def refine(left: np.ndarray, right: np.ndarray, points: np.ndarray, guesses: np.ndarray,
            window: int = 21, min_correlation: float = 0.95,
-           max_shift: float = 3.0) -> tuple[np.ndarray, np.ndarray]:
+           max_shift: float = 3.0, return_warps: bool = False):
     """Refine matches of left points near their right guesses. Returns the kept left and
-    right points (N, 2). A match is dropped when its affine window correlates below
-    min_correlation or lands more than max_shift pixels from its guess."""
+    right points (N, 2), and with return_warps each kept window's affine part (N, 2, 2).
+    A match is dropped when its affine window correlates below min_correlation or lands
+    more than max_shift pixels from its guess."""
     if len(points) == 0:
-        return np.empty((0, 2)), np.empty((0, 2))
+        empty = (np.empty((0, 2)), np.empty((0, 2)))
+        return (*empty, np.empty((0, 2, 2))) if return_warps else empty
     params = dict(winSize=(window, window), maxLevel=2, flags=cv2.OPTFLOW_USE_INITIAL_FLOW,
                   criteria=(cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS, 50, 1e-4))
     tracked, status, _ = cv2.calcOpticalFlowPyrLK(left, right, points.astype(np.float32),
@@ -82,7 +84,7 @@ def refine(left: np.ndarray, right: np.ndarray, points: np.ndarray, guesses: np.
     h, w = left.shape
     lf, rf = left.astype(np.float32), right.astype(np.float32)
     criteria = (cv2.TERM_CRITERIA_COUNT | cv2.TERM_CRITERIA_EPS, 100, 1e-6)
-    kept_left, kept_right = [], []
+    kept_left, kept_right, kept_warps = [], [], []
     for (x, y), (u, v) in zip(points[ok], tracked[ok]):
         xi, yi, ui, vi = int(round(x)), int(round(y)), int(round(u)), int(round(v))
         x0, y0 = ui - hw - margin, vi - hw - margin
@@ -108,18 +110,95 @@ def refine(left: np.ndarray, right: np.ndarray, points: np.ndarray, guesses: np.
             continue
         kept_left.append((x, y))
         kept_right.append(matched)
-    return np.array(kept_left).reshape(-1, 2), np.array(kept_right).reshape(-1, 2)
+        kept_warps.append(warp[:, :2].copy())
+    left_out, right_out = np.array(kept_left).reshape(-1, 2), np.array(kept_right).reshape(-1, 2)
+    if return_warps:
+        return left_out, right_out, np.array(kept_warps).reshape(-1, 2, 2)
+    return left_out, right_out
+
+
+def refine_second_order(left: np.ndarray, right: np.ndarray, left_points: np.ndarray,
+                        right_points: np.ndarray, affine: np.ndarray, window: int = 21,
+                        iterations: int = 20, batch: int = 1024) -> tuple[np.ndarray, np.ndarray]:
+    """Refine matches with second-order windows by Gauss-Newton.
+
+    Each window maps to the right image through a quadratic displacement field, 12
+    parameters, with an intensity gain and offset, starting from the affine match. Returns
+    the left points and their refined right points. A match is dropped when its solve
+    fails or its column moves 1 px or more from the affine match.
+    """
+    hw = window // 2
+    dy, dx = np.mgrid[-hw:hw + 1, -hw:hw + 1].astype(np.float32)
+    dx, dy = dx.ravel(), dy.ravel()
+    shape = np.stack([np.ones_like(dx), dx, dy, 0.5 * dx * dx, dx * dy, 0.5 * dy * dy], axis=1)
+    lf, rf = left.astype(np.float32), right.astype(np.float32)
+    gx = cv2.Scharr(rf, cv2.CV_32F, 1, 0) / 32.0
+    gy = cv2.Scharr(rf, cv2.CV_32F, 0, 1) / 32.0
+    out_left, out_right = [], []
+    for start in range(0, len(left_points), batch):
+        lp = left_points[start:start + batch]
+        rp = right_points[start:start + batch]
+        a = affine[start:start + batch]
+        n = len(lp)
+        f = cv2.remap(lf, (lp[:, :1] + dx).astype(np.float32), (lp[:, 1:2] + dy).astype(np.float32),
+                      cv2.INTER_LINEAR)
+        p = np.zeros((n, 2, 6), dtype=np.float64)
+        p[:, 0, 0] = rp[:, 0] - lp[:, 0]
+        p[:, 1, 0] = rp[:, 1] - lp[:, 1]
+        p[:, 0, 1], p[:, 0, 2] = a[:, 0, 0] - 1.0, a[:, 0, 1]
+        p[:, 1, 1], p[:, 1, 2] = a[:, 1, 0], a[:, 1, 1] - 1.0
+        gain = np.ones(n)
+        offset = np.zeros(n)
+        ok = np.ones(n, dtype=bool)
+        active = np.arange(n)
+        for _ in range(iterations):
+            if len(active) == 0:
+                break
+            pa = p[active]
+            u = pa[:, 0] @ shape.T
+            v = pa[:, 1] @ shape.T
+            mx = (lp[active, :1] + dx + u).astype(np.float32)
+            my = (lp[active, 1:2] + dy + v).astype(np.float32)
+            g = cv2.remap(rf, mx, my, cv2.INTER_CUBIC)
+            gxs = cv2.remap(gx, mx, my, cv2.INTER_CUBIC)
+            gys = cv2.remap(gy, mx, my, cv2.INTER_CUBIC)
+            ga = gain[active][:, None]
+            residual = f[active] - (ga * g + offset[active][:, None])
+            jac = np.concatenate([(ga * gxs)[:, :, None] * shape[None],
+                                  (ga * gys)[:, :, None] * shape[None],
+                                  g[:, :, None], np.ones_like(g)[:, :, None]], axis=2)
+            hessian = np.einsum("nki,nkj->nij", jac, jac).astype(np.float64)
+            rhs = np.einsum("nki,nk->ni", jac, residual).astype(np.float64)
+            try:
+                step = np.linalg.solve(hessian + 1e-9 * np.eye(14), rhs[:, :, None])[:, :, 0]
+            except np.linalg.LinAlgError:
+                ok[active] = False
+                break
+            p[active, 0] += step[:, 0:6]
+            p[active, 1] += step[:, 6:12]
+            gain[active] += step[:, 12]
+            offset[active] += step[:, 13]
+            moving = np.max(np.abs(step[:, [0, 6]]), axis=1) >= 1e-5
+            active = active[moving]
+        ok &= np.all(np.isfinite(p.reshape(n, -1)), axis=1)
+        ok &= np.abs(p[:, 0, 0] - (rp[:, 0] - lp[:, 0])) < 1.0
+        out_left.append(lp[ok])
+        out_right.append(np.column_stack([lp[ok, 0] + p[ok, 0, 0], lp[ok, 1] + p[ok, 1, 0]]))
+    if not out_left:
+        return np.empty((0, 2)), np.empty((0, 2))
+    return np.vstack(out_left), np.vstack(out_right)
 
 
 def depth_points(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
                  near_m: float, far_m: float, step: int = 8, window: int = 21,
-                 min_level: float = 6.0) -> tuple[np.ndarray, Rectification]:
+                 min_level: float = 6.0, order: int = 1) -> tuple[np.ndarray, Rectification]:
     """Return points (N, 3) in metres in the left camera's frame, matched on a grid of
     rectified left pixels every step pixels, for surfaces between near_m and far_m.
 
     A sample is matched only when its whole window lies on lit surface (local mean at or
     above min_level in the left image) that semi-global matching also matched, so no window
-    straddles an edge. The right side of each match is judged by its correlation."""
+    straddles an edge. The right side of each match is judged by its correlation. Order 2
+    refines each affine match with a second-order window."""
     rect = rectify(cal)
     rl = cv2.remap(left, *rect.left_maps, cv2.INTER_LINEAR)
     rr = cv2.remap(right, *rect.right_maps, cv2.INTER_LINEAR)
@@ -135,7 +214,11 @@ def depth_points(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
     points, d = points[valid], d[valid]
     guesses = points.copy()
     guesses[:, 0] -= d
-    left_pts, right_pts = refine(rl, rr, points, guesses, window)
+    if order == 2:
+        left_pts, right_pts, warps = refine(rl, rr, points, guesses, window, return_warps=True)
+        left_pts, right_pts = refine_second_order(rl, rr, left_pts, right_pts, warps, window)
+    else:
+        left_pts, right_pts = refine(rl, rr, points, guesses, window)
     if len(left_pts) == 0:
         return np.empty((0, 3)), rect
     right_pts[:, 1] = left_pts[:, 1]

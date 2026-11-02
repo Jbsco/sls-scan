@@ -49,10 +49,12 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   handle or tripod adapter, a case for the board and markers, drawings in CAD.
   Acceptance: a calibration before and after carrying the rig to a site agrees within
   0.1 % in focal length and 0.2 mm in baseline.
-- Phase 9, open. Near-range accuracy (D23, D25). 16 mm lenses at 0.5 m, a low-expansion
-  bar, a glass target, and matching windows that follow curvature. Acceptance on the
-  bench: an 80 mm flat fits a plane under 0.01 mm RMS, a 25 mm sphere's radius lands
-  within 0.01 mm, and a ball bar's spacing within 0.02 mm.
+- Phase 9, in progress. Near-range accuracy (D23, D25). 16 mm lenses at 0.5 m, a
+  low-expansion bar, a glass target, and matching windows that follow curvature.
+  Acceptance on the bench: an 80 mm flat fits a plane under 0.01 mm RMS, a 25 mm
+  sphere's radius lands within 0.01 mm, and a ball bar's spacing within 0.02 mm.
+  Second-order matching windows are in place and remove the curvature bias on the
+  virtual bench (D28).
 - Phase 10, open. Applications. An interior a few metres across, a pattern and the mold
   taken from it, small parts on a turntable with a known axis. Acceptance per job: scale
   bars within the Phase 6 figure and datum residuals within the Phase 7 figure.
