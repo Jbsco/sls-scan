@@ -951,6 +951,70 @@ fn coarse_check(args: &[String]) -> ExitCode {
     }
 }
 
+/// How depth frame points compare with reference points.
+struct Comparison {
+    missing: usize,
+    extra: usize,
+    count: usize,
+    median: f64,
+    p99: f64,
+    largest: f64,
+}
+
+impl Comparison {
+    /// At most 0.5 % missing or extra, 99th percentile within 1 µm, all within 5 µm.
+    fn matches(&self) -> bool {
+        let count = self.count.max(1) as f64;
+        (self.missing + self.extra) as f64 / count <= 0.005
+            && self.p99 <= 1e-6
+            && self.largest <= 5e-6
+    }
+
+    fn summary(&self) -> String {
+        format!(
+            "against {} reference points: {} missing, {} extra, distance median {:.3} µm, 99th percentile {:.3} µm, largest {:.3} µm",
+            self.count,
+            self.missing,
+            self.extra,
+            self.median * 1e6,
+            self.p99 * 1e6,
+            self.largest * 1e6
+        )
+    }
+}
+
+/// Match depth frame points with reference rows (left x, left y, then the point) by their
+/// left pixel.
+fn compare_points(samples: &[[f32; 2]], points: &[[f64; 3]], reference: &[u8]) -> Comparison {
+    let mut expected = std::collections::HashMap::new();
+    for row in reference.chunks_exact(40) {
+        let v = doubles(row);
+        expected.insert((v[0] as i64, v[1] as i64), [v[2], v[3], v[4]]);
+    }
+    let mut extra = 0usize;
+    let mut distances = Vec::new();
+    for (s, p) in samples.iter().zip(points) {
+        match expected.get(&(s[0] as i64, s[1] as i64)) {
+            Some(r) => {
+                let squares = (0..3).map(|i| (p[i] - r[i]).powi(2)).sum::<f64>();
+                distances.push(squares.sqrt());
+            }
+            None => extra += 1,
+        }
+    }
+    let missing = expected.len() - distances.len();
+    distances.sort_by(f64::total_cmp);
+    let at = |q: usize| distances.get(q).copied().unwrap_or(0.0);
+    Comparison {
+        missing,
+        extra,
+        count: expected.len(),
+        median: at(distances.len() / 2),
+        p99: at(distances.len() * 99 / 100),
+        largest: distances.last().copied().unwrap_or(0.0),
+    }
+}
+
 fn depth_check(args: &[String]) -> ExitCode {
     let Some(dir) = args.first().map(PathBuf::from) else {
         eprintln!("usage: sls-scan depth-check <vector directory> [--fallback]");
@@ -1035,33 +1099,7 @@ fn depth_check(args: &[String]) -> ExitCode {
     let Some((total, result)) = best else {
         return ExitCode::FAILURE;
     };
-    let mut expected = std::collections::HashMap::new();
-    for row in reference.chunks_exact(40) {
-        let v: Vec<f64> = row
-            .chunks_exact(8)
-            .map(|b| f64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
-            .collect();
-        expected.insert((v[0] as i64, v[1] as i64), [v[2], v[3], v[4]]);
-    }
-    let mut extra = 0usize;
-    let mut distances = Vec::new();
-    for (s, p) in result.samples.iter().zip(&result.points) {
-        match expected.get(&(s[0] as i64, s[1] as i64)) {
-            Some(r) => {
-                let squares = (0..3).map(|i| (p[i] - r[i]).powi(2)).sum::<f64>();
-                distances.push(squares.sqrt());
-            }
-            None => extra += 1,
-        }
-    }
-    let missing = expected.len() - distances.len();
-    distances.sort_by(f64::total_cmp);
-    let median = distances.get(distances.len() / 2).copied().unwrap_or(0.0);
-    let p99 = distances
-        .get(distances.len() * 99 / 100)
-        .copied()
-        .unwrap_or(0.0);
-    let largest = distances.last().copied().unwrap_or(0.0);
+    let comparison = compare_points(&result.samples, &result.points, &reference);
     let stages: Vec<String> = result
         .timings
         .iter()
@@ -1075,15 +1113,8 @@ fn depth_check(args: &[String]) -> ExitCode {
         meta.height,
         stages.join(", ")
     );
-    println!(
-        "against {} reference points: {missing} missing, {extra} extra, distance median {:.3} µm, 99th percentile {:.3} µm, largest {:.3} µm",
-        expected.len(),
-        median * 1e6,
-        p99 * 1e6,
-        largest * 1e6
-    );
-    let differing = (missing + extra) as f64 / expected.len().max(1) as f64;
-    if differing <= 0.005 && p99 <= 1e-6 && largest <= 5e-6 {
+    println!("{}", comparison.summary());
+    if comparison.matches() {
         println!("depth check: GPU matches the NumPy reference");
         ExitCode::SUCCESS
     } else {
