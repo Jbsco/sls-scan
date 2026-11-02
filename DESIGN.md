@@ -698,3 +698,23 @@ The window's depth worker fuses every frame it runs and the scene panel draws th
 frames the model grows to 51,701 points with an ICP residual of 20 to 21 µm, and fusion
 takes 350 to 440 ms per frame on one core. Like the reference, it recomputes every
 model normal for each frame, which is the cost to cut next.
+
+## D43. Fusion on every core (2026-11-02)
+
+Fusion of D42 took 350 to 440 ms per stand-in frame, in ICP for 258 to 282 ms and in
+model normals for 51 to 122 ms. Two changes cut it. Grid cells hash with a
+multiply-and-rotate function. The standard hasher resists keys chosen to collide, which
+voxel indices from a scan are not. Each ICP iteration splits its correspondences
+over scoped threads that each sum their own normal equations, added in a fixed order,
+and model normals split over the same threads by point.
+
+| Version | Fusion per frame, six stand-in frames |
+|---|---|
+| D42 | 53 to 444 ms |
+| Cell hasher | 38 to 278 ms |
+| Cell hasher and 16 threads | 10 to 58 ms |
+
+Times are on a 16-thread Ryzen 7 7700X as the model grows from 16,292 to 51,701 points.
+The model, poses and ICP residuals are unchanged, and the fusion check still agrees with
+NumPy under 0.001 µm. A stand-in frame now takes about 110 ms for depth and 60 ms for
+fusion at most, so refinement on the GPU leads again.
