@@ -195,6 +195,7 @@ impl ScanApp {
             pitch: self.pitch,
             steps: self.steps,
             frames: if stereo { self.stereo_frames } else { 1 },
+            rate_hz: 0,
         };
         let repaint = ctx.clone();
         thread::spawn(move || {
@@ -662,8 +663,8 @@ impl ScanApp {
                 |ns| format!("mean interval {:.3} ms ({:.1} Hz)", ns / 1.0e6, 1.0e9 / ns),
             );
             ui.label(format!(
-                "missing {:?}, in order {}, {timing}",
-                stats.missing, stats.in_order
+                "missing {:?}, in order {}, pairs in step {}, {timing}",
+                stats.missing, stats.in_order, stats.in_step
             ));
         }
         if !self.depth_status.is_empty() {

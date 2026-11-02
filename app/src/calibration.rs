@@ -159,6 +159,7 @@ fn capture_set(
         pitch: 32,
         steps: 4,
         frames: 1,
+        rate_hz: 0,
     };
     let mut projector = None;
     let mut failure = None;
