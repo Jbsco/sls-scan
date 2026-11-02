@@ -1,5 +1,8 @@
 # sls-scan
 
+[![Tests](https://github.com/Jbsco/sls-scan/actions/workflows/test.yml/badge.svg)](https://github.com/Jbsco/sls-scan/actions/workflows/test.yml)
+[![Style](https://github.com/Jbsco/sls-scan/actions/workflows/style.yml/badge.svg)](https://github.com/Jbsco/sls-scan/actions/workflows/style.yml)
+
 A structured-light 3D scanner built from a camera and a projector on a rigid bar, with
 its calibration, capture, decoding, triangulation, registration and meshing scripted
 on Linux. It scans objects from a few centimetres to a few metres across at an accuracy
