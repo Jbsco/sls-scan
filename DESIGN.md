@@ -318,3 +318,16 @@ and target accuracy add to that. The head needs a precision glass target, a
 low-expansion bar, and calibrated spheres and a ball bar for its acceptance. An
 aluminium bar shifts depth scale by about 0.01 mm per kelvin at this geometry.
 
+## D24. Continuous scanning at near range (2026-11-01)
+
+Motion during a phase cycle biases the decoded phase. `slscan motion-error` renders one
+cycle on a moving plate and reports its depth error. The case modelled is the Global
+Shutter camera at 60 fps, a four-step cycle on a 60 Hz projector and a matched projector
+image. Error per cycle stays under 0.02 mm up to 2 mm/s in any direction, and up to
+5 mm/s across the optical axis. Motion along the axis costs most: 28.9 µm at 5 mm/s.
+
+Continuous scanning with this head is therefore a slow sweep at up to 2 mm/s, guided by
+the preview at 15 depth frames per second and fused into the model. Full-resolution
+static views stay available where a single view must carry the measurement. A 120 Hz
+projector halves the motion error only with a camera that keeps pace, and the Global
+Shutter camera stops at 60 fps, so that step needs a faster global-shutter camera.
