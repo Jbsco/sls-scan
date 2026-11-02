@@ -305,10 +305,11 @@ def second_order_matches(left: np.ndarray, right: np.ndarray, left_points: np.nd
 
 def coarse_samples(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
                    near_m: float, far_m: float, step: int = 8, window: int = 21,
-                   min_level: float = 6.0):
+                   min_level: float = 6.0, coarse: str = "sgbm"):
     """Rectify a view and pick a grid of left pixels every step pixels with right guesses
-    from the coarse disparity, for surfaces between near_m and far_m. Returns the
-    rectification, both rectified images, the left points (N, 2) and their guesses (N, 2).
+    from the coarse disparity, semi-global matching ("sgbm") or block_disparity ("block"),
+    for surfaces between near_m and far_m. Returns the rectification, both rectified
+    images, the left points (N, 2) and their guesses (N, 2).
 
     A sample is picked only when its whole window lies on lit surface (local mean at or
     above min_level in the left image) that semi-global matching also matched, so no window
@@ -316,7 +317,8 @@ def coarse_samples(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
     rect = rectify(cal)
     rl = cv2.remap(left, *rect.left_maps, cv2.INTER_LINEAR)
     rr = cv2.remap(right, *rect.right_maps, cv2.INTER_LINEAR)
-    coarse = coarse_disparity(rl, rr, disparity_at(rect, far_m), disparity_at(rect, near_m))
+    match = block_disparity if coarse == "block" else coarse_disparity
+    coarse = match(rl, rr, disparity_at(rect, far_m), disparity_at(rect, near_m))
     h, w = rl.shape
     ys, xs = np.mgrid[window:h - window:step, window:w - window:step]
     points = np.column_stack([xs.ravel(), ys.ravel()]).astype(np.float64)
@@ -346,14 +348,15 @@ def affine_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
 def direct_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
                    near_m: float, far_m: float, step: int = 8, window: int = 25,
                    min_level: float = 6.0, max_move: float = 3.0,
-                   min_correlation: float = 0.95):
+                   min_correlation: float = 0.95, coarse: str = "block"):
     """Match the samples of coarse_samples by Gauss-Newton alone, without Lucas-Kanade or
-    ECC: affine windows from the coarse disparity, kept when they move under max_move px
-    and correlate at min_correlation or better, then second-order windows from there.
+    ECC: affine windows from the coarse disparity of block_disparity, or of semi-global
+    matching when coarse is "sgbm", kept when they move under max_move px and correlate
+    at min_correlation or better, then second-order windows from there.
     Returns the rectification, both rectified images, the left points (N, 2), their
     refined right points (N, 2) and a kept flag (N,)."""
     rect, rl, rr, points, guesses = coarse_samples(cal, left, right, near_m, far_m, step,
-                                                   window, min_level)
+                                                   window, min_level, coarse)
     refined, kept = direct_refine(rl, rr, points, guesses, window, max_move, min_correlation)
     return rect, rl, rr, points, refined, kept
 
