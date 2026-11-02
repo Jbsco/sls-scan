@@ -1019,6 +1019,126 @@ fn compare_points(samples: &[[f32; 2]], points: &[[f64; 3]], reference: &[u8]) -
     }
 }
 
+fn replay(args: &[String]) -> ExitCode {
+    let mut frames_dir: Option<PathBuf> = None;
+    let mut params = PathBuf::from("data/depth.json");
+    for pair in args.chunks(2) {
+        let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
+            eprintln!("arguments come in pairs: --frames, --params");
+            return ExitCode::FAILURE;
+        };
+        match key.as_str() {
+            "--frames" => frames_dir = Some(PathBuf::from(value)),
+            "--params" => params = PathBuf::from(value),
+            _ => {
+                eprintln!("unknown argument {key}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let Some(frames_dir) = frames_dir else {
+        eprintln!("usage: sls-scan replay --frames <directory> [--params depth.json]");
+        return ExitCode::FAILURE;
+    };
+    let setup = match depth::DepthSetup::load(&params) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("depth parameters: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut pairs: Vec<PathBuf> = match std::fs::read_dir(&frames_dir) {
+        Ok(entries) => entries
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("frame_"))
+            })
+            .collect(),
+        Err(e) => {
+            eprintln!("{}: {e}", frames_dir.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    pairs.sort();
+    if pairs.is_empty() {
+        eprintln!("no frame_* directories in {}", frames_dir.display());
+        return ExitCode::FAILURE;
+    }
+    let frame = match depth::DepthFrame::new(false) {
+        Ok(f) => f,
+        Err(e) if std::env::var_os("SLS_REQUIRE_GPU").is_none() => {
+            println!("no GPU adapter, replay skipped: {e}");
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            eprintln!("no GPU adapter: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!("adapter {}", frame.adapter);
+    let depth_params = setup.params();
+    let mut ok = true;
+    for pair in &pairs {
+        let name = pair
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let images = (
+            calibration::read_png(&pair.join("left.png")),
+            calibration::read_png(&pair.join("right.png")),
+        );
+        let ((lw, lh, left), (rw, rh, right)) = match images {
+            (Ok(l), Ok(r)) => (l, r),
+            (Err(e), _) | (_, Err(e)) => {
+                println!("{name}: {e}");
+                ok = false;
+                continue;
+            }
+        };
+        if (lw, lh) != (setup.width, setup.height) || (rw, rh) != (setup.width, setup.height) {
+            println!("{name}: images are not {} × {}", setup.width, setup.height);
+            ok = false;
+            continue;
+        }
+        let cameras = (&setup.cameras.left, &setup.cameras.right);
+        let result = match frame.depth(&depth_params, cameras, &left, &right) {
+            Ok(r) => r,
+            Err(e) => {
+                println!("{name}: depth failed: {e}");
+                ok = false;
+                continue;
+            }
+        };
+        let total: f64 = result.timings.iter().map(|(_, ms)| ms).sum();
+        match std::fs::read(pair.join("reference.bin")) {
+            Ok(reference) => {
+                let comparison = compare_points(&result.samples, &result.points, &reference);
+                let matched = comparison.matches();
+                ok &= matched;
+                println!(
+                    "{name}: {} points in {total:.1} ms; {}, {}",
+                    result.points.len(),
+                    comparison.summary(),
+                    if matched { "matches" } else { "differs" }
+                );
+            }
+            Err(_) => println!("{name}: {} points in {total:.1} ms", result.points.len()),
+        }
+    }
+    println!(
+        "replay: {} pairs, {}",
+        pairs.len(),
+        if ok { "all match" } else { "some differ" }
+    );
+    if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
 fn depth_check(args: &[String]) -> ExitCode {
     let Some(dir) = args.first().map(PathBuf::from) else {
         eprintln!("usage: sls-scan depth-check <vector directory> [--fallback]");
@@ -1247,6 +1367,7 @@ fn main() -> ExitCode {
         Some("coarse-check") => return coarse_check(&args[2..]),
         Some("depth-check") => return depth_check(&args[2..]),
         Some("fusion-check") => return fusion_check(&args[2..]),
+        Some("replay") => return replay(&args[2..]),
         _ => {}
     }
     let options = eframe::NativeOptions::default();
