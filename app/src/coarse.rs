@@ -1,7 +1,7 @@
 //! Coarse disparity on the GPU: block matching by normalized cross-correlation at reduced
 //! resolution, following the NumPy reference `block_disparity_small` in `slscan/stereo.py`.
 
-use crate::gpu::{read, words, Gpu};
+use crate::gpu::{download, upload, Gpu};
 use eframe::wgpu;
 use eframe::wgpu::util::DeviceExt;
 
@@ -82,6 +82,11 @@ impl BlockMatcher {
         }
     }
 
+    /// Reduced pixels of an image matched with these parameters.
+    pub fn reduced(params: &CoarseParams) -> usize {
+        (params.width / params.scale) as usize * (params.height / params.scale) as usize
+    }
+
     /// Match a rectified pair of row-major 8-bit images. Returns the disparity of each
     /// reduced pixel in reduced pixels, row-major, and whether it is valid.
     pub fn disparity(
@@ -93,6 +98,41 @@ impl BlockMatcher {
         let pixels = params.width as usize * params.height as usize;
         if left.len() != pixels || right.len() != pixels {
             return Err("image sizes do not match the parameters".into());
+        }
+        let left_buffer = upload(&self.device, "left", left);
+        let right_buffer = upload(&self.device, "right", right);
+        let (disparity, valid) = self.disparity_buffers(params, &left_buffer, &right_buffer)?;
+        self.download(&disparity, &valid)
+    }
+
+    /// Copy a disparity map and its validity from the device.
+    pub fn download(
+        &self,
+        disparity: &wgpu::Buffer,
+        valid: &wgpu::Buffer,
+    ) -> Result<(Vec<f32>, Vec<bool>), String> {
+        let disparity_bytes = download(&self.device, &self.queue, disparity, disparity.size())?;
+        let valid_bytes = download(&self.device, &self.queue, valid, valid.size())?;
+        let disparity = disparity_bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        let valid = valid_bytes.chunks_exact(4).map(|c| c[0] != 0).collect();
+        Ok((disparity, valid))
+    }
+
+    /// Match an uploaded rectified pair. Returns the disparity and validity of each
+    /// reduced pixel as storage buffers on the device.
+    pub fn disparity_buffers(
+        &self,
+        params: &CoarseParams,
+        left: &wgpu::Buffer,
+        right: &wgpu::Buffer,
+    ) -> Result<(wgpu::Buffer, wgpu::Buffer), String> {
+        let pixels = params.width as usize * params.height as usize;
+        let words = (pixels.div_ceil(4) * 4) as u64;
+        if left.size() < words || right.size() < words {
+            return Err("image buffers are smaller than the parameters".into());
         }
         if params.scale == 0
             || !params.width.is_multiple_of(params.scale)
@@ -132,8 +172,6 @@ impl BlockMatcher {
                 })
         };
         let params_buffer = init("params", &uniform, wgpu::BufferUsages::UNIFORM);
-        let left_buffer = init("left", &words(left), wgpu::BufferUsages::STORAGE);
-        let right_buffer = init("right", &words(right), wgpu::BufferUsages::STORAGE);
         let buffer = |label, size: usize, usage| {
             self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
@@ -158,11 +196,6 @@ impl BlockMatcher {
             buffer("disparity b", small * 4, storage),
             buffer("valid b", small * 4, storage),
         );
-        let readback = wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST;
-        let (disparity_read, valid_read) = (
-            buffer("disparity read", small * 4, readback),
-            buffer("valid read", small * 4, readback),
-        );
         let bind = |pipeline: &wgpu::ComputePipeline, entries: &[(u32, &wgpu::Buffer)]| {
             let entries: Vec<wgpu::BindGroupEntry> = entries
                 .iter()
@@ -181,8 +214,8 @@ impl BlockMatcher {
             &self.downsample,
             &[
                 (0, &params_buffer),
-                (1, &left_buffer),
-                (2, &right_buffer),
+                (1, left),
+                (2, right),
                 (3, &small_left),
                 (4, &small_right),
             ],
@@ -249,22 +282,12 @@ impl BlockMatcher {
             pass.set_bind_group(0, group, &[]);
             pass.dispatch_workgroups(x, y, 1);
         }
-        let (disparity, valid) = if params.fill.is_multiple_of(2) {
-            (&disparity_a, &valid_a)
-        } else {
-            (&disparity_b, &valid_b)
-        };
-        encoder.copy_buffer_to_buffer(disparity, 0, &disparity_read, 0, (small * 4) as u64);
-        encoder.copy_buffer_to_buffer(valid, 0, &valid_read, 0, (small * 4) as u64);
         self.queue.submit([encoder.finish()]);
-        let disparity_bytes = read(&self.device, &disparity_read)?;
-        let valid_bytes = read(&self.device, &valid_read)?;
-        let disparity = disparity_bytes
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect();
-        let valid = valid_bytes.chunks_exact(4).map(|c| c[0] != 0).collect();
-        Ok((disparity, valid))
+        if params.fill.is_multiple_of(2) {
+            Ok((disparity_a, valid_a))
+        } else {
+            Ok((disparity_b, valid_b))
+        }
     }
 }
 
