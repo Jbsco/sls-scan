@@ -1,6 +1,7 @@
 #!/bin/bash
-# Application gate: formatting, lints and tests of the Rust application, then its capture
-# client against the stand-in node over the capture protocol.
+# Application gate: formatting, lints and tests of the Rust application, its capture
+# client against the stand-in node over the capture protocol, and its GPU decode against
+# the NumPy reference.
 exec >&2
 if ! command -v cargo >/dev/null 2>&1; then
     echo "app: cargo not found - skipped"
@@ -20,6 +21,8 @@ $RUN capture --node "127.0.0.1:$PORT" --set scan --pitch 16 --wait 30
 $RUN capture --node "127.0.0.1:$PORT" --set calibration --wait 30
 $RUN calibrate --node "127.0.0.1:$PORT" --wait 30 --poses 6 --out "$SESSION" \
     --squares-x 9 --squares-y 6 --square-mm 40 --marker-mm 30
+python3 -m slscan.cli decode-vectors --out "$SESSION/vectors" >/dev/null
+$RUN decode-check "$SESSION/vectors"
 echo "app: all checks clean"
 [ -n "${3:-}" ] && touch "$3"
 exit 0
