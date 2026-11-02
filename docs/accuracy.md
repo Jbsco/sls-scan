@@ -122,34 +122,50 @@ which only the bench measures.
 These results are the active stereo head of `DESIGN.md` D25 on the virtual bench. Two
 Global Shutter cameras sit behind 16 mm lenses on a 0.2 m baseline crossing at 0.5 m.
 An uncalibrated light throws a random-dot pattern on uncoated artifacts, and the
-calibration is recovered from twelve synthetic poses of a 90 × 60 mm board. Commands: `slscan simulate --head stereo`, then
-the printed calibrate-stereo, scan-stereo and measure steps.
+calibration is recovered from twelve synthetic poses of a 90 × 60 mm board. It
+reprojects to 0.076 and 0.065 px (limit 0.3 px) with a baseline of 200.19 mm against
+200 mm. Commands: `slscan simulate --head stereo`, then the printed calibrate-stereo,
+scan-stereo and measure steps, with `--order 1 --window 21` for affine windows.
 
-| Test | Result | Truth or target |
-|---|---|---|
-| Calibration | 0.076 and 0.065 px, baseline 200.19 mm | under 0.3 px, 200 mm |
-| Flat plate, 80 mm, tilted | 8 µm RMS | under 20 µm |
-| Sphere radius | 12.395 mm | 12.500 mm |
-| Ball bar spacing, 25 mm spheres | 80.404 mm | 80.424 mm |
+| Test | Affine, 21 px | Second-order, 25 px | Truth or target |
+|---|---|---|---|
+| Flat plate, 80 mm, tilted | 8 µm RMS | 10 µm RMS | under 20 µm |
+| Sphere radius | 12.395 mm | 12.491 mm | 12.500 mm |
+| Sphere form | 17 µm RMS | 7 µm RMS | 0 |
+| Ball bar spacing, 25 mm spheres | 80.404 mm | 80.431 mm | 80.424 mm |
 
-Window size trades curvature bias against noise, with the true calibration:
+Window size and order trade curvature bias against noise. These runs use true
+calibration and a sample every 8 px, and times are for the plate view in NumPy and
+OpenCV on a Ryzen 7 7700X. Offsets are mean distances from the true sphere surface.
 
-| Window | Points inside a 25 mm sphere | Plate RMS |
-|---|---|---|
-| 21 px, 2.3 mm | 42 µm | 9 µm |
-| 15 px, 1.6 mm | 22 µm | 17 µm |
-| 11 px, 1.2 mm | 11 µm | 35 µm |
+| Window | Order | Sphere offset | Fitted radius | Sphere form | Plate RMS | Time |
+|---|---|---|---|---|---|---|
+| 21 px, 2.3 mm | affine | -40.9 µm | -98.8 µm | 17.0 µm | 7.5 µm | 2.3 s |
+| 15 px, 1.6 mm | affine | -21.5 µm | -54.8 µm | 22.3 µm | 18.2 µm | 2.5 s |
+| 11 px, 1.2 mm | affine | -7.0 µm | -25.2 µm | 26.5 µm | 35.0 µm | 2.6 s |
+| 25 px, 2.7 mm | second | +0.1 µm | +0.6 µm | 6.7 µm | 9.0 µm | 11.1 s |
+| 31 px, 3.3 mm | second | +0.2 µm | +2.7 µm | 5.1 µm | 5.7 µm | 21.1 s |
+| 41 px, 4.4 mm | second | +0.9 µm | +11.3 µm | 4.5 µm | 3.5 µm | 48.8 s |
+
+Second-order fitted radii grow with the window while mean offsets stay within 1 µm.
+Larger windows keep fewer samples near the sphere's rim, and it seems likely that the
+smaller cap lets the fit trade radius against centre position.
 
 ## Continuous sweep
 
 A synthetic sweep of 25 frames by the active stereo head, yawing ±25° and pitching ±8°
 around a mat with a ball bar of two 25 mm spheres and a 16 mm sphere, tracked and fused
 as in `DESIGN.md` D26. Command: `slscan sweep-bench`, with `--recovered` for the
-recovered calibration.
+recovered calibration and `--order 2` for second-order windows of 25 px.
 
-| Measure | True calibration | Recovered calibration |
-|---|---|---|
-| Pose drift against truth | 107 µm, 0.047° | 344 µm, 0.051° |
-| Fused ball bar spacing | -3.9 µm | +4.4 µm |
-| Fused mat flatness | 19.9 µm RMS | 23.9 µm RMS |
-| Ball bar sphere radii | -116 and -76 µm | -120 and -76 µm |
+| Measure | Affine, true | Affine, recovered | Second-order, true | Second-order, recovered |
+|---|---|---|---|---|
+| Pose drift against truth | 107 µm, 0.047° | 344 µm, 0.051° | 141 µm, 0.046° | 348 µm, 0.050° |
+| Fused ball bar spacing | -3.9 µm | +4.4 µm | -2.9 µm | +1.2 µm |
+| Fused mat flatness | 19.9 µm RMS | 23.9 µm RMS | 14.2 µm RMS | 19.6 µm RMS |
+| Ball bar sphere radii | -116 and -76 µm | -120 and -76 µm | -33 and +8 µm | -22 and +1 µm |
+| Run time | 57 s | 58 s | 233 s | 241 s |
+
+The largest pose error varies between runs of the same command, from 0.051° to 0.072°
+with affine windows and recovered calibration. Artifact results agree within 0.1 µm
+between those runs.
