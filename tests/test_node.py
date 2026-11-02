@@ -66,3 +66,30 @@ def test_capture_command_saves_a_scan(stand_in, tmp_path):
     assert cli.main(["capture", "--node", f"{host}:{port}", "--set", "scan", "--pitch", "16",
                      "--out", out]) == 0
     assert cli.read_scan(out)["phase"].shape[0] == 4
+
+
+def test_connect_waits_for_a_late_node():
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    server = node.StandIn(("127.0.0.1", port))
+    timer = threading.Timer(0.5, server.serve_forever)
+    timer.daemon = True
+    timer.start()
+    try:
+        sock, hello = node.connect("127.0.0.1", port, wait=10.0, timeout=10.0)
+        sock.close()
+        assert hello["node"] == "stand-in"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_connect_without_wait_fails_fast():
+    probe = socket.socket()
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+    with pytest.raises(OSError):
+        node.connect("127.0.0.1", port)

@@ -253,3 +253,18 @@ own, so the application connects to it as it will to the Pi. `node.do` runs a vi
 bench through that container over the capture protocol, and a Node workflow runs it on
 every push and pull request. `verify.do` leaves it out, because it needs Docker and
 adds an image build to every local run.
+
+Amended 2026-11-01: the ruleset on `main` requires the node check, with style and test.
+
+## D20. The application shell (2026-11-01)
+
+The application is one Rust crate in `app/`. Its library has the capture protocol, a
+capture client and three panels, and its binary opens the window. It uses eframe with
+default features on wgpu, the configuration its authors test. Rust 1.93.0 is pinned in
+`app/rust-toolchain.toml`, so formatting and lints agree between a workstation and CI.
+
+A headless `capture` mode runs one sequence and prints frame count, missing frames,
+order and mean interval. `app.do` runs it against the Python stand-in, so each
+implementation of the protocol is checked against the other on every run. A client
+waits for HELLO, not for an open port, because a container's port forward accepts
+connections before the node inside listens.

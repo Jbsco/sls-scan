@@ -1,6 +1,9 @@
 # Captures, calibrations and scan outputs are large and machine-specific
 data/
 
+# Rust build output
+app/target/
+
 # Python
 __pycache__/
 *.pyc

@@ -74,16 +74,35 @@ def pattern_names(pattern_set: str, width: int, height: int, steps: int) -> list
     raise ValueError(f"unknown pattern set {pattern_set}")
 
 
+def connect(host: str, port: int, wait: float = 0.0,
+            timeout: float = 60.0) -> tuple[socket.socket, dict]:
+    """Connect and read HELLO, retrying for up to wait seconds while the node starts."""
+    import time
+
+    deadline = time.monotonic() + wait
+    while True:
+        sock = None
+        try:
+            sock = socket.create_connection((host, port), timeout=timeout)
+            kind, payload = receive(sock)
+            if kind != HELLO:
+                raise ValueError("node did not open with HELLO")
+            return sock, json.loads(payload)
+        except (ConnectionError, OSError):
+            if sock is not None:
+                sock.close()
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.2)
+
+
 def capture(host: str, port: int, pattern_set: str, out: str, pitch: int = 32,
-            steps: int = 4, timeout: float = 60.0) -> dict:
+            steps: int = 4, timeout: float = 60.0, wait: float = 0.0) -> dict:
     """Run one sequence on a node and save its frames as PNG files under out."""
     import cv2
 
-    with socket.create_connection((host, port), timeout=timeout) as sock:
-        kind, payload = receive(sock)
-        if kind != HELLO:
-            raise ValueError("node did not open with HELLO")
-        hello = json.loads(payload)
+    sock, hello = connect(host, port, wait, timeout)
+    with sock:
         projector = hello["projector"]
         names = pattern_names(pattern_set, projector["width"], projector["height"], steps)
         request = {"set": pattern_set, "pitch": pitch, "steps": steps}

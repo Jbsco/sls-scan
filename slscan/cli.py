@@ -150,7 +150,8 @@ def cmd_node_sim(args: argparse.Namespace) -> int:
 
 def cmd_capture(args: argparse.Namespace) -> int:
     host, port = args.node.rsplit(":", 1)
-    result = node.capture(host, int(port), args.set, args.out, args.pitch, args.steps)
+    result = node.capture(host, int(port), args.set, args.out, args.pitch, args.steps,
+                          wait=args.wait)
     print(f"{result['frames']} frames from {result['node']['node']} written to {args.out}")
     if result["missing"] or not result["in_order"]:
         print(f"missing frames {result['missing']}, in order: {result['in_order']}")
@@ -285,6 +286,7 @@ def main(argv=None) -> int:
     p.add_argument("--set", choices=("scan", "calibration"), default="scan")
     p.add_argument("--pitch", type=int, default=32)
     p.add_argument("--steps", type=int, default=4)
+    p.add_argument("--wait", type=float, default=0.0, help="seconds to retry while the node starts")
     p.add_argument("--out", default="data/view")
     p.set_defaults(func=cmd_capture)
 
