@@ -331,46 +331,6 @@ fn floats(bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-/// Shape terms, move limit and correlation gate of one refinement stage.
-type Stage = (u32, f32, Option<f32>);
-
-/// Run refinement stages in order, each starting from the right points of the one before.
-/// A sample is kept when every stage keeps it.
-fn run_stages(
-    refiner: &refine::Refiner,
-    meta: &StereoMeta,
-    images: (&[u8], &[u8]),
-    samples: &[f32],
-    stages: &[Stage],
-) -> Result<(Vec<[f32; 2]>, Vec<bool>), String> {
-    let mut current = samples.to_vec();
-    let mut kept = vec![true; samples.len() / refine::SAMPLE_FLOATS];
-    let mut points = Vec::new();
-    for &(terms, max_move, min_correlation) in stages {
-        let params = refine::RefineParams {
-            width: meta.width,
-            height: meta.height,
-            window: meta.window,
-            iterations: meta.iterations,
-            terms,
-            max_move,
-            min_correlation,
-        };
-        let (stage_points, stage_kept) = refiner.refine(&params, images.0, images.1, &current)?;
-        for (all, stage) in kept.iter_mut().zip(&stage_kept) {
-            *all &= *stage;
-        }
-        for (sample, point) in current
-            .chunks_exact_mut(refine::SAMPLE_FLOATS)
-            .zip(&stage_points)
-        {
-            sample[2..8].copy_from_slice(&[point[0], point[1], 1.0, 0.0, 0.0, 1.0]);
-        }
-        points = stage_points;
-    }
-    Ok((points, kept))
-}
-
 /// Refine one vector set three times and compare the last result with its reference.
 fn check_set(
     label: &str,
@@ -379,7 +339,7 @@ fn check_set(
     images: (&[u8], &[u8]),
     samples: &[f32],
     reference: (&[f32], &[u8]),
-    stages: &[Stage],
+    stages: &[refine::Stage],
 ) -> Result<bool, String> {
     let count = reference.1.len();
     if samples.len() != count * refine::SAMPLE_FLOATS || reference.0.len() != 2 * count {
@@ -389,7 +349,16 @@ fn check_set(
     let mut result = None;
     for _ in 0..3 {
         let start = Instant::now();
-        result = Some(run_stages(refiner, meta, images, samples, stages)?);
+        let base = refine::RefineParams {
+            width: meta.width,
+            height: meta.height,
+            window: meta.window,
+            iterations: meta.iterations,
+            terms: 6,
+            max_move: 1.0,
+            min_correlation: None,
+        };
+        result = Some(refiner.stages(&base, images.0, images.1, samples, stages)?);
         fastest = fastest.min(start.elapsed().as_secs_f64() * 1000.0);
     }
     let Some((points, kept)) = result else {
