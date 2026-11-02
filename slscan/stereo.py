@@ -390,17 +390,20 @@ def direct_refine(left: np.ndarray, right: np.ndarray, points: np.ndarray,
 
 
 def triangulate(rect: Rectification, left_pts: np.ndarray, right_pts: np.ndarray,
-                near_m: float, far_m: float) -> np.ndarray:
+                near_m: float, far_m: float, return_kept: bool = False):
     """Return points (N, 3) in metres in the left camera's frame for matched rectified
-    pixels, dropping any outside 0.8 near_m to 1.2 far_m."""
+    pixels, dropping any outside 0.8 near_m to 1.2 far_m. With return_kept, also return
+    which matches gave a point."""
     if len(left_pts) == 0:
-        return np.empty((0, 3))
+        return (np.empty((0, 3)), np.zeros(0, dtype=bool)) if return_kept else np.empty((0, 3))
     right_pts = right_pts.copy()
     right_pts[:, 1] = left_pts[:, 1]
     x = cv2.triangulatePoints(rect.left_projection, rect.right_projection, left_pts.T,
                               right_pts.T)
     x = (x[:3] / x[3]).T
     depth_ok = (x[:, 2] > near_m * 0.8) & (x[:, 2] < far_m * 1.2)
+    if return_kept:
+        return x[depth_ok] @ rect.left_rotation, depth_ok
     return x[depth_ok] @ rect.left_rotation
 
 
