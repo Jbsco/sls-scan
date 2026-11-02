@@ -13,6 +13,7 @@ static instead of swept, in the open, and under the operator's control end to en
 - [Status](#status)
 - [Applications](#applications)
 - [How it works](#how-it-works)
+- [Architecture](#architecture)
 - [Hardware](#hardware)
 - [Accuracy](#accuracy)
 - [Repository layout](#repository-layout)
