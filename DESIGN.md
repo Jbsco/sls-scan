@@ -232,3 +232,15 @@ Renode emulates microcontrollers, and nothing in this design runs on one, so it 
 not used. The simulation that Phase 3 needs is a capture node stand-in: a process,
 run in a container, that serves synthetic frames over the node's protocol, so the
 application is developed against the same interface as the Pi.
+
+## D18. The capture protocol (2026-11-01)
+
+The application and the capture node share one TCP connection with JSON control
+messages and binary frames, specified in `docs/capture-protocol.md`. JSON keeps the
+control messages readable and lets fields be added. Frames stay binary, because a
+preview frame at 1456 × 1088 mono is 1.6 MB and the stream runs near 48 MB/s (D13).
+
+The node generates the patterns from the set name and its parameters, so no pattern
+image crosses the network. Each frame has its pattern index and the node's timestamp
+of exposure start. The application matches frames to patterns by index and checks
+the timing by timestamp. A change to the format changes the magic.
