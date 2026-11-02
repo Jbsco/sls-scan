@@ -77,11 +77,14 @@ fn headless_capture(args: &[String]) -> ExitCode {
             } else {
                 format!("{:?}", stats.missing)
             };
+            let gap = stats
+                .largest_gap_ns
+                .map_or_else(|| "none".to_owned(), |ns| format!("{:.3} ms", ns / 1.0e6));
             println!(
-                "{} frames, missing {missing}, in order {}, mean interval {interval}",
-                stats.frames, stats.in_order
+                "{} frames, missing {missing}, in order {}, pairs in step {}, mean interval {interval}, largest gap {gap}",
+                stats.frames, stats.in_order, stats.in_step
             );
-            if stats.missing.is_empty() && stats.in_order {
+            if stats.missing.is_empty() && stats.in_order && stats.in_step {
                 ExitCode::SUCCESS
             } else {
                 ExitCode::FAILURE
