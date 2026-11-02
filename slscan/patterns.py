@@ -134,6 +134,19 @@ def wrapped_phase(samples: np.ndarray) -> np.ndarray:
     return np.mod(-np.arctan2(numerator, denominator), 2.0 * math.pi)
 
 
+def phase_modulation(samples: np.ndarray) -> np.ndarray:
+    """Return the amplitude of the sinusoid in N phase-shifted samples, in sample units."""
+    samples = np.asarray(samples, dtype=np.float64)
+    steps = samples.shape[0]
+    if steps < 3:
+        raise ValueError("phase shift needs at least 3 steps")
+    i = np.arange(steps, dtype=np.float64).reshape((steps,) + (1,) * (samples.ndim - 1))
+    angles = 2.0 * math.pi * i / steps
+    numerator = np.sum(samples * np.sin(angles), axis=0)
+    denominator = np.sum(samples * np.cos(angles), axis=0)
+    return 2.0 / steps * np.hypot(numerator, denominator)
+
+
 def unwrap_columns(phase: np.ndarray, period_index: np.ndarray, pitch: int) -> np.ndarray:
     """Combine a wrapped phase and a Gray code period index into a float column."""
     return period_index.astype(np.float64) * pitch + phase * pitch / (2.0 * math.pi)
