@@ -98,18 +98,25 @@ def cmd_measure(args: argparse.Namespace) -> int:
     return 0
 
 
+HEADS = {
+    "reference": (synthetic.reference_rig, synthetic.acceptance_scenes,
+                  calibrate.BoardSpec(9, 6, 0.04, 0.03), 1.0),
+    "small": (synthetic.small_volume_rig, synthetic.small_volume_scenes, synthetic.SMALL_BOARD, 0.5),
+}
+
+
 def cmd_simulate(args: argparse.Namespace) -> int:
-    rig = synthetic.reference_rig()
-    spec = calibrate.BoardSpec(9, 6, 0.04, 0.03)
+    make_rig, make_scenes, spec, crossing = HEADS[args.head]
+    rig = make_rig()
     import cv2
 
-    for i, view in enumerate(synthetic.calibration_views(rig, spec, args.seed)):
+    for i, view in enumerate(synthetic.calibration_views(rig, spec, args.seed, crossing)):
         pose = os.path.join(args.out, "calibration", f"pose_{i:03d}")
         os.makedirs(pose, exist_ok=True)
         cv2.imwrite(os.path.join(pose, "white.png"), view["white"])
         _write_stack(view["columns"], os.path.join(pose, "columns_"))
         _write_stack(view["rows"], os.path.join(pose, "rows_"))
-    scenes = synthetic.acceptance_scenes()
+    scenes = make_scenes()
     for name, scene in scenes.items():
         captures, _ = synthetic.scan_captures(rig, scene, pitch=args.pitch, seed=args.seed)
         write_scan(os.path.join(args.out, name), captures)
@@ -119,8 +126,9 @@ def cmd_simulate(args: argparse.Namespace) -> int:
     print(f"true sphere radius {1000.0 * sphere.radius:.3f} mm, "
           f"true ball bar spacing {1000.0 * np.linalg.norm(bar[0].centre - bar[1].centre):.3f} mm")
     print("next:")
-    print(f"  slscan calibrate {args.out}/calibration --squares-x 9 --squares-y 6 --square-mm 40 "
-          f"--marker-mm 30 --projector-width {rig.projector.width} "
+    print(f"  slscan calibrate {args.out}/calibration --squares-x {spec.squares_x} "
+          f"--squares-y {spec.squares_y} --square-mm {1000.0 * spec.square_m:g} "
+          f"--marker-mm {1000.0 * spec.marker_m:g} --projector-width {rig.projector.width} "
           f"--projector-height {rig.projector.height} --out {args.out}/calibration.yaml")
     for name, shape in (("plate", "plane"), ("sphere", "sphere"), ("ball-bar", "ball-bar")):
         print(f"  slscan scan {args.out}/{name} --calibration {args.out}/calibration.yaml "
@@ -334,6 +342,7 @@ def main(argv=None) -> int:
     p.set_defaults(func=cmd_measure)
 
     p = sub.add_parser("simulate", help="write synthetic calibration and scan captures")
+    p.add_argument("--head", choices=sorted(HEADS), default="reference")
     p.add_argument("--out", default="data/simulated")
     p.add_argument("--pitch", type=int, default=16, help="phase shift pitch for the 1024-column virtual projector")
     p.add_argument("--seed", type=int, default=0)

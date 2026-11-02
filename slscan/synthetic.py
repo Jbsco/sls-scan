@@ -58,6 +58,26 @@ def reference_rig(baseline_m: float = 0.35, crossing_m: float = 1.0) -> Rig:
                        pinhole(1024, 768, 1400.0, 512.0, 480.0), baseline_m, crossing_m)
 
 
+def small_volume_rig(projector_width_m: float = 0.15) -> Rig:
+    """The small-volume head: the HQ camera in its 2 × 2 binned mode (2028 × 1520, 3.1 µm)
+    behind a 25 mm lens, f = 8,065 px, and a 1280 × 800 projector whose image is
+    projector_width_m wide at 0.5 m, on a 0.22 m baseline crossing at 0.5 m."""
+    f_projector = 1280 * 0.5 / projector_width_m
+    return toed_in_rig(pinhole(2028, 1520, 25.0 / 0.0031, 1016.0, 758.0),
+                       pinhole(1280, 800, f_projector, 640.0, 400.0), 0.22, 0.5)
+
+
+def small_volume_preview_rig(projector_width_m: float = 0.15) -> Rig:
+    """The small-volume head's preview: the Global Shutter camera (1456 × 1088, 3.45 µm)
+    behind a 16 mm lens, f = 4,638 px, with the projector of small_volume_rig."""
+    f_projector = 1280 * 0.5 / projector_width_m
+    return toed_in_rig(pinhole(1456, 1088, 16.0 / 0.00345, 728.0, 544.0),
+                       pinhole(1280, 800, f_projector, 640.0, 400.0), 0.22, 0.5)
+
+
+SMALL_BOARD = calibrate.BoardSpec(9, 6, 0.010, 0.0075)
+
+
 def board_poses(spec: calibrate.BoardSpec, crossing_m: float = 1.0) -> list:
     """Return board poses (rotation, translation) around the crossing point, tilted in turn.
 
@@ -276,4 +296,13 @@ def acceptance_scenes() -> dict:
             "sphere": [Ball(np.array([0.02, -0.01, 1.0]), 0.05)],
             "ball-bar": [Ball(np.array([-0.15, 0.02, 1.0]), 0.025),
                          Ball(np.array([0.15, -0.02, 1.02]), 0.025)]}
+
+
+def small_volume_scenes() -> dict:
+    """Return the virtual bench scenes scaled to the small-volume head at 0.5 m: an 80 mm
+    plate, a 25 mm sphere and a ball bar of two 12 mm spheres about 80 mm apart."""
+    return {"plate": [Plate(np.array([0.0, 0.0, 0.5]), rotation(10, -15), 0.04, 0.04)],
+            "sphere": [Ball(np.array([0.003, -0.002, 0.5]), 0.0125)],
+            "ball-bar": [Ball(np.array([-0.04, 0.004, 0.5]), 0.006),
+                         Ball(np.array([0.04, -0.004, 0.502]), 0.006)]}
 
