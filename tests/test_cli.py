@@ -202,3 +202,9 @@ def test_stereo_calibration_diff_compares_both_cameras(tmp_path, capsys):
     calibrate.save_stereo(str(tmp_path / "a.yaml"), first)
     assert cli.main(["calibration-diff", str(tmp_path / "a.yaml"), str(tmp_path / "a.yaml")]) == 0
     assert "right_fx change 0.000 %" in capsys.readouterr().out
+
+
+def test_stereo_bench_meets_the_phase_2_limits(capsys):
+    assert cli.main(["stereo-bench", "--plate-step", "24"]) == 0
+    out = capsys.readouterr().out
+    assert "plate" in out and "scale bar" in out

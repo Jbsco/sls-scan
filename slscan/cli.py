@@ -392,6 +392,45 @@ def cmd_fusion_vectors(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_stereo_bench(args: argparse.Namespace) -> int:
+    """Calibrate the synthetic metre head from board views, scan its Phase 2 artifacts in one
+    view each by direct matching, and check them against the Phase 2 limits."""
+    head = synthetic.metre_head()
+    spec = synthetic.METRE_BOARD
+    cal = calibrate.calibrate_stereo(
+        synthetic.stereo_calibration_views(head, spec, args.seed, crossing_m=1.0), spec)
+    print(f"metre head: {cal.views} views, left {cal.left.rms_px:.3f} px, right "
+          f"{cal.right.rms_px:.3f} px, baseline "
+          f"{1000.0 * np.linalg.norm(cal.stereo.translation):.2f} mm")
+    pattern = synthetic.random_dots(head.light.width, head.light.height, 3.0, 1.0,
+                                    np.random.default_rng(args.seed))
+    scenes = synthetic.metre_scenes()
+
+    def scan(scene, step):
+        images = synthetic.stereo_capture(head, scene, pattern,
+                                          np.random.default_rng(args.seed + 1))
+        rect, _, _, points, refined, kept = stereo.direct_matches(
+            cal, images["left"], images["right"], 0.8, 1.2, step, args.window)
+        return stereo.triangulate(rect, points[kept], refined[kept], 0.8, 1.2)
+
+    plate = scan(scenes["plate"], args.plate_step)
+    _, _, rms = geometry.fit_plane(plate)
+    span = np.ptp(plate[:, :2], axis=0)
+    bar = scan(scenes["scale-bar"], args.bar_step)
+    labels = geometry.split_two(bar)
+    centres = [geometry.fit_sphere(bar[labels == i])[0] for i in (0, 1)]
+    balls = scenes["scale-bar"]
+    error = np.linalg.norm(centres[0] - centres[1]) - np.linalg.norm(balls[0].centre
+                                                                     - balls[1].centre)
+    limit = 0.0002
+    ok = rms < limit and abs(error) < limit
+    print(f"plate {len(plate)} points over {1000.0 * span[0]:.0f} × {1000.0 * span[1]:.0f} mm, "
+          f"RMS {1000.0 * rms:.3f} mm (limit {1000.0 * limit:g} mm)")
+    print(f"scale bar {len(bar)} points on two {2000.0 * balls[0].radius:.1f} mm spheres, "
+          f"spacing error {1000.0 * error:+.3f} mm (limit {1000.0 * limit:g} mm)")
+    return 0 if ok else 1
+
+
 def cmd_calibration_repeat(args: argparse.Namespace) -> int:
     """Calibrate the synthetic stereo head from independent sessions of jittered board
     poses and report how far their focal lengths and baselines spread."""
@@ -744,6 +783,15 @@ def main(argv=None) -> int:
     p.add_argument("--out", default="data/depth.json")
     p.add_argument("--json", action="store_true", help="print the result as one JSON object")
     p.set_defaults(func=cmd_depth_params)
+
+    p = sub.add_parser("stereo-bench",
+                       help="check the synthetic metre head against the Phase 2 limits in "
+                            "one view")
+    p.add_argument("--window", type=int, default=21, help="matching window in pixels")
+    p.add_argument("--plate-step", type=int, default=8, help="sample spacing on the plate")
+    p.add_argument("--bar-step", type=int, default=4, help="sample spacing on the scale bar")
+    p.add_argument("--seed", type=int, default=0)
+    p.set_defaults(func=cmd_stereo_bench)
 
     p = sub.add_parser("calibration-repeat",
                        help="calibrate the synthetic stereo head from independent sessions "
