@@ -14,7 +14,9 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   ChArUco board, the extrinsics of the pair, results saved as YAML with the board's
   square size as the scale. Acceptance: reprojection error under 0.3 px for each camera,
   and repeated calibrations within 0.1 % in focal length. Stereo calibration is in place
-  and verified on synthetic views (D25). Bench acceptance waits on the rig.
+  and verified on synthetic views (D25). On the virtual bench, independent sessions with
+  a 132 × 96 mm board and 24 poses agree within 0.054 % (D44). Bench acceptance waits on
+  the rig.
 - Phase 2, in progress. One static view (Python reference pipeline). Synchronized capture
   of both cameras under the pattern light, rectification, matching with affine windows,
   triangulation, filtering. This is the reference the GPU kernels are checked against.

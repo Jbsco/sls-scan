@@ -718,3 +718,31 @@ Times are on a 16-thread Ryzen 7 7700X as the model grows from 16,292 to 51,701 
 The model, poses and ICP residuals are unchanged, and the fusion check still agrees with
 NumPy under 0.001 µm. A stand-in frame now takes about 110 ms for depth and 60 ms for
 fusion at most, so refinement on the GPU leads again.
+
+## D44. A board that fills the near-range view (2026-11-02)
+
+Phase 1 asks that repeated calibrations agree within 0.1 % in focal length. `slscan
+calibration-repeat` tests that on the virtual bench. It calibrates the stereo head from
+independent sessions whose board poses each move by up to 5° and 10 mm, as a person
+placing the board by hand would, and reports the largest change between any two
+sessions.
+
+With the 90 × 60 mm board of D25 the sessions disagree by 0.311 % in focal length and
+0.305 mm in baseline, although each reprojects under 0.11 px. That board
+covers the middle of the 157 × 117 mm field at 0.5 m, where focal length trades against
+the distortion terms.
+
+| Board | Poses | Focal length change | Baseline change |
+|---|---|---|---|
+| 9 × 6 squares of 10 mm, 90 × 60 mm | 12 | 0.311 % | 0.305 mm |
+| 9 × 6 squares of 10 mm, 90 × 60 mm | 36 | 0.194 % | 0.102 mm |
+| 12 × 9 squares of 10 mm, 120 × 90 mm | 24 | 0.130 % | 0.073 mm |
+| 14 × 10 squares of 10 mm, 140 × 100 mm | 24 | 0.088 % | 0.069 mm |
+| 11 × 8 squares of 12 mm, 132 × 96 mm | 12 | 0.112 % | 0.079 mm |
+| 11 × 8 squares of 12 mm, 132 × 96 mm | 24 | 0.054 % | 0.038 mm |
+
+Five sessions per row. We chose an 11 × 8 board of 12 mm squares and 9 mm markers,
+which covers most of the field, and two passes of the pose table, 24 poses, for the
+near-range head. Those are the command's defaults, and the test suite runs them.
+Synthetic views, stand-in captures and the published accuracy figures still use the
+90 × 60 mm board, so their numbers stay comparable with earlier entries.

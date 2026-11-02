@@ -188,3 +188,17 @@ def test_fusion_vectors_command_writes_consistent_files(tmp_path):
     assert (out / "frames.bin").stat().st_size == 24 * sum(meta["counts"])
     assert (out / "poses.bin").stat().st_size == 8 * 12 * 3
     assert (out / "model.bin").stat().st_size == 24 * meta["model"]
+
+
+def test_calibration_repeat_passes_with_a_board_filling_the_view(capsys):
+    assert cli.main(["calibration-repeat", "--sessions", "3"]) == 0
+    assert "largest focal length change" in capsys.readouterr().out
+
+
+def test_stereo_calibration_diff_compares_both_cameras(tmp_path, capsys):
+    head = synthetic.stereo_head()
+    spec = synthetic.SMALL_BOARD
+    first = calibrate.calibrate_stereo(synthetic.stereo_calibration_views(head, spec), spec)
+    calibrate.save_stereo(str(tmp_path / "a.yaml"), first)
+    assert cli.main(["calibration-diff", str(tmp_path / "a.yaml"), str(tmp_path / "a.yaml")]) == 0
+    assert "right_fx change 0.000 %" in capsys.readouterr().out
