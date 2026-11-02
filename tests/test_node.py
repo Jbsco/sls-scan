@@ -93,3 +93,16 @@ def test_connect_without_wait_fails_fast():
     probe.close()
     with pytest.raises(OSError):
         node.connect("127.0.0.1", port)
+
+
+def test_stereo_sequence_pairs_share_timestamps(stand_in, tmp_path):
+    host, port = stand_in
+    result = node.capture(host, port, "stereo", str(tmp_path / "sweep"), frames=3)
+    assert result["missing"] == [] and result["in_order"]
+    stamps = result["timestamps_ns"]
+    assert stamps[0::2] == stamps[1::2]
+    assert stamps[2] - stamps[0] == node.STEREO_PERIOD_NS
+    for i in range(3):
+        for side in ("left", "right"):
+            assert (tmp_path / "sweep" / f"frame_{i:03d}" / f"{side}.png").exists()
+
