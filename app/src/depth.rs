@@ -1,0 +1,251 @@
+//! One depth frame from a raw stereo pair: rectification, block disparity and direct
+//! refinement on the GPU, sample selection and triangulation on the CPU, following
+//! `coarse_samples`, `direct_refine` and `triangulate` in `slscan/stereo.py`.
+
+use crate::coarse::{BlockMatcher, CoarseParams};
+use crate::rectify::{Rectifier, RectifyParams};
+use crate::refine::{RefineParams, Refiner, SAMPLE_FLOATS};
+use std::time::Instant;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct DepthParams {
+    pub coarse: CoarseParams,
+    /// Sample spacing in pixels.
+    pub step: u32,
+    /// Matching window in pixels.
+    pub window: u32,
+    pub iterations: u32,
+    /// A sample's window must lie where the 5 x 5 mean of the left image rounds to this or
+    /// more.
+    pub min_level: f32,
+    pub max_move: f32,
+    pub min_correlation: f32,
+    pub near_m: f64,
+    pub far_m: f64,
+}
+
+pub struct DepthResult {
+    /// Rectified left pixel of each point.
+    pub samples: Vec<[f32; 2]>,
+    /// Points in metres in the left camera's frame.
+    pub points: Vec<[f64; 3]>,
+    /// Milliseconds per stage, in order.
+    pub timings: Vec<(&'static str, f64)>,
+}
+
+pub struct DepthFrame {
+    rectifier: Rectifier,
+    matcher: BlockMatcher,
+    refiner: Refiner,
+    pub adapter: String,
+}
+
+/// Summed-area table with a zero first row and column.
+fn integral(width: usize, height: usize, value: impl Fn(usize, usize) -> u32) -> Vec<u64> {
+    let mut table = vec![0u64; (width + 1) * (height + 1)];
+    for y in 0..height {
+        let mut row = 0u64;
+        for x in 0..width {
+            row += u64::from(value(x, y));
+            table[(y + 1) * (width + 1) + x + 1] = table[y * (width + 1) + x + 1] + row;
+        }
+    }
+    table
+}
+
+fn box_sum(table: &[u64], width: usize, x0: usize, y0: usize, x1: usize, y1: usize) -> u64 {
+    let w = width + 1;
+    table[y1 * w + x1] + table[y0 * w + x0] - table[y0 * w + x1] - table[y1 * w + x0]
+}
+
+fn reflect101(i: isize, n: isize) -> usize {
+    let r = if i < 0 {
+        -i
+    } else if i >= n {
+        2 * n - 2 - i
+    } else {
+        i
+    };
+    r as usize
+}
+
+/// Pick grid samples whose whole window lies on lit, matched surface, with right guesses
+/// from the coarse disparity.
+pub fn select(
+    params: &DepthParams,
+    left: &[u8],
+    disparity: &[f32],
+    valid: &[bool],
+) -> (Vec<[f32; 2]>, Vec<[f32; 2]>) {
+    let (w, h) = (params.coarse.width as usize, params.coarse.height as usize);
+    let scale = params.coarse.scale as usize;
+    let sw = w / scale;
+    let padded = integral(w + 4, h + 4, |x, y| {
+        let sx = reflect101(x as isize - 2, w as isize);
+        let sy = reflect101(y as isize - 2, h as isize);
+        u32::from(left[sy * w + sx])
+    });
+    let threshold = 25.0 * (f64::from(params.min_level) - 0.5);
+    let lit = |x: usize, y: usize| box_sum(&padded, w + 4, x, y, x + 5, y + 5) as f64 >= threshold;
+    let matched = integral(w, h, |x, y| {
+        u32::from(lit(x, y) && valid[(y / scale) * sw + x / scale])
+    });
+    let (window, step) = (params.window as usize, params.step as usize);
+    let kernel = window + 8;
+    let mut samples = Vec::new();
+    let mut guesses = Vec::new();
+    for y in (window..h.saturating_sub(window)).step_by(step) {
+        for x in (window..w.saturating_sub(window)).step_by(step) {
+            let (x0, y0) = (x - kernel / 2, y - kernel / 2);
+            let (x1, y1) = ((x0 + kernel).min(w), (y0 + kernel).min(h));
+            let full = ((x1 - x0) * (y1 - y0)) as u64;
+            if box_sum(&matched, w, x0, y0, x1, y1) != full {
+                continue;
+            }
+            let d = disparity[(y / scale) * sw + x / scale] * scale as f32;
+            samples.push([x as f32, y as f32]);
+            guesses.push([x as f32 - d, y as f32]);
+        }
+    }
+    (samples, guesses)
+}
+
+/// Triangulate rectified matches, as OpenCV's linear method does for a consistent pair,
+/// and keep points between 0.8 near and 1.2 far, rotated into the left camera's frame.
+pub fn triangulate(
+    left: &RectifyParams,
+    right: &RectifyParams,
+    matches: &[([f32; 2], [f32; 2])],
+    near_m: f64,
+    far_m: f64,
+) -> Vec<Option<[f64; 3]>> {
+    let row = |p: &[f64; 12], r: usize, c: usize| p[r * 4 + c];
+    matches
+        .iter()
+        .map(|(l, r)| {
+            let (xl, y, xr) = (f64::from(l[0]), f64::from(l[1]), f64::from(r[0]));
+            let mut a = [[0.0f64; 4]; 4];
+            for (k, (p, u, v)) in [(&left.projection, xl, y), (&right.projection, xr, y)]
+                .into_iter()
+                .enumerate()
+            {
+                a[2 * k] = [0, 1, 2, 3].map(|c| u * row(p, 2, c) - row(p, 0, c));
+                a[2 * k + 1] = [0, 1, 2, 3].map(|c| v * row(p, 2, c) - row(p, 1, c));
+            }
+            let mut n = [[0.0f64; 3]; 3];
+            let mut b = [0.0f64; 3];
+            for i in 0..3 {
+                for j in 0..3 {
+                    n[i][j] = (0..4).map(|k| a[k][i] * a[k][j]).sum();
+                }
+                b[i] = -(0..4).map(|k| a[k][i] * a[k][3]).sum::<f64>();
+            }
+            let det = |m: &[[f64; 3]; 3]| {
+                m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+                    - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+                    + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+            };
+            let d = det(&n);
+            if d.abs() < 1e-300 {
+                return None;
+            }
+            let mut x = [0.0f64; 3];
+            for (i, xi) in x.iter_mut().enumerate() {
+                let mut m = n;
+                for (r, row) in m.iter_mut().enumerate() {
+                    row[i] = b[r];
+                }
+                *xi = det(&m) / d;
+            }
+            if !(x[2] > near_m * 0.8 && x[2] < far_m * 1.2) {
+                return None;
+            }
+            let rot = &left.rotation;
+            Some([0, 1, 2].map(|i| (0..3).map(|j| x[j] * rot[j * 3 + i]).sum()))
+        })
+        .collect()
+}
+
+impl DepthFrame {
+    /// Open the first adapter wgpu offers for each kernel, or a software one when
+    /// `fallback` is set.
+    pub fn new(fallback: bool) -> Result<Self, String> {
+        let rectifier = Rectifier::new(fallback)?;
+        let adapter = rectifier.adapter.clone();
+        Ok(Self {
+            rectifier,
+            matcher: BlockMatcher::new(fallback)?,
+            refiner: Refiner::new(fallback)?,
+            adapter,
+        })
+    }
+
+    /// Measure one raw stereo pair.
+    pub fn depth(
+        &self,
+        params: &DepthParams,
+        cameras: (&RectifyParams, &RectifyParams),
+        left_raw: &[u8],
+        right_raw: &[u8],
+    ) -> Result<DepthResult, String> {
+        let (w, h) = (params.coarse.width, params.coarse.height);
+        let mut timings = Vec::new();
+        let mut clock = Instant::now();
+        let mut lap = |name: &'static str, timings: &mut Vec<(&'static str, f64)>| {
+            timings.push((name, clock.elapsed().as_secs_f64() * 1000.0));
+            clock = Instant::now();
+        };
+        let left = self.rectifier.rectify(cameras.0, w, h, left_raw)?;
+        let right = self.rectifier.rectify(cameras.1, w, h, right_raw)?;
+        lap("rectify", &mut timings);
+        let (disparity, valid) = self.matcher.disparity(&params.coarse, &left, &right)?;
+        lap("coarse", &mut timings);
+        let (samples, guesses) = select(params, &left, &disparity, &valid);
+        let mut start = Vec::with_capacity(samples.len() * SAMPLE_FLOATS);
+        for (s, g) in samples.iter().zip(&guesses) {
+            start.extend_from_slice(&[s[0], s[1], g[0], g[1], 1.0, 0.0, 0.0, 1.0]);
+        }
+        lap("select", &mut timings);
+        let base = RefineParams {
+            width: w,
+            height: h,
+            window: params.window,
+            iterations: params.iterations,
+            terms: 6,
+            max_move: 1.0,
+            min_correlation: None,
+        };
+        let stages = [
+            (3, params.max_move, Some(params.min_correlation)),
+            (6, 1.0, None),
+        ];
+        let (refined, kept) = if samples.is_empty() {
+            (Vec::new(), Vec::new())
+        } else {
+            self.refiner.stages(&base, &left, &right, &start, &stages)?
+        };
+        lap("refine", &mut timings);
+        let matches: Vec<([f32; 2], [f32; 2])> = samples
+            .iter()
+            .zip(&refined)
+            .zip(&kept)
+            .filter(|(_, k)| **k)
+            .map(|((s, r), _)| (*s, *r))
+            .collect();
+        let points = triangulate(cameras.0, cameras.1, &matches, params.near_m, params.far_m);
+        let mut out = DepthResult {
+            samples: Vec::new(),
+            points: Vec::new(),
+            timings: Vec::new(),
+        };
+        for ((s, _), p) in matches.iter().zip(points) {
+            if let Some(p) = p {
+                out.samples.push(*s);
+                out.points.push(p);
+            }
+        }
+        lap("triangulate", &mut timings);
+        out.timings = timings;
+        Ok(out)
+    }
+}
