@@ -123,3 +123,16 @@ def test_decode_vectors_match_the_reference_decode(tmp_path, rig):
                                               meta["projector_width"], meta["pitch"])
     assert np.array_equal(again_mask.ravel(), mask)
     assert np.allclose(again.ravel()[mask], columns[mask], atol=1e-4)
+
+
+def test_stereo_vectors_command_writes_consistent_files(tmp_path):
+    out = tmp_path / "stereo"
+    assert cli.main(["stereo-vectors", "--out", str(out), "--step", "16"]) == 0
+    meta = json.loads((out / "meta.json").read_text())
+    pixels, samples = meta["width"] * meta["height"], meta["samples"]
+    assert samples > 0
+    assert (out / "left.bin").stat().st_size == pixels
+    assert (out / "right.bin").stat().st_size == pixels
+    assert (out / "samples.bin").stat().st_size == 32 * samples
+    assert (out / "refined.bin").stat().st_size == 8 * samples
+    assert (out / "kept.bin").stat().st_size == samples

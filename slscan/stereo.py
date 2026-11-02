@@ -120,12 +120,23 @@ def refine(left: np.ndarray, right: np.ndarray, points: np.ndarray, guesses: np.
 def refine_second_order(left: np.ndarray, right: np.ndarray, left_points: np.ndarray,
                         right_points: np.ndarray, affine: np.ndarray, window: int = 21,
                         iterations: int = 20, batch: int = 1024) -> tuple[np.ndarray, np.ndarray]:
-    """Refine matches with second-order windows by Gauss-Newton.
+    """Return the left points that second_order_matches keeps, with their refined right
+    points."""
+    refined, kept = second_order_matches(left, right, left_points, right_points, affine,
+                                         window, iterations, batch)
+    return left_points[kept], refined[kept]
+
+
+def second_order_matches(left: np.ndarray, right: np.ndarray, left_points: np.ndarray,
+                         right_points: np.ndarray, affine: np.ndarray, window: int = 21,
+                         iterations: int = 20,
+                         batch: int = 1024) -> tuple[np.ndarray, np.ndarray]:
+    """Refine every match with a second-order window by Gauss-Newton.
 
     Each window maps to the right image through a quadratic displacement field, 12
     parameters, with an intensity gain and offset, starting from the affine match. Returns
-    the left points and their refined right points. A match is dropped when its solve
-    fails or its column moves 1 px or more from the affine match.
+    the refined right points (N, 2) and a kept flag (N,). A match is not kept when its
+    solve fails or its column moves 1 px or more from the affine match.
     """
     hw = window // 2
     dy, dx = np.mgrid[-hw:hw + 1, -hw:hw + 1].astype(np.float32)
@@ -134,7 +145,7 @@ def refine_second_order(left: np.ndarray, right: np.ndarray, left_points: np.nda
     lf, rf = left.astype(np.float32), right.astype(np.float32)
     gx = cv2.Scharr(rf, cv2.CV_32F, 1, 0) / 32.0
     gy = cv2.Scharr(rf, cv2.CV_32F, 0, 1) / 32.0
-    out_left, out_right = [], []
+    out_right, out_kept = [], []
     for start in range(0, len(left_points), batch):
         lp = left_points[start:start + batch]
         rp = right_points[start:start + batch]
@@ -182,23 +193,23 @@ def refine_second_order(left: np.ndarray, right: np.ndarray, left_points: np.nda
             active = active[moving]
         ok &= np.all(np.isfinite(p.reshape(n, -1)), axis=1)
         ok &= np.abs(p[:, 0, 0] - (rp[:, 0] - lp[:, 0])) < 1.0
-        out_left.append(lp[ok])
-        out_right.append(np.column_stack([lp[ok, 0] + p[ok, 0, 0], lp[ok, 1] + p[ok, 1, 0]]))
-    if not out_left:
-        return np.empty((0, 2)), np.empty((0, 2))
-    return np.vstack(out_left), np.vstack(out_right)
+        out_kept.append(ok)
+        out_right.append(np.column_stack([lp[:, 0] + p[:, 0, 0], lp[:, 1] + p[:, 1, 0]]))
+    if not out_right:
+        return np.empty((0, 2)), np.empty(0, dtype=bool)
+    return np.vstack(out_right), np.concatenate(out_kept)
 
 
-def depth_points(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
-                 near_m: float, far_m: float, step: int = 8, window: int = 21,
-                 min_level: float = 6.0, order: int = 1) -> tuple[np.ndarray, Rectification]:
-    """Return points (N, 3) in metres in the left camera's frame, matched on a grid of
-    rectified left pixels every step pixels, for surfaces between near_m and far_m.
+def affine_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
+                   near_m: float, far_m: float, step: int = 8, window: int = 21,
+                   min_level: float = 6.0):
+    """Rectify a view and match a grid of left pixels every step pixels with affine windows,
+    for surfaces between near_m and far_m. Returns the rectification, both rectified
+    images, the kept left and right points (N, 2) and each window's affine part (N, 2, 2).
 
     A sample is matched only when its whole window lies on lit surface (local mean at or
     above min_level in the left image) that semi-global matching also matched, so no window
-    straddles an edge. The right side of each match is judged by its correlation. Order 2
-    refines each affine match with a second-order window."""
+    straddles an edge. The right side of each match is judged by its correlation."""
     rect = rectify(cal)
     rl = cv2.remap(left, *rect.left_maps, cv2.INTER_LINEAR)
     rr = cv2.remap(right, *rect.right_maps, cv2.INTER_LINEAR)
@@ -214,11 +225,19 @@ def depth_points(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
     points, d = points[valid], d[valid]
     guesses = points.copy()
     guesses[:, 0] -= d
+    left_pts, right_pts, warps = refine(rl, rr, points, guesses, window, return_warps=True)
+    return rect, rl, rr, left_pts, right_pts, warps
+
+
+def depth_points(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
+                 near_m: float, far_m: float, step: int = 8, window: int = 21,
+                 min_level: float = 6.0, order: int = 1) -> tuple[np.ndarray, Rectification]:
+    """Return points (N, 3) in metres in the left camera's frame from affine_matches.
+    Order 2 refines each affine match with a second-order window."""
+    rect, rl, rr, left_pts, right_pts, warps = affine_matches(cal, left, right, near_m, far_m,
+                                                              step, window, min_level)
     if order == 2:
-        left_pts, right_pts, warps = refine(rl, rr, points, guesses, window, return_warps=True)
         left_pts, right_pts = refine_second_order(rl, rr, left_pts, right_pts, warps, window)
-    else:
-        left_pts, right_pts = refine(rl, rr, points, guesses, window)
     if len(left_pts) == 0:
         return np.empty((0, 3)), rect
     right_pts[:, 1] = left_pts[:, 1]

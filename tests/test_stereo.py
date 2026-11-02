@@ -97,3 +97,16 @@ def test_second_order_windows_remove_curvature_bias(head, pattern):
     assert len(points) > 400
     assert abs(offset) < 0.000005
     assert abs(radius - ball.radius) < 0.00002
+
+
+def test_second_order_matches_flag_the_kept_samples(head, pattern):
+    truth = synthetic.true_stereo_calibration(head, BOARD)
+    images = capture(head, synthetic.stereo_scenes()["sphere"], pattern)
+    _, rl, rr, left, right, warps = stereo.affine_matches(truth, images["left"], images["right"],
+                                                          0.4, 0.6, step=12, window=25)
+    refined, kept = stereo.second_order_matches(rl, rr, left, right, warps, 25)
+    kept_left, kept_right = stereo.refine_second_order(rl, rr, left, right, warps, 25)
+    assert refined.shape == right.shape and kept.shape == (len(left),)
+    assert kept.sum() > 0.9 * len(left)
+    assert np.array_equal(kept_left, left[kept])
+    assert np.array_equal(kept_right, refined[kept])

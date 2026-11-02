@@ -154,14 +154,19 @@ a report of scale bar lengths and datum residuals.
 ## Preview path
 
 Every synchronized frame pair is a depth frame: rectification, coarse disparity, affine
-refinement, triangulation, and TSDF integration at a coarse voxel size, all in WGSL
-kernels on the host. Poses come from the frame's geometry against the model, helped by
+and second-order refinement, triangulation, and TSDF integration at a coarse voxel size,
+all in WGSL kernels on the host. Poses come from the frame's geometry against the model, helped by
 markers on the mat around the part. The scene draws the volume and the live cloud as
 the scanner moves, which shows coverage and gaps. In continuous mode the fused model is
 the result, and dense matching of selected frames refines it afterwards.
 
 In the phase-shift option a depth frame is a cycle of phase-shifted patterns instead.
 Its decode kernel is `app/src/decode.wgsl`, and it matches the NumPy decode (D22).
+
+Second-order refinement runs in `app/src/refine.wgsl`, one invocation per sample after
+a gradient pass, and matches the NumPy refinement (D29). `slscan stereo-vectors` writes a
+rectified view with its affine matches and their NumPy refinement, and `sls-scan
+refine-check <directory>` compares the kernel with it.
 
 ## Application
 
