@@ -54,3 +54,12 @@ column Gray codes with their inverses, then the phase shifts (`gray_000` onward,
 The stand-in renders the chosen scene for scan sets and the next board pose for each
 calibration set, with timestamps at 60 Hz. Captures land in the layouts that
 `slscan scan` and `slscan calibrate` read.
+
+The `Dockerfile` at the repository root packages the stand-in, so it runs on its own
+address the way the Pi does:
+
+    docker build -t sls-scan-node .
+    docker run --rm -p 5600:5600 sls-scan-node --scene sphere
+
+`node.do` builds that image and runs a calibration capture and a plate scan through it
+over the protocol, then calibrates, scans and measures the result.

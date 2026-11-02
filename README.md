@@ -131,7 +131,8 @@ acceptance tests: a flat plate, a sphere and the scale bars.
 | `docs/pipeline.md` | Each stage with its inputs, outputs and file formats |
 | `docs/capture-protocol.md` | Messages between the application and a capture node |
 | `tools/` | Markdown rendering check, prose check |
-| `style.do`, `test.do`, `verify.do` | The gates, runnable with `bash` or `redo` |
+| `style.do`, `test.do`, `verify.do`, `node.do` | The gates, runnable with `bash` or `redo` |
+| `Dockerfile` | Stand-in capture node image |
 | `DESIGN.md` | Numbered design decisions with their reasons |
 | `ROADMAP.md` | Phases with acceptance criteria, and open questions |
 
@@ -146,6 +147,7 @@ Rust toolchain and a Vulkan driver (or Mesa's lavapipe for the CPU path).
     bash test.do                              # the pytest suite
     bash style.do                             # markdown, sanitization and prose
     bash verify.do                            # every gate, cheapest first
+    bash node.do                              # virtual bench over the capture protocol, needs Docker
 
 The virtual bench runs the whole pipeline on synthetic captures, with no hardware:
 
