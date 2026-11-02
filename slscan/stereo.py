@@ -150,14 +150,16 @@ def refine_second_order(left: np.ndarray, right: np.ndarray, left_points: np.nda
 
 def second_order_matches(left: np.ndarray, right: np.ndarray, left_points: np.ndarray,
                          right_points: np.ndarray, affine: np.ndarray, window: int = 21,
-                         iterations: int = 20,
-                         batch: int = 1024) -> tuple[np.ndarray, np.ndarray]:
+                         iterations: int = 20, batch: int = 1024, max_move: float = 1.0,
+                         min_correlation: float | None = None) -> tuple[np.ndarray, np.ndarray]:
     """Refine every match with a second-order window by Gauss-Newton.
 
     Each window maps to the right image through a quadratic displacement field, 12
     parameters, with an intensity gain and offset, starting from the affine match. Returns
     the refined right points (N, 2) and a kept flag (N,). A match is not kept when its
-    solve fails or its column moves 1 px or more from the affine match.
+    solve fails or its column moves max_move px or more from its start. With
+    min_correlation, a match is also not kept when its template and its window correlate
+    below that value.
     """
     hw = window // 2
     dy, dx = np.mgrid[-hw:hw + 1, -hw:hw + 1].astype(np.float32)
@@ -213,7 +215,17 @@ def second_order_matches(left: np.ndarray, right: np.ndarray, left_points: np.nd
             moving = np.max(np.abs(step[:, [0, 6]]), axis=1) >= 1e-5
             active = active[moving]
         ok &= np.all(np.isfinite(p.reshape(n, -1)), axis=1)
-        ok &= np.abs(p[:, 0, 0] - (rp[:, 0] - lp[:, 0])) < 1.0
+        ok &= np.abs(p[:, 0, 0] - (rp[:, 0] - lp[:, 0])) < max_move
+        if min_correlation is not None:
+            q = np.where(np.isfinite(p), p, 0.0)
+            g = cv2.remap(rf, (lp[:, :1] + dx + q[:, 0] @ shape.T).astype(np.float32),
+                          (lp[:, 1:2] + dy + q[:, 1] @ shape.T).astype(np.float32),
+                          cv2.INTER_CUBIC)
+            fc = f - f.mean(axis=1, keepdims=True)
+            gc = g - g.mean(axis=1, keepdims=True)
+            denominator = np.sqrt(np.sum(fc * fc, axis=1) * np.sum(gc * gc, axis=1))
+            correlation = np.sum(fc * gc, axis=1) / np.maximum(denominator, 1e-12)
+            ok &= correlation >= min_correlation
         out_kept.append(ok)
         out_right.append(np.column_stack([lp[:, 0] + p[:, 0, 0], lp[:, 1] + p[:, 1, 0]]))
     if not out_right:
