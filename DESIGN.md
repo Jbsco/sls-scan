@@ -762,3 +762,21 @@ Smaller spheres miss the limit. Spheres of 38.1 mm are about 66 px across at 1 m
 leaves 45 to 74 samples clear of their edges, and they read 0.2 to 0.96 mm long with
 21 and 25 px windows. Affine windows of 15 px bring them to 0.09 to 0.13 mm. We chose
 spheres of 50 mm or more for the metre scale bars, which the hardware notes list.
+
+## D46. A paced stereo stream on the stand-in (2026-11-02)
+
+Phase 3 asks for frame pairs captured in step at 30 fps with no drops over a minute. A
+stereo request now takes `rate_hz`, the trigger rate in pairs per second, with 0 for as
+fast as the node can. The stand-in renders an eight-pair sweep once and plays it in a
+loop on a trigger clock at that rate.
+
+It drops a pair whose trigger time passed more than
+one period before it gets to it, as a node with a full queue would, so a client that
+falls behind shows missing indices. The client reports the largest gap between
+triggers and whether both frames of every pair carry one timestamp.
+
+One minute at 30 Hz, 1800 pairs, reached the release build with no frame missing, every
+pair in step, a mean interval of 33.333 ms and a largest gap of 33.333 ms. That is
+95 MB/s of image data over loopback, about three quarters of a gigabit link. This tests
+the protocol, the client and the host. The Pi's capture and its network link wait on
+the rig. The application gate streams 150 pairs at 30 Hz.
