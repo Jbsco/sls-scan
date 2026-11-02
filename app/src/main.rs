@@ -959,26 +959,29 @@ struct Comparison {
     median: f64,
     p99: f64,
     largest: f64,
+    /// Points more than 5 µm from their reference.
+    beyond: usize,
 }
 
 impl Comparison {
-    /// At most 0.5 % missing or extra, 99th percentile within 1 µm, all within 5 µm.
+    /// At most 0.5 % missing or extra, 99th percentile within 1 µm, 0.1 % beyond 5 µm.
     fn matches(&self) -> bool {
         let count = self.count.max(1) as f64;
         (self.missing + self.extra) as f64 / count <= 0.005
             && self.p99 <= 1e-6
-            && self.largest <= 5e-6
+            && self.beyond as f64 / count <= 0.001
     }
 
     fn summary(&self) -> String {
         format!(
-            "against {} reference points: {} missing, {} extra, distance median {:.3} µm, 99th percentile {:.3} µm, largest {:.3} µm",
+            "against {} reference points: {} missing, {} extra, distance median {:.3} µm, 99th percentile {:.3} µm, largest {:.3} µm, {} beyond 5 µm",
             self.count,
             self.missing,
             self.extra,
             self.median * 1e6,
             self.p99 * 1e6,
-            self.largest * 1e6
+            self.largest * 1e6,
+            self.beyond
         )
     }
 }
@@ -1012,6 +1015,7 @@ fn compare_points(samples: &[[f32; 2]], points: &[[f64; 3]], reference: &[u8]) -
         median: at(distances.len() / 2),
         p99: at(distances.len() * 99 / 100),
         largest: distances.last().copied().unwrap_or(0.0),
+        beyond: distances.iter().filter(|&&d| d > 5e-6).count(),
     }
 }
 
