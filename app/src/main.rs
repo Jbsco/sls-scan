@@ -1,10 +1,11 @@
 use slscan_app::calibration;
 use slscan_app::client::{self, Event};
+use slscan_app::gpu;
 use slscan_app::protocol::SequenceRequest;
 use slscan_app::ui::ScanApp;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 fn headless_capture(args: &[String]) -> ExitCode {
     let mut node = "127.0.0.1:5600".to_owned();
@@ -174,11 +175,128 @@ fn headless_calibrate(args: &[String]) -> ExitCode {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct VectorMeta {
+    width: u32,
+    height: u32,
+    planes: u32,
+    steps: u32,
+    projector_width: u32,
+    pitch: f32,
+    min_contrast: f32,
+    min_modulation: f32,
+    max_disagreement: f32,
+}
+
+fn decode_check(args: &[String]) -> ExitCode {
+    let Some(dir) = args.first().map(PathBuf::from) else {
+        eprintln!("usage: sls-scan decode-check <vector directory> [--fallback]");
+        return ExitCode::FAILURE;
+    };
+    let fallback = args.iter().any(|a| a == "--fallback");
+    let read = |name: &str| std::fs::read(dir.join(name));
+    let (meta, gray, phase, columns, mask) = match (
+        read("meta.json"),
+        read("gray.bin"),
+        read("phase.bin"),
+        read("columns.bin"),
+        read("mask.bin"),
+    ) {
+        (Ok(m), Ok(g), Ok(p), Ok(c), Ok(k)) => (m, g, p, c, k),
+        _ => {
+            eprintln!("decode vectors missing in {}", dir.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let meta: VectorMeta = match serde_json::from_slice(&meta) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("meta.json: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let decoder = match gpu::Decoder::new(fallback) {
+        Ok(d) => d,
+        Err(e) if std::env::var_os("SLS_REQUIRE_GPU").is_none() => {
+            println!("no GPU adapter, decode check skipped: {e}");
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            eprintln!("no GPU adapter: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let params = gpu::DecodeParams {
+        width: meta.width,
+        height: meta.height,
+        planes: meta.planes,
+        steps: meta.steps,
+        projector_width: meta.projector_width,
+        pitch: meta.pitch,
+        min_contrast: meta.min_contrast,
+        min_modulation: meta.min_modulation,
+        max_disagreement: meta.max_disagreement,
+    };
+    let mut timings = Vec::new();
+    let mut result = None;
+    for _ in 0..3 {
+        let start = Instant::now();
+        match decoder.decode(&params, &gray, &phase) {
+            Ok(r) => result = Some(r),
+            Err(e) => {
+                eprintln!("decode failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+        timings.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    let Some((decoded, decoded_mask)) = result else {
+        return ExitCode::FAILURE;
+    };
+    let reference: Vec<f32> = columns
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    let reference_mask: Vec<bool> = mask.iter().map(|&m| m != 0).collect();
+    let mismatched = decoded_mask
+        .iter()
+        .zip(&reference_mask)
+        .filter(|(a, b)| a != b)
+        .count();
+    let max_difference = decoded
+        .iter()
+        .zip(&reference)
+        .zip(decoded_mask.iter().zip(&reference_mask))
+        .filter(|(_, (a, b))| **a && **b)
+        .map(|((d, r), _)| (d - r).abs())
+        .fold(0.0f32, f32::max);
+    let pixels = reference_mask.len();
+    let fraction = mismatched as f64 / pixels as f64;
+    let fastest = timings.iter().copied().fold(f64::INFINITY, f64::min);
+    println!("adapter {}", decoder.adapter);
+    println!(
+        "{} × {} pixels decoded in {fastest:.1} ms (fastest of three, with upload and readback)",
+        meta.width, meta.height
+    );
+    println!(
+        "mask disagreements {mismatched} of {pixels} ({:.4} %), largest column difference {max_difference:.5} px",
+        100.0 * fraction
+    );
+    if fraction <= 1e-4 && max_difference <= 0.01 {
+        println!("decode check: GPU matches the NumPy reference");
+        ExitCode::SUCCESS
+    } else {
+        println!("decode check: GPU differs from the NumPy reference");
+        ExitCode::FAILURE
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
         Some("capture") => return headless_capture(&args[2..]),
         Some("calibrate") => return headless_calibrate(&args[2..]),
+        Some("decode-check") => return decode_check(&args[2..]),
         _ => {}
     }
     let options = eframe::NativeOptions::default();
