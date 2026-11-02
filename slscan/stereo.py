@@ -85,6 +85,74 @@ def coarse_disparity(left: np.ndarray, right: np.ndarray, d_min: float, d_max: f
     return d * scale
 
 
+def block_disparity(left: np.ndarray, right: np.ndarray, d_min: float, d_max: float,
+                    scale: int = 4, block: int = 7, min_correlation: float = 0.6,
+                    margin: float = 0.05, fill: int = 2) -> np.ndarray:
+    """Block matching by normalized cross-correlation at 1/scale resolution, returned at
+    full resolution (NaN where no match).
+
+    A disparity is kept when its correlation reaches min_correlation, beats every
+    disparity more than one step away by margin, and the right pixel picks it back within
+    one step. Then fill passes give each hole with three or more valid neighbours their
+    mean."""
+    small = (left.shape[1] // scale, left.shape[0] // scale)
+    ls = cv2.resize(left, small, interpolation=cv2.INTER_AREA).astype(np.float32)
+    rs = cv2.resize(right, small, interpolation=cv2.INTER_AREA).astype(np.float32)
+    lo = int(np.floor(d_min / scale)) - 2
+    hi = int(np.ceil(d_max / scale)) + 2
+    h, w = ls.shape
+    box = (block, block)
+    mean_l = cv2.boxFilter(ls, -1, box)
+    var_l = cv2.boxFilter(ls * ls, -1, box) - mean_l * mean_l
+    volume = np.full((hi - lo + 1, h, w), -1.0, np.float32)
+    for i, d in enumerate(range(lo, hi + 1)):
+        if abs(d) + block >= w:
+            continue
+        shifted = np.zeros_like(rs)
+        if d >= 0:
+            shifted[:, d:] = rs[:, :w - d]
+        else:
+            shifted[:, :w + d] = rs[:, -d:]
+        mean_r = cv2.boxFilter(shifted, -1, box)
+        var_r = cv2.boxFilter(shifted * shifted, -1, box) - mean_r * mean_r
+        cov = cv2.boxFilter(ls * shifted, -1, box) - mean_l * mean_r
+        c = cov / np.sqrt(np.maximum(var_l * var_r, 1e-6))
+        if d >= 0:
+            c[:, :d + block] = -1.0
+        else:
+            c[:, w + d - block:] = -1.0
+        volume[i] = c
+    n = len(volume)
+    best = np.argmax(volume, axis=0)
+    yy, xx = np.mgrid[0:h, 0:w]
+    peak = volume[best, yy, xx]
+    below = volume[np.clip(best - 1, 0, n - 1), yy, xx]
+    above = volume[np.clip(best + 1, 0, n - 1), yy, xx]
+    curvature = below - 2.0 * peak + above
+    offset = np.divide(0.5 * (below - above), curvature, out=np.zeros_like(peak),
+                       where=np.abs(curvature) > 1e-6)
+    d = lo + best + np.clip(offset, -0.5, 0.5)
+    rest = volume.copy()
+    for step in (-1, 0, 1):
+        rest[np.clip(best + step, 0, n - 1), yy, xx] = -1.0
+    ok = (peak >= min_correlation) & (peak - rest.max(axis=0) >= margin)
+    ok &= (best > 0) & (best < n - 1)
+    xr = np.clip(np.rint(xx - d).astype(int), 0, w - 1)
+    columns = np.clip(xr[None] + lo + np.arange(n)[:, None, None], 0, w - 1)
+    back = lo + np.argmax(volume[np.arange(n)[:, None, None], yy[None], columns], axis=0)
+    ok &= np.abs(back - d) <= 1.0
+    d = np.where(ok, d, np.nan).astype(np.float32)
+    for _ in range(fill):
+        valid = np.isfinite(d).astype(np.float32)
+        total = cv2.boxFilter(np.where(np.isfinite(d), d, 0.0).astype(np.float32), -1, (3, 3),
+                              normalize=False)
+        count = cv2.boxFilter(valid, -1, (3, 3), normalize=False)
+        holes = ~np.isfinite(d) & (count >= 3)
+        d[holes] = total[holes] / count[holes]
+    d = cv2.resize(d, (left.shape[1], left.shape[0]), interpolation=cv2.INTER_NEAREST)
+    return d * scale
+
+
 def refine(left: np.ndarray, right: np.ndarray, points: np.ndarray, guesses: np.ndarray,
            window: int = 21, min_correlation: float = 0.95,
            max_shift: float = 3.0, return_warps: bool = False):
