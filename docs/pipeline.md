@@ -68,15 +68,18 @@ light surfaces. The decode takes the best-exposed sample per pixel.
 
 ## Decode
 
-OpenCV's `structured_light.GrayCodePattern` decodes bit planes with their inverses into
-a column index per pixel and a mask of pixels that were lit and unambiguous. Phase shift
-images give a wrapped phase per pixel, unwrapped by the Gray code period. The result is
-a float column per pixel.
+`decode.py` binarizes each Gray code plane against its inverse and decodes the bits into
+a column index per pixel. Phase shift images give a wrapped phase and a modulation per
+pixel. The float column is the phase column nearest the Gray code column. A pixel is
+masked when a pair lacks contrast, the sinusoid lacks modulation, or the two columns
+disagree by more than a pixel (`DESIGN.md` D16).
 
 ## Triangulate
 
 Each pixel's ray comes from the camera matrix and distortion, each column's plane from
-the projector matrix and extrinsics, and their intersection is the point. Points with
+the projector matrix and extrinsics, and their intersection is the point. Projector
+distortion is applied at the row where the previous estimate lands, over three
+iterations. Points with
 low confidence, grazing angles or a column outside the projector are dropped. Output is
 a PLY per view in the camera frame.
 
@@ -86,6 +89,14 @@ ArUco targets detected in the camera images give each view's pose in the target 
 once three or more targets with known positions are seen. Target positions come from a
 bundle adjustment over all views. ICP (Open3D) refines the poses on overlapping clouds.
 Scale bars are measured in the merged cloud and reported.
+
+## Virtual bench
+
+`slscan simulate` writes a synthetic calibration capture and three scenes (`plate`,
+`sphere`, `ball-bar`) in the layouts above, then prints the commands that calibrate,
+scan and measure them. `slscan scan <view>` decodes and triangulates one view of
+`gray_*.png` and `phase_*.png` captures into a PLY file. `slscan measure` fits a plane,
+a sphere or a ball bar to a PLY file. Real captures use the same commands.
 
 ## Mesh
 

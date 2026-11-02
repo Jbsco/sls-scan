@@ -7,7 +7,7 @@ import sys
 
 import numpy as np
 
-from . import calibrate, patterns
+from . import calibrate, decode, geometry, patterns, synthetic, triangulate
 
 CAMERA_LIMIT_PX = 0.3
 PROJECTOR_LIMIT_PX = 0.5
@@ -47,6 +47,85 @@ def cmd_patterns(args: argparse.Namespace) -> int:
     phase = patterns.phase_shift_images(args.width, args.height, args.pitch, args.steps)
     _write_stack(phase, f"{args.out}/phase_")
     print(f"{gray.shape[0]} Gray code images and {phase.shape[0]} phase images written to {args.out}")
+    return 0
+
+
+PLATE_LIMIT_M = 0.0002
+
+
+def read_scan(directory: str) -> dict:
+    """Read a view written with the file names of slscan patterns: gray_*.png and phase_*.png."""
+    import cv2
+
+    def stack(name):
+        files = sorted(glob.glob(os.path.join(directory, f"{name}_*.png")))
+        if not files:
+            raise FileNotFoundError(f"no {name}_*.png in {directory}")
+        return np.stack([cv2.imread(f, cv2.IMREAD_GRAYSCALE) for f in files])
+    return {"gray": stack("gray"), "phase": stack("phase")}
+
+
+def write_scan(directory: str, captures: dict) -> None:
+    _write_stack(captures["gray"], os.path.join(directory, "gray_"))
+    _write_stack(captures["phase"], os.path.join(directory, "phase_"))
+
+
+def cmd_scan(args: argparse.Namespace) -> int:
+    cal = calibrate.load(args.calibration)
+    view = read_scan(args.view)
+    columns, mask = decode.decode_columns(view["gray"], view["phase"], cal.projector.width,
+                                          args.pitch)
+    points, _ = triangulate.triangulate(columns, mask, cal)
+    geometry.write_ply(args.out, points)
+    print(f"{len(points)} points written to {args.out}")
+    return 0
+
+
+def cmd_measure(args: argparse.Namespace) -> int:
+    points = geometry.read_ply(args.cloud)
+    if args.shape == "plane":
+        _, _, rms = geometry.fit_plane(points)
+        print(f"plane RMS residual {1000.0 * rms:.3f} mm (limit {1000.0 * PLATE_LIMIT_M:.1f} mm)")
+        return 0 if rms < PLATE_LIMIT_M else 1
+    if args.shape == "sphere":
+        centre, radius, rms = geometry.fit_sphere(points)
+        print(f"sphere radius {1000.0 * radius:.3f} mm, form RMS {1000.0 * rms:.3f} mm, "
+              f"centre {np.round(1000.0 * centre, 3)} mm")
+        return 0
+    labels = geometry.split_two(points)
+    centres = [geometry.fit_sphere(points[labels == i])[0] for i in (0, 1)]
+    print(f"ball bar spacing {1000.0 * np.linalg.norm(centres[0] - centres[1]):.3f} mm")
+    return 0
+
+
+def cmd_simulate(args: argparse.Namespace) -> int:
+    rig = synthetic.reference_rig()
+    spec = calibrate.BoardSpec(9, 6, 0.04, 0.03)
+    import cv2
+
+    for i, view in enumerate(synthetic.calibration_views(rig, spec, args.seed)):
+        pose = os.path.join(args.out, "calibration", f"pose_{i:03d}")
+        os.makedirs(pose, exist_ok=True)
+        cv2.imwrite(os.path.join(pose, "white.png"), view["white"])
+        _write_stack(view["columns"], os.path.join(pose, "columns_"))
+        _write_stack(view["rows"], os.path.join(pose, "rows_"))
+    scenes = synthetic.acceptance_scenes()
+    for name, scene in scenes.items():
+        captures, _ = synthetic.scan_captures(rig, scene, pitch=args.pitch, seed=args.seed)
+        write_scan(os.path.join(args.out, name), captures)
+    sphere = scenes["sphere"][0]
+    bar = scenes["ball-bar"]
+    print(f"synthetic captures written to {args.out}")
+    print(f"true sphere radius {1000.0 * sphere.radius:.3f} mm, "
+          f"true ball bar spacing {1000.0 * np.linalg.norm(bar[0].centre - bar[1].centre):.3f} mm")
+    print("next:")
+    print(f"  slscan calibrate {args.out}/calibration --squares-x 9 --squares-y 6 --square-mm 40 "
+          f"--marker-mm 30 --projector-width {rig.projector.width} "
+          f"--projector-height {rig.projector.height} --out {args.out}/calibration.yaml")
+    for name, shape in (("plate", "plane"), ("sphere", "sphere"), ("ball-bar", "ball-bar")):
+        print(f"  slscan scan {args.out}/{name} --calibration {args.out}/calibration.yaml "
+              f"--pitch {args.pitch} --out {args.out}/{name}.ply && "
+              f"slscan measure {args.out}/{name}.ply --shape {shape}")
     return 0
 
 
@@ -146,6 +225,24 @@ def main(argv=None) -> int:
     p.add_argument("--focal-limit", type=float, default=0.001, help="relative focal length change")
     p.add_argument("--baseline-limit-mm", type=float, default=0.2)
     p.set_defaults(func=cmd_calibration_diff)
+
+    p = sub.add_parser("scan", help="decode and triangulate one view into a PLY point cloud")
+    p.add_argument("view", help="directory of gray_*.png and phase_*.png captures")
+    p.add_argument("--calibration", default="data/calibration.yaml")
+    p.add_argument("--pitch", type=int, default=32, help="phase shift pitch in projector pixels")
+    p.add_argument("--out", default="data/view.ply")
+    p.set_defaults(func=cmd_scan)
+
+    p = sub.add_parser("measure", help="fit an acceptance artifact to a point cloud")
+    p.add_argument("cloud")
+    p.add_argument("--shape", choices=("plane", "sphere", "ball-bar"), required=True)
+    p.set_defaults(func=cmd_measure)
+
+    p = sub.add_parser("simulate", help="write synthetic calibration and scan captures")
+    p.add_argument("--out", default="data/simulated")
+    p.add_argument("--pitch", type=int, default=16, help="phase shift pitch for the 1024-column virtual projector")
+    p.add_argument("--seed", type=int, default=0)
+    p.set_defaults(func=cmd_simulate)
 
     args = parser.parse_args(argv)
     return args.func(args)

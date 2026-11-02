@@ -28,11 +28,11 @@ acceptance tests in `docs/accuracy.md` pass on it, use anything here at your own
 
 ## Status
 
-Phase 0 of `ROADMAP.md`, the scaffold, is complete. Phase 1 calibration tooling is
-implemented and verified against synthetic views with known parameters (`DESIGN.md`
-D15). The static reference pipeline (Phase 2, Python) is next, then the application
-with its GPU preview (Phases 3 and 4, Rust). Bench acceptance of each phase waits on
-the hardware in `docs/hardware.md`.
+Phase 0 of `ROADMAP.md`, the scaffold, is complete. Calibration tooling (Phase 1) and
+the static reference pipeline (Phase 2) are implemented and verified on a virtual bench
+of synthetic captures (`DESIGN.md` D15 and D17). The application with its GPU preview
+(Phases 3 and 4, Rust) is next. Bench acceptance of each phase waits on the hardware in
+`docs/hardware.md`.
 
 ## Applications
 
@@ -69,8 +69,8 @@ measured geometry. Among them:
    quadric decimation to a size CAD can hold, alignment to datum points measured on the
    object, and export as PLY, OBJ or STL.
 
-Decoding uses OpenCV's `structured_light` module (Gray code and sinusoidal phase shift),
-the point cloud work uses Open3D, and everything else is NumPy.
+Decoding and triangulation are NumPy, written as the reference the GPU kernels are
+checked against (`DESIGN.md` D16). Calibration uses OpenCV, and meshing will use Open3D.
 
 ## Architecture
 
@@ -123,9 +123,9 @@ acceptance tests: a flat plate, a sphere and the scale bars.
 
 | Path | Contents |
 |---|---|
-| `slscan/` | Python package: pattern codes, calibration, synthetic test views and the commands in `cli.py`, with the reference pipeline next |
+| `slscan/` | Python package: pattern codes, calibration, decode, triangulation, artifact fits, synthetic captures, and the commands in `cli.py` |
 | `app/` | Rust application, from Phase 3 |
-| `tests/` | pytest tests of the pure functions and of calibration on synthetic views |
+| `tests/` | pytest tests of the pure functions, and the virtual bench on synthetic captures |
 | `docs/hardware.md` | Bill of materials, rig geometry and build notes |
 | `docs/accuracy.md` | Error model and acceptance tests |
 | `docs/pipeline.md` | Each stage with its inputs, outputs and file formats |
@@ -145,6 +145,10 @@ Rust toolchain and a Vulkan driver (or Mesa's lavapipe for the CPU path).
     bash test.do                              # the pytest suite
     bash style.do                             # markdown, sanitization and prose
     bash verify.do                            # every gate, cheapest first
+
+The virtual bench runs the whole pipeline on synthetic captures, with no hardware:
+
+    slscan simulate --out data/simulated      # prints the calibrate, scan and measure commands
 
 A change is finished when `verify.do` is green, and CI runs the same gates on every push
 and pull request. Captures, calibrations and scan outputs live under `data/`, which is

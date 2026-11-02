@@ -133,3 +133,131 @@ def calibration_views(rig: Rig, spec: calibrate.BoardSpec, seed: int = 0):
     rng = np.random.default_rng(seed)
     for r, t in board_poses(spec):
         yield calibration_view(rig, spec, r, t, rng)
+
+
+@dataclass(frozen=True)
+class Plate:
+    """A flat rectangle: centre, axes as rotation columns (u, v, normal), half sizes."""
+
+    centre: np.ndarray
+    axes: np.ndarray
+    half_u: float
+    half_v: float
+    albedo: float = 0.8
+
+    def hit(self, origin: np.ndarray, directions: np.ndarray) -> np.ndarray:
+        normal = self.axes[:, 2]
+        denominator = directions @ normal
+        with np.errstate(divide="ignore", invalid="ignore"):
+            t = ((self.centre - origin) @ normal) / denominator
+        local = (origin + t[:, np.newaxis] * directions - self.centre) @ self.axes[:, :2]
+        inside = (np.abs(local[:, 0]) <= self.half_u) & (np.abs(local[:, 1]) <= self.half_v)
+        return np.where(np.isfinite(t) & (t > 0) & inside, t, np.inf)
+
+
+@dataclass(frozen=True)
+class Ball:
+    centre: np.ndarray
+    radius: float
+    albedo: float = 0.8
+
+    def hit(self, origin: np.ndarray, directions: np.ndarray) -> np.ndarray:
+        offset = origin - self.centre
+        a = np.einsum("ij,ij->i", directions, directions)
+        b = 2.0 * directions @ offset
+        c = offset @ offset - self.radius ** 2
+        disc = b * b - 4.0 * a * c
+        with np.errstate(invalid="ignore"):
+            t = (-b - np.sqrt(disc)) / (2.0 * a)
+        return np.where((disc >= 0) & (t > 0), t, np.inf)
+
+
+def nearest_hit(scene: list, origin: np.ndarray, directions: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return the ray parameter of the nearest hit (inf for none) and its albedo."""
+    t = np.full(len(directions), np.inf)
+    albedo = np.zeros(len(directions))
+    for shape in scene:
+        ts = shape.hit(origin, directions)
+        closer = ts < t
+        t[closer] = ts[closer]
+        albedo[closer] = shape.albedo
+    return t, albedo
+
+
+@dataclass
+class SceneView:
+    """A scene as the camera sees it: points, albedo, projector coordinates and lighting."""
+
+    points: np.ndarray
+    albedo: np.ndarray
+    u: np.ndarray
+    v: np.ndarray
+    lit: np.ndarray
+    shape: tuple
+
+
+def scene_view(rig: Rig, scene: list) -> SceneView:
+    """Ray-cast a scene from the camera and find where the projector lights it."""
+    h, w = rig.camera.height, rig.camera.width
+    ys, xs = np.mgrid[0:h, 0:w]
+    pixels = np.column_stack([xs.ravel(), ys.ravel(), np.ones(h * w)])
+    rays = pixels @ np.linalg.inv(rig.camera.matrix).T
+    t, albedo = nearest_hit(scene, np.zeros(3), rays)
+    hit = np.isfinite(t)
+    points = np.where(hit[:, np.newaxis], rays * np.where(hit, t, 0.0)[:, np.newaxis], 0.0)
+    in_projector = points @ rig.rotation.T + rig.translation
+    with np.errstate(divide="ignore", invalid="ignore"):
+        image = in_projector @ rig.projector.matrix.T
+        u = image[:, 0] / image[:, 2]
+        v = image[:, 1] / image[:, 2]
+    inside = hit & (in_projector[:, 2] > 0) & (u >= -0.5) & (u <= rig.projector.width - 0.5) \
+        & (v >= -0.5) & (v <= rig.projector.height - 0.5)
+    centre = -rig.rotation.T @ rig.translation
+    shadow_t, _ = nearest_hit(scene, centre, points - centre)
+    lit = inside & (shadow_t >= 1.0 - 1e-9)
+    return SceneView(points, albedo, u, v, lit, (h, w))
+
+
+def capture_scene(sv: SceneView, values: np.ndarray, rng: np.random.Generator,
+                  ambient: float = 25.0, gain: float = 200.0, noise: float = 1.0) -> np.ndarray:
+    """Return the camera image, as uint8, of projector intensities (0 to 255) per pixel."""
+    lighting = ambient + gain * np.where(sv.lit, values, 0.0) / 255.0
+    image = sv.albedo * lighting + noise * rng.standard_normal(len(values))
+    return np.clip(np.rint(image), 0, 255).astype(np.uint8).reshape(sv.shape)
+
+
+def scan_captures(rig: Rig, scene: list, pitch: int = 16, steps: int = 4,
+                  seed: int = 0) -> tuple[dict, SceneView]:
+    """Render the column Gray code stack and the phase-shift stack of one static view.
+
+    Gray code stripes are sampled at the nearest projector pixel, so their edges stay
+    sharp. Sinusoids are evaluated at the continuous projector column, as a slightly
+    defocused projector shows them.
+    """
+    rng = np.random.default_rng(seed)
+    sv = scene_view(rig, scene)
+    w, h = rig.projector.width, rig.projector.height
+    column = np.clip(np.rint(sv.u), 0, w - 1).astype(np.int64)
+    column[~sv.lit] = 0
+    gray = np.stack([capture_scene(sv, p[0][column].astype(np.float64), rng)
+                     for p in patterns.gray_code_images(w, 1, "columns")])
+    phase = np.stack([capture_scene(sv, 127.5 + 127.5 * np.cos(
+        2.0 * math.pi * (np.where(sv.lit, sv.u, 0.0) / pitch + i / steps)), rng)
+        for i in range(steps)])
+    return {"gray": gray, "phase": phase}, sv
+
+
+def true_calibration(rig: Rig, spec: calibrate.BoardSpec) -> calibrate.Calibration:
+    """Return the rig's own parameters as a calibration with zero distortion."""
+    def intrinsics(p):
+        return calibrate.Intrinsics(p.width, p.height, p.matrix.copy(), np.zeros(5), 0.0)
+    return calibrate.Calibration(spec, intrinsics(rig.camera), intrinsics(rig.projector),
+                                 calibrate.Stereo(rig.rotation.copy(), rig.translation.copy(), 0.0), 0)
+
+
+def acceptance_scenes() -> dict:
+    """Return the virtual bench scenes: a flat plate, a sphere and a ball bar."""
+    return {"plate": [Plate(np.array([0.0, 0.0, 1.0]), rotation(10, -15), 0.25, 0.25)],
+            "sphere": [Ball(np.array([0.02, -0.01, 1.0]), 0.05)],
+            "ball-bar": [Ball(np.array([-0.15, 0.02, 1.0]), 0.025),
+                         Ball(np.array([0.15, -0.02, 1.02]), 0.025)]}
