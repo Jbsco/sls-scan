@@ -1,0 +1,31 @@
+name: Node
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the package without the mesh tools
+        run: |
+          pip install numpy==2.5.4 opencv-contrib-python-headless==5.0.0.93 pyyaml==6.0.3
+          pip install --no-deps -e .
+
+      - name: Run node gate
+        run: |
+          set -o pipefail
+          bash node.do 2>&1 | tee node-output.log
+          grep -q "node: virtual bench over the capture protocol clean" node-output.log

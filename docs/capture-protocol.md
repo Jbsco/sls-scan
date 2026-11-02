@@ -1,0 +1,65 @@
+# Capture protocol
+
+The application and a capture node talk over one TCP connection. The Pi capture node of
+`DESIGN.md` D13 and the stand-in node of D17 speak the same protocol (D18).
+
+## Messages
+
+Each message is a header followed by its payload. Integers are little-endian.
+
+| Field | Type | Contents |
+|---|---|---|
+| magic | 4 bytes | `SLS1`, which also versions the protocol |
+| type | u8 | message type |
+| length | u32 | payload length in bytes |
+
+| Type | Name | Direction | Payload |
+|---|---|---|---|
+| 1 | HELLO | node to application | JSON: node name, projector size and refresh rate, cameras with size and format |
+| 2 | SEQUENCE | application to node | JSON: pattern set (`scan` or `calibration`), phase pitch, phase steps |
+| 3 | FRAME | node to application | frame header, then pixels row by row |
+| 4 | END | node to application | JSON: sequence number and frame count |
+| 5 | ERROR | node to application | JSON: message |
+
+Frame header, 23 bytes:
+
+| Field | Type | Contents |
+|---|---|---|
+| sequence | u32 | sequence number on this connection |
+| index | u32 | pattern index in projection order |
+| exposure | u16 | exposure index |
+| timestamp | i64 | exposure start in nanoseconds on the node clock |
+| width, height | u16 | image size in pixels |
+| format | u8 | 0 for 8-bit monochrome |
+
+## Session
+
+1. On connection, the node sends HELLO.
+2. For each SEQUENCE from the application, the node projects every pattern of the set
+   in order, captures it, and sends one FRAME per pattern, then END.
+3. Further SEQUENCE messages may follow on the same connection, one per board pose
+   during calibration.
+
+Pattern order follows the capture layouts of `docs/pipeline.md`. A scan set is the
+column Gray codes with their inverses, then the phase shifts (`gray_000` onward, then
+`phase_000` onward). A calibration set is white, then column and row Gray codes
+(`white`, `columns_000` onward, `rows_000` onward).
+
+## Stand-in node
+
+    slscan node-sim --scene plate                 # serves synthetic frames on port 5600
+    slscan capture --set scan --pitch 16 --out data/view
+    slscan capture --set calibration --out data/calibration/pose_000
+
+The stand-in renders the chosen scene for scan sets and the next board pose for each
+calibration set, with timestamps at 60 Hz. Captures land in the layouts that
+`slscan scan` and `slscan calibrate` read.
+
+The `Dockerfile` at the repository root packages the stand-in, so it runs on its own
+address the way the Pi does:
+
+    docker build -t sls-scan-node .
+    docker run --rm -p 5600:5600 sls-scan-node --scene sphere
+
+`node.do` builds that image and runs a calibration capture and a plate scan through it
+over the protocol, then calibrates, scans and measures the result.

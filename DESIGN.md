@@ -232,3 +232,24 @@ Renode emulates microcontrollers, and nothing in this design runs on one, so it 
 not used. The simulation that Phase 3 needs is a capture node stand-in: a process,
 run in a container, that serves synthetic frames over the node's protocol, so the
 application is developed against the same interface as the Pi.
+
+## D18. The capture protocol (2026-11-01)
+
+The application and the capture node share one TCP connection with JSON control
+messages and binary frames, specified in `docs/capture-protocol.md`. JSON keeps the
+control messages readable and lets fields be added. Frames stay binary, because a
+preview frame at 1456 × 1088 mono is 1.6 MB and the stream runs near 48 MB/s (D13).
+
+The node generates the patterns from the set name and its parameters, so no pattern
+image crosses the network. Each frame has its pattern index and the node's timestamp
+of exposure start. The application matches frames to patterns by index and checks
+the timing by timestamp. A change to the format changes the magic.
+
+## D19. The stand-in node in a container, checked in CI (2026-11-01)
+
+The stand-in node runs from an image built by the root `Dockerfile`, with only
+packages it needs, at versions CI installs. A container gives it an address of its
+own, so the application connects to it as it will to the Pi. `node.do` runs a virtual
+bench through that container over the capture protocol, and a Node workflow runs it on
+every push and pull request. `verify.do` leaves it out, because it needs Docker and
+adds an image build to every local run.

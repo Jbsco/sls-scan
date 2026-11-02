@@ -7,7 +7,7 @@ import sys
 
 import numpy as np
 
-from . import calibrate, decode, geometry, patterns, synthetic, triangulate
+from . import calibrate, decode, geometry, node, patterns, synthetic, triangulate
 
 CAMERA_LIMIT_PX = 0.3
 PROJECTOR_LIMIT_PX = 0.5
@@ -129,6 +129,35 @@ def cmd_simulate(args: argparse.Namespace) -> int:
     return 0
 
 
+def _interrupt(signum, frame):
+    raise KeyboardInterrupt
+
+
+def cmd_node_sim(args: argparse.Namespace) -> int:
+    import signal
+
+    signal.signal(signal.SIGTERM, _interrupt)
+    server = node.StandIn((args.host, args.port), scene=args.scene, seed=args.seed)
+    print(f"stand-in node on {args.host}:{server.server_address[1]}, scene {args.scene}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+    return 0
+
+
+def cmd_capture(args: argparse.Namespace) -> int:
+    host, port = args.node.rsplit(":", 1)
+    result = node.capture(host, int(port), args.set, args.out, args.pitch, args.steps)
+    print(f"{result['frames']} frames from {result['node']['node']} written to {args.out}")
+    if result["missing"] or not result["in_order"]:
+        print(f"missing frames {result['missing']}, in order: {result['in_order']}")
+        return 1
+    return 0
+
+
 def cmd_board(args: argparse.Namespace) -> int:
     import cv2
 
@@ -243,6 +272,21 @@ def main(argv=None) -> int:
     p.add_argument("--pitch", type=int, default=16, help="phase shift pitch for the 1024-column virtual projector")
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_simulate)
+
+    p = sub.add_parser("node-sim", help="run a stand-in capture node serving synthetic frames")
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=5600)
+    p.add_argument("--scene", choices=sorted(synthetic.acceptance_scenes()), default="plate")
+    p.add_argument("--seed", type=int, default=0)
+    p.set_defaults(func=cmd_node_sim)
+
+    p = sub.add_parser("capture", help="run one pattern sequence on a capture node and save it")
+    p.add_argument("--node", default="127.0.0.1:5600", help="host:port of the capture node")
+    p.add_argument("--set", choices=("scan", "calibration"), default="scan")
+    p.add_argument("--pitch", type=int, default=32)
+    p.add_argument("--steps", type=int, default=4)
+    p.add_argument("--out", default="data/view")
+    p.set_defaults(func=cmd_capture)
 
     args = parser.parse_args(argv)
     return args.func(args)
