@@ -2,6 +2,7 @@ use slscan_app::calibration;
 use slscan_app::client::{self, Event};
 use slscan_app::coarse;
 use slscan_app::depth;
+use slscan_app::fuse;
 use slscan_app::gpu;
 use slscan_app::protocol::SequenceRequest;
 use slscan_app::rectify;
@@ -89,6 +90,9 @@ fn headless_capture(args: &[String]) -> ExitCode {
     }
 }
 
+/// Voxel size of the fused model, as `track.fuse` uses by default.
+const FUSION_VOXEL_M: f64 = 0.0005;
+
 fn headless_depth(args: &[String]) -> ExitCode {
     let mut node = "127.0.0.1:5600".to_owned();
     let mut wait = Duration::ZERO;
@@ -170,7 +174,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
     let mut ok = !results.is_empty();
-    let mut last = None;
+    let mut fusion = fuse::Fusion::new(FUSION_VOXEL_M);
     for (pair, result) in &results {
         match result {
             Ok(d) => {
@@ -180,13 +184,19 @@ fn headless_depth(args: &[String]) -> ExitCode {
                     .iter()
                     .map(|(name, ms)| format!("{name} {ms:.1}"))
                     .collect();
+                let start = Instant::now();
+                fusion.add(&d.points);
+                let fused = start.elapsed().as_secs_f64() * 1000.0;
+                let rms = fusion
+                    .last_rms
+                    .map_or_else(String::new, |r| format!(", ICP residual {:.1} µm", r * 1e6));
                 println!(
-                    "{pair}: {} points in {total:.1} ms ({} ms)",
+                    "{pair}: {} points in {total:.1} ms ({} ms), fused in {fused:.1} ms into {} points{rms}",
                     d.points.len(),
-                    stages.join(", ")
+                    stages.join(", "),
+                    fusion.model().len()
                 );
                 ok &= !d.points.is_empty();
-                last = Some(d);
             }
             Err(e) => {
                 println!("{pair}: depth failed: {e}");
@@ -194,9 +204,13 @@ fn headless_depth(args: &[String]) -> ExitCode {
             }
         }
     }
-    if let (Some(path), Some(d)) = (&out, last) {
-        match depth::write_ply(path, &d.points) {
-            Ok(()) => println!("{} points written to {}", d.points.len(), path.display()),
+    if let Some(path) = &out {
+        match depth::write_ply(path, fusion.model()) {
+            Ok(()) => println!(
+                "{} fused points written to {}",
+                fusion.model().len(),
+                path.display()
+            ),
             Err(e) => {
                 eprintln!("{}: {e}", path.display());
                 return ExitCode::FAILURE;
@@ -1041,6 +1055,114 @@ fn depth_check(args: &[String]) -> ExitCode {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct FusionMeta {
+    counts: Vec<usize>,
+    voxel: f64,
+}
+
+fn doubles(bytes: &[u8]) -> Vec<f64> {
+    bytes
+        .chunks_exact(8)
+        .map(|b| f64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
+        .collect()
+}
+
+fn fusion_check(args: &[String]) -> ExitCode {
+    let Some(dir) = args.first().map(PathBuf::from) else {
+        eprintln!("usage: sls-scan fusion-check <vector directory>");
+        return ExitCode::FAILURE;
+    };
+    let read = |name: &str| std::fs::read(dir.join(name));
+    let (meta, frames, poses, model) = match (
+        read("meta.json"),
+        read("frames.bin"),
+        read("poses.bin"),
+        read("model.bin"),
+    ) {
+        (Ok(m), Ok(f), Ok(p), Ok(d)) => (m, doubles(&f), doubles(&p), doubles(&d)),
+        _ => {
+            eprintln!("fusion vectors missing in {}", dir.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let meta: FusionMeta = match serde_json::from_slice(&meta) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("meta.json: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if frames.len() != 3 * meta.counts.iter().sum::<usize>()
+        || poses.len() != 12 * meta.counts.len()
+    {
+        eprintln!("fusion vectors do not match meta.json");
+        return ExitCode::FAILURE;
+    }
+    let mut fusion = fuse::Fusion::new(meta.voxel);
+    let mut offset = 0;
+    let mut times = Vec::new();
+    for &count in &meta.counts {
+        let points: Vec<fuse::Vec3> = frames[offset..offset + 3 * count]
+            .chunks_exact(3)
+            .map(|c| [c[0], c[1], c[2]])
+            .collect();
+        offset += 3 * count;
+        let start = Instant::now();
+        fusion.add(&points);
+        times.push(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    let (mut translation, mut rotation) = (0.0f64, 0.0f64);
+    for (pose, reference) in fusion.poses.iter().zip(poses.chunks_exact(12)) {
+        let r = &pose.rotation;
+        let trace: f64 = (0..3)
+            .map(|i| (0..3).map(|k| r[i][k] * reference[i * 3 + k]).sum::<f64>())
+            .sum();
+        rotation = rotation.max(((trace - 1.0) / 2.0).clamp(-1.0, 1.0).acos().to_degrees());
+        let d: f64 = (0..3)
+            .map(|i| (pose.translation[i] - reference[9 + i]).powi(2))
+            .sum();
+        translation = translation.max(d.sqrt());
+    }
+    let key = |p: &[f64]| [0, 1, 2].map(|d| (p[d] / meta.voxel).floor() as i64);
+    let expected: std::collections::HashMap<[i64; 3], [f64; 3]> = model
+        .chunks_exact(3)
+        .map(|p| (key(p), [p[0], p[1], p[2]]))
+        .collect();
+    let (mut found, mut largest) = (0usize, 0.0f64);
+    for p in fusion.model() {
+        if let Some(r) = expected.get(&key(p)) {
+            found += 1;
+            let d: f64 = (0..3).map(|i| (p[i] - r[i]).powi(2)).sum();
+            largest = largest.max(d.sqrt());
+        }
+    }
+    let differing = fusion.model().len() + expected.len() - 2 * found;
+    let fraction = differing as f64 / expected.len().max(1) as f64;
+    let total: f64 = times.iter().sum();
+    println!(
+        "{} frames tracked and fused in {total:.1} ms, {:.1} ms per frame at most, {} model points",
+        meta.counts.len(),
+        times.iter().copied().fold(0.0, f64::max),
+        fusion.model().len()
+    );
+    println!(
+        "pose difference up to {:.3} µm and {:.6}°, voxels in one model only {differing} of {} ({:.3} %), point difference up to {:.3} µm",
+        translation * 1e6,
+        rotation,
+        expected.len(),
+        100.0 * fraction,
+        largest * 1e6
+    );
+    if translation <= 1e-6 && rotation <= 1e-4 && fraction <= 0.005 && largest <= 1e-6 {
+        println!("fusion check: Rust matches the NumPy reference");
+        ExitCode::SUCCESS
+    } else {
+        println!("fusion check: Rust differs from the NumPy reference");
+        ExitCode::FAILURE
+    }
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     match args.get(1).map(String::as_str) {
@@ -1052,6 +1174,7 @@ fn main() -> ExitCode {
         Some("rectify-check") => return rectify_check(&args[2..]),
         Some("coarse-check") => return coarse_check(&args[2..]),
         Some("depth-check") => return depth_check(&args[2..]),
+        Some("fusion-check") => return fusion_check(&args[2..]),
         _ => {}
     }
     let options = eframe::NativeOptions::default();

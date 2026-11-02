@@ -178,3 +178,13 @@ def test_detect_command_reads_a_named_image(tmp_path, capsys):
     result = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert result["of"] == 40 and result["corners"] > 20
     assert cli.main(["detect", str(pose), *args, "--json"]) == 1
+
+
+def test_fusion_vectors_command_writes_consistent_files(tmp_path):
+    out = tmp_path / "fusion"
+    assert cli.main(["fusion-vectors", "--out", str(out), "--frames", "3", "--step", "24"]) == 0
+    meta = json.loads((out / "meta.json").read_text())
+    assert len(meta["counts"]) == 3 and min(meta["counts"]) > 0
+    assert (out / "frames.bin").stat().st_size == 24 * sum(meta["counts"])
+    assert (out / "poses.bin").stat().st_size == 8 * 12 * 3
+    assert (out / "model.bin").stat().st_size == 24 * meta["model"]

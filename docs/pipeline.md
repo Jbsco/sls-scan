@@ -54,7 +54,8 @@ averages over 0.5 mm voxels (`DESIGN.md` D26). A captured sweep is a directory o
 matches, tracks and fuses it into one PLY file.
 
 `slscan sweep-bench` runs a synthetic sweep through matching, tracking and fusion and
-compares poses and artifacts with the truth. `slscan fuse` and `slscan sweep-bench`
+compares poses and artifacts with the truth. The application runs a Rust port of both,
+checked against them by `sls-scan fusion-check` (D42). `slscan fuse` and `slscan sweep-bench`
 match with affine windows of 21 pixels by default, for speed, and take `--order 2` for
 second-order windows.
 

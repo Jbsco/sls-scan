@@ -3,6 +3,7 @@
 use crate::calibration::{self, Board, Detection, Solve, StereoSolve, Tool};
 use crate::client::{self, Event, Stats};
 use crate::depth::{DepthFrame, DepthResult, DepthSetup};
+use crate::fuse::{Fusion, Vec3};
 use crate::protocol::{FrameHeader, Hello, Projector, SequenceRequest};
 use eframe::egui;
 use std::path::{Path, PathBuf};
@@ -29,10 +30,25 @@ fn limit_label(value: f64, limit: f64, what: &str) -> egui::RichText {
     egui::RichText::new(format!("{what} {value:.3} px (limit {limit})")).color(colour)
 }
 
+/// Voxel size of the fused model, as `track.fuse` uses by default.
+const FUSION_VOXEL_M: f64 = 0.0005;
+
+enum DepthJob {
+    Pair(Vec<u8>, Vec<u8>),
+    Reset,
+}
+
+struct LiveFrame {
+    depth: Result<DepthResult, String>,
+    model: Vec<Vec3>,
+    fuse_ms: f64,
+    rms: Option<f64>,
+}
+
 struct DepthWorker {
     params_path: String,
-    pairs: mpsc::Sender<(Vec<u8>, Vec<u8>)>,
-    results: Receiver<Result<DepthResult, String>>,
+    jobs: mpsc::Sender<DepthJob>,
+    results: Receiver<LiveFrame>,
     in_flight: usize,
 }
 
@@ -62,6 +78,7 @@ pub struct ScanApp {
     depth: Option<DepthWorker>,
     pending_left: Option<Vec<u8>>,
     cloud: Vec<[f64; 3]>,
+    fusion_status: String,
     depth_status: String,
     depth_frames: usize,
     depth_skipped: usize,
@@ -95,6 +112,7 @@ impl Default for ScanApp {
             depth: None,
             pending_left: None,
             cloud: Vec::new(),
+            fusion_status: String::new(),
             depth_status: String::new(),
             depth_frames: 0,
             depth_skipped: 0,
@@ -110,19 +128,38 @@ impl ScanApp {
         let frame = DepthFrame::new(false)?;
         let adapter = frame.adapter.clone();
         let params = setup.params();
-        let (pairs_tx, pairs_rx) = mpsc::channel::<(Vec<u8>, Vec<u8>)>();
+        let (jobs_tx, jobs_rx) = mpsc::channel::<DepthJob>();
         let (results_tx, results_rx) = mpsc::channel();
         let repaint = ctx.clone();
         thread::spawn(move || {
-            for (left, right) in pairs_rx {
+            let mut fusion = Fusion::new(FUSION_VOXEL_M);
+            for job in jobs_rx {
+                let (left, right) = match job {
+                    DepthJob::Pair(left, right) => (left, right),
+                    DepthJob::Reset => {
+                        fusion = Fusion::new(FUSION_VOXEL_M);
+                        continue;
+                    }
+                };
                 let cameras = (&setup.cameras.left, &setup.cameras.right);
-                let _ = results_tx.send(frame.depth(&params, cameras, &left, &right));
+                let depth = frame.depth(&params, cameras, &left, &right);
+                let start = std::time::Instant::now();
+                if let Ok(d) = &depth {
+                    fusion.add(&d.points);
+                }
+                let live = LiveFrame {
+                    depth,
+                    model: fusion.model().to_vec(),
+                    fuse_ms: start.elapsed().as_secs_f64() * 1000.0,
+                    rms: fusion.last_rms,
+                };
+                let _ = results_tx.send(live);
                 repaint.request_repaint();
             }
         });
         self.depth = Some(DepthWorker {
             params_path: self.params_path.clone(),
-            pairs: pairs_tx,
+            jobs: jobs_tx,
             results: results_rx,
             in_flight: 0,
         });
@@ -146,6 +183,11 @@ impl ScanApp {
         self.pending_left = None;
         self.depth_frames = 0;
         self.depth_skipped = 0;
+        if let Some(worker) = &self.depth {
+            let _ = worker.jobs.send(DepthJob::Reset);
+        }
+        self.cloud.clear();
+        self.fusion_status.clear();
         let (tx, rx) = mpsc::channel();
         let node = self.node.clone();
         let request = SequenceRequest {
@@ -462,7 +504,7 @@ impl ScanApp {
         let (Some(left), Some(worker)) = (self.pending_left.take(), self.depth.as_mut()) else {
             return;
         };
-        if worker.in_flight == 0 && worker.pairs.send((left, pixels)).is_ok() {
+        if worker.in_flight == 0 && worker.jobs.send(DepthJob::Pair(left, pixels)).is_ok() {
             worker.in_flight += 1;
         } else {
             self.depth_skipped += 1;
@@ -473,9 +515,18 @@ impl ScanApp {
         let Some(worker) = self.depth.as_mut() else {
             return;
         };
-        while let Ok(result) = worker.results.try_recv() {
+        while let Ok(live) = worker.results.try_recv() {
             worker.in_flight = worker.in_flight.saturating_sub(1);
-            match result {
+            let rms = live
+                .rms
+                .map_or_else(String::new, |r| format!(", ICP residual {:.1} µm", r * 1e6));
+            self.fusion_status = format!(
+                "model {} points, fused in {:.0} ms{rms}",
+                live.model.len(),
+                live.fuse_ms
+            );
+            self.cloud = live.model;
+            match live.depth {
                 Ok(d) => {
                     let total: f64 = d.timings.iter().map(|(_, ms)| ms).sum();
                     let stages: Vec<String> = d
@@ -488,7 +539,6 @@ impl ScanApp {
                         d.points.len(),
                         stages.join(", ")
                     );
-                    self.cloud = d.points;
                     self.depth_frames += 1;
                 }
                 Err(e) => self.depth_status = format!("depth frame failed: {e}"),
@@ -619,16 +669,19 @@ impl ScanApp {
         if !self.depth_status.is_empty() {
             ui.label(&self.depth_status);
         }
+        if !self.fusion_status.is_empty() {
+            ui.label(&self.fusion_status);
+        }
         if let Some(texture) = &self.preview {
             ui.add(egui::Image::new(texture).shrink_to_fit());
         }
     }
 
-    /// Draw the latest depth frame's points from the front, shaded by depth.
+    /// Draw the fused model from the front, shaded by depth.
     fn scene(&self, ui: &mut egui::Ui) {
         ui.heading("Scene");
         if self.cloud.is_empty() {
-            ui.label("No depth frame yet.");
+            ui.label("No model yet.");
             return;
         }
         let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);

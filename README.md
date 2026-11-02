@@ -31,18 +31,19 @@ acceptance tests in `docs/accuracy.md` pass on it, use anything here at your own
 ## Status
 
 Phase 0 of `ROADMAP.md`, the scaffold, is complete. Calibration (Phase 1) and the static
-reference pipeline (Phase 2) are implemented and verified on a virtual bench of
-synthetic captures, for active stereo (`DESIGN.md` D25) and for the phase-shift option
-(D15 and D17). Phase 3 is in progress: the capture protocol, a stand-in node, and the
-application shell with its capture client, three panels and calibration runs for both
-heads (D21, D41).
+reference pipeline (Phase 2) are implemented and verified on a virtual bench of synthetic
+captures, for active stereo (`DESIGN.md` D25) and for the phase-shift option (D15 and
+D17). Phase 3 is in progress: the capture protocol, a stand-in node, and the application
+shell with its capture client, three panels and calibration runs for both heads (D21,
+D41).
 
 Phase 4 has GPU kernels for the phase-shift decode (D22), stereo rectification (D31),
 block disparity (D35) and second-order stereo refinement (D29). They chain into a depth
 frame from a raw pair at 15 frames per second on a desktop GPU (D36, D38). The
-application runs that path live on stereo captures and draws each frame's points (D40). Phase 5 has ICP tracking and point fusion, verified on a synthetic
-sweep (D26). Phase 9 has second-order matching windows, which follow curved surfaces
-(D28).
+application runs that path live on stereo captures and draws each frame's points (D40).
+Phase 5 has ICP tracking and point fusion, verified on a synthetic sweep (D26) and run
+live in the application (D42). Phase 9 has second-order matching windows, which follow
+curved surfaces (D28).
 
 Bench acceptance of each phase waits on the hardware in `docs/hardware.md`.
 

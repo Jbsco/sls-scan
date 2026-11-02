@@ -675,3 +675,26 @@ On the stand-in's twelve poses the solve reprojects to 0.076 and 0.065 px with a
 baseline of 200.19 mm, the figures of D25 for the same views. Two depth frames from that
 calibration give about 16,000 points each in 112 to 146 ms on a Radeon RX 7900 GRE. The
 projector path of D21 keeps its own branch of the panel, so one panel serves both heads.
+
+## D42. Tracking and fusion in the application (2026-11-02)
+
+`app/src/fuse.rs` ports `track.fuse` of D26 to Rust. Each depth frame is aligned to the
+model by point-to-plane ICP from the last pose advanced by the last motion, then joins
+the model as 0.5 mm voxel averages.
+
+A hash grid of cubic cells replaces SciPy's KD-tree. ICP takes the nearest model point
+within each distance limit from a grid of that cell size. Normals take each point's
+twelve nearest neighbours by searching outward one shell of cells at a time. Each ICP
+step solves its 6 × 6 normal equations, and each normal is the smallest eigenvector of
+its neighbours' covariance, by Jacobi rotations.
+
+`slscan fusion-vectors` writes the depth frames of a six-frame synthetic sweep with
+their NumPy poses and model, and `sls-scan fusion-check` runs the Rust tracker on the
+same frames. Poses, voxels and points agree to the last printed digit, under 0.001 µm,
+and the application gate runs the check.
+
+The window's depth worker fuses every frame it runs and the scene panel draws the model.
+`sls-scan depth` fuses its frames and writes the model as PLY. On six stand-in sweep
+frames the model grows to 51,701 points with an ICP residual of 20 to 21 µm, and fusion
+takes 350 to 440 ms per frame on one core. Like the reference, it recomputes every
+model normal for each frame, which is the cost to cut next.
