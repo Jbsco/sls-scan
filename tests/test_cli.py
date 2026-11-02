@@ -3,7 +3,7 @@ import os
 import cv2
 import numpy as np
 
-from slscan import calibrate, cli, patterns
+from slscan import calibrate, cli, geometry, patterns, synthetic
 
 
 def test_calibration_patterns_command_writes_both_axes(tmp_path):
@@ -54,3 +54,14 @@ def test_calibration_diff_command_flags_focal_change(tmp_path):
     calibrate.save(str(tmp_path / "b.yaml"), second)
     assert cli.main(["calibration-diff", str(tmp_path / "a.yaml"), str(tmp_path / "a.yaml")]) == 0
     assert cli.main(["calibration-diff", str(tmp_path / "a.yaml"), str(tmp_path / "b.yaml")]) == 1
+
+
+def test_scan_and_measure_commands_on_a_synthetic_plate(tmp_path, rig, spec):
+    captures, _ = synthetic.scan_captures(rig, synthetic.acceptance_scenes()["plate"], pitch=16)
+    cli.write_scan(str(tmp_path / "plate"), captures)
+    calibrate.save(str(tmp_path / "true.yaml"), synthetic.true_calibration(rig, spec))
+    cloud = str(tmp_path / "plate.ply")
+    assert cli.main(["scan", str(tmp_path / "plate"), "--calibration", str(tmp_path / "true.yaml"),
+                     "--pitch", "16", "--out", cloud]) == 0
+    assert geometry.fit_plane(geometry.read_ply(cloud))[2] < 0.0001
+    assert cli.main(["measure", cloud, "--shape", "plane"]) == 0
