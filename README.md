@@ -6,7 +6,7 @@
 A structured-light 3D scanner built from a camera and a projector on a rigid bar, with
 calibration, capture, decoding, triangulation, registration and meshing scripted on
 Linux. It scans objects from a few centimetres to a few metres across, at 0.2 to 0.5 mm
-within one view and 0.5 to 1 mm across a vehicle cab, for reverse engineering into CAD.
+within one view and 0.5 to 1 mm over a few metres, as meshes for CAD.
 Handheld scanners sold for this work capture only through their makers' Windows and
 macOS software. This project applies the same measurement principle from a static rig,
 under the operator's control from calibration to export.
@@ -36,16 +36,18 @@ application with its GPU preview (Phases 3 and 4, Rust), once the hardware in
 
 ## Applications
 
-- **Bare vehicle cab.** With the dashboard, carpet and trim out, one scan gives the
-  floor, firewall and pillar geometry for a dashboard frame, seat adapters, cable runs
-  and crash-space checks, as reference geometry in CAD.
-- **Plug for a composite part.** A repaired original part, finished to gloss, scanned
-  before the mold is taken, so the mold and the shell can be checked against it.
-- **Molds and shells.** The cured part scanned against its plug for shrink and spring.
-- **Small parts.** Trim tabs, clip bosses, brackets and housings for reproduction by
-  printing or machining, on a turntable in a later phase.
-- **Underbody packaging.** The space around a transfer case, a crossmember or an exhaust
-  run, measured once for parts that have to fit between them.
+Structured-light scanning serves any job that needs the shape of a real object as
+measured geometry. Among them:
+
+- **Automotive.** Interiors, body panels and the space between chassis components, for
+  parts designed to fit them.
+- **Molds and patterns.** A pattern before its mold is taken, and the mold or the cast
+  part against it.
+- **Small parts.** Brackets, housings and fittings for reproduction by printing or
+  machining, on a turntable in a later phase.
+- **Interiors and architecture.** Rooms, fixtures and built-in equipment a few metres
+  across.
+- **Archival.** Objects recorded as meshes for reference or reproduction.
 
 ## How it works
 
@@ -113,7 +115,7 @@ application. `DESIGN.md` D11 has the reasoning.
 At a 1 m working distance with a 0.35 m baseline, the depth resolution is
 δz = z²·δp/(f·b): 0.07 mm with phase shift at δp ≈ 0.1 px, 0.2 mm at a realistic
 0.3 px, 0.7 mm with Gray code alone. Accuracy within one view, after calibration
-residuals and rig drift, is 0.2 to 0.5 mm over the 1 m field. Across a cab, with
+residuals and rig drift, is 0.2 to 0.5 mm over the 1 m field. Over a few metres, with
 targets and scale bars, 0.5 to 1 mm. `docs/accuracy.md` derives these and sets the
 acceptance tests: a flat plate, a sphere and the scale bars.
 
