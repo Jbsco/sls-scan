@@ -123,12 +123,13 @@ acceptance tests: a flat plate, a sphere and the scale bars.
 
 | Path | Contents |
 |---|---|
-| `slscan/` | Python package: pattern codes, calibration, decode, triangulation, artifact fits, synthetic captures, and the commands in `cli.py` |
+| `slscan/` | Python package: pattern codes, calibration, decode, triangulation, artifact fits, synthetic captures, capture protocol with a stand-in node, and the commands in `cli.py` |
 | `app/` | Rust application, from Phase 3 |
 | `tests/` | pytest tests of the pure functions, and the virtual bench on synthetic captures |
 | `docs/hardware.md` | Bill of materials, rig geometry and build notes |
 | `docs/accuracy.md` | Error model and acceptance tests |
 | `docs/pipeline.md` | Each stage with its inputs, outputs and file formats |
+| `docs/capture-protocol.md` | Messages between the application and a capture node |
 | `tools/` | Markdown rendering check, prose check |
 | `style.do`, `test.do`, `verify.do` | The gates, runnable with `bash` or `redo` |
 | `DESIGN.md` | Numbered design decisions with their reasons |

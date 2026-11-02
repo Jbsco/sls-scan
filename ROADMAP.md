@@ -23,11 +23,12 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   with an RMS under 0.2 mm over 0.5 m, and a scale bar measures within 0.2 mm in one
   view. Decode, triangulation and artifact fits are in place and pass on the virtual
   bench (D17). Display, capture and bench acceptance wait on the rig.
-- Phase 3, open. Application shell (Rust, wgpu, egui) and the capture node. Three
+- Phase 3, in progress. Application shell (Rust, wgpu, egui) and the capture node. Three
   panels, calibration through the frontend (D12), the capture interface with its two
   implementations (the Pi node of D13 streaming over Ethernet, USB cameras on the
   host), pattern display flipped on the vertical blank, the trigger line, frame
   timestamps. A capture node stand-in serves synthetic frames for development (D17).
+  The capture protocol and the stand-in are in place (D18).
   Acceptance: pattern frames captured in order at the projector rate with no drops over
   a minute, and a calibration run end to end from the panel.
 - Phase 4, open. GPU decode and preview. WGSL kernels for phase decode, unwrapping,
