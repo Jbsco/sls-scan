@@ -21,8 +21,9 @@ calibration board, coded targets, scale bars and surface preparation.
 | Spray | Matte scanning spray or dry developer | $15 to $25 | Gloss and black surfaces |
 | Host | A Linux machine with a Vulkan-capable GPU (AMD or NVIDIA), HDMI out for the projector, USB 3 for the cameras | owned | Mesa lavapipe runs the same kernels on the CPU without a card |
 
-About $300 to $450 from nothing with both cameras and a Pi 5. A tethered mirrorless camera through gphoto2 replaces
-the first two lines when optics and dynamic range matter more than cost.
+About $300 to $450 from nothing with both cameras and a Pi 5. A tethered mirrorless
+camera through gphoto2 replaces the first two lines when optics and dynamic range
+matter more than cost.
 
 ## Projector requirements
 
@@ -46,13 +47,13 @@ the first two lines when optics and dynamic range matter more than cost.
   mode are disabled, because each one changes the pattern or its brightness over time.
   A game or low-latency mode, where offered, shortens the input delay the sync has to
   absorb.
-- **The color wheel.** A single-chip DLP shows red, green and blue in sequence through
-  a wheel at a multiple of the frame rate, so an exposure shorter than a frame catches
-  a fraction of the wheel and the brightness varies frame to frame. The camera
-  exposure is a whole number of projector frames (16.7 ms at 60 Hz), which integrates
-  a full wheel cycle, or the patterns are projected in one color and the exposure is
-  set by trial against a flat target until frames repeat within 1 %. LED and
-  laser-phosphor units have no lamp flicker and are the upgrade for the preview path.
+- **Color wheel.** A single-chip DLP shows red, green and blue through a wheel at a
+  multiple of the frame rate, so an exposure shorter than a frame catches part of the
+  wheel and brightness varies frame to frame. The camera exposure is a whole number of
+  projector frames (16.7 ms at 60 Hz), which integrates a full wheel cycle, or the
+  patterns are projected in one color and the exposure set by trial against a flat
+  target until frames repeat within 1 %. LED and laser-phosphor units have no lamp
+  flicker and are the upgrade for the preview path.
 - **Gamma.** Every unit is non-linear. A ramp projected and captured gives the
   response, and the phase-shift patterns are pre-compensated with its inverse, else
   the decoded phase carries a periodic error.
