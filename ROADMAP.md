@@ -16,18 +16,20 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   reprojection error under 0.3 px for the camera and under 0.5 px for the projector,
   repeated calibrations within 0.1 % in focal length. Tooling is in place and verified
   on synthetic views (D15). Bench acceptance waits on the rig.
-- Phase 2, open. One static view (Python reference pipeline). Pattern display,
+- Phase 2, in progress. One static view (Python reference pipeline). Pattern display,
   synchronized capture at one or more exposures, Gray code decode, phase shift
   refinement, triangulation, filtering. This is the reference implementation whose
   vectors the kernels are later checked against. Acceptance: a flat plate fits a plane
   with an RMS under 0.2 mm over 0.5 m, and a scale bar measures within 0.2 mm in one
-  view.
+  view. Decode, triangulation and artifact fits are in place and pass on the virtual
+  bench (D17). Display, capture and bench acceptance wait on the rig.
 - Phase 3, open. Application shell (Rust, wgpu, egui) and the capture node. Three
   panels, calibration through the frontend (D12), the capture interface with its two
   implementations (the Pi node of D13 streaming over Ethernet, USB cameras on the
   host), pattern display flipped on the vertical blank, the trigger line, frame
-  timestamps. Acceptance: pattern frames captured in order at the projector rate with
-  no drops over a minute, and a calibration run end to end from the panel.
+  timestamps. A capture node stand-in serves synthetic frames for development (D17).
+  Acceptance: pattern frames captured in order at the projector rate with no drops over
+  a minute, and a calibration run end to end from the panel.
 - Phase 4, open. GPU decode and preview. WGSL kernels for phase decode, unwrapping,
   triangulation and the coarse TSDF, the live point cloud and volume in the scene,
   the CPU fallback through lavapipe. Acceptance: 15 depth frames per second at 1 MP
