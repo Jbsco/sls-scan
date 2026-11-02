@@ -353,6 +353,10 @@ def cmd_depth_params(args: argparse.Namespace) -> int:
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(params, f)
     coarse = params["coarse"]
+    if args.json:
+        print(json.dumps({"out": args.out, "width": params["width"], "height": params["height"],
+                          "lo": coarse["lo"], "count": coarse["count"]}))
+        return 0
     print(f"depth parameters written to {args.out}: {params['width']} x {params['height']}, "
           f"reduced disparities {coarse['lo']} to {coarse['lo'] + coarse['count'] - 1}")
     return 0
@@ -491,10 +495,10 @@ def cmd_detect(args: argparse.Namespace) -> int:
 
     import cv2
 
-    image = cv2.imread(os.path.join(args.pose, "white.png"), cv2.IMREAD_GRAYSCALE)
+    image = cv2.imread(os.path.join(args.pose, args.image), cv2.IMREAD_GRAYSCALE)
     if image is None:
-        print(json.dumps({"error": f"no white.png in {args.pose}"}) if args.json
-              else f"no white.png in {args.pose}")
+        print(json.dumps({"error": f"no {args.image} in {args.pose}"}) if args.json
+              else f"no {args.image} in {args.pose}")
         return 1
     ids, _ = calibrate.detect_corners(image, _spec(args))
     total = (args.squares_x - 1) * (args.squares_y - 1)
@@ -561,6 +565,7 @@ def main(argv=None) -> int:
     p.add_argument("pose", help="pose directory with white.png")
     _board_arguments(p)
     p.add_argument("--json", action="store_true", help="print the result as one JSON object")
+    p.add_argument("--image", default="white.png", help="image file in the pose directory")
     p.set_defaults(func=cmd_detect)
 
     p = sub.add_parser("calibration-diff", help="compare two calibrations against repeatability limits")
@@ -660,6 +665,7 @@ def main(argv=None) -> int:
     p.add_argument("--step", type=int, default=8, help="sample spacing in pixels")
     p.add_argument("--window", type=int, default=25, help="matching window in pixels")
     p.add_argument("--out", default="data/depth.json")
+    p.add_argument("--json", action="store_true", help="print the result as one JSON object")
     p.set_defaults(func=cmd_depth_params)
 
     p = sub.add_parser("stereo-vectors",

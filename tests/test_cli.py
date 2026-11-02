@@ -162,3 +162,19 @@ def test_depth_params_command_matches_block_matching_search(tmp_path):
     lo, count = stereo.search_range(stereo.disparity_at(rect, 0.6), stereo.disparity_at(rect, 0.4))
     assert (params["coarse"]["lo"], params["coarse"]["count"]) == (lo, count)
     assert (params["width"], params["height"]) == (cal.left.width, cal.left.height)
+    assert cli.main(["depth-params", "--head", "stereo", "--out", str(out), "--json"]) == 0
+
+
+def test_detect_command_reads_a_named_image(tmp_path, capsys):
+    head = synthetic.stereo_head()
+    r, t = synthetic.board_poses(synthetic.SMALL_BOARD, 0.5)[0]
+    pair = synthetic.stereo_board_view(head, synthetic.SMALL_BOARD, r, t, np.random.default_rng(0))
+    pose = tmp_path / "pose_000"
+    pose.mkdir()
+    for side in ("left", "right"):
+        cv2.imwrite(str(pose / f"{side}.png"), pair[side])
+    args = ["--squares-x", "9", "--squares-y", "6", "--square-mm", "10", "--marker-mm", "7.5"]
+    assert cli.main(["detect", str(pose), *args, "--image", "right.png", "--json"]) == 0
+    result = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert result["of"] == 40 and result["corners"] > 20
+    assert cli.main(["detect", str(pose), *args, "--json"]) == 1

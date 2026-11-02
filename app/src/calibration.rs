@@ -93,6 +93,27 @@ pub struct Detection {
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct StereoSolve {
+    pub views: u32,
+    pub left_rms_px: f64,
+    pub right_rms_px: f64,
+    pub stereo_rms_px: f64,
+    pub camera_limit_px: f64,
+    pub baseline_m: f64,
+    pub out: String,
+    pub ok: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct DepthParamsResult {
+    pub out: String,
+    pub width: u32,
+    pub height: u32,
+    pub lo: i32,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct Solve {
     pub views: u32,
     pub camera_rms_px: f64,
@@ -124,16 +145,17 @@ pub fn next_pose_dir(session: &Path) -> io::Result<PathBuf> {
     Ok(session.join(format!("pose_{taken:03}")))
 }
 
-/// Capture one board pose into the next pose directory and return it with the projector.
-pub fn capture_pose(
+/// Capture one sequence of a set into a directory, one PNG per frame, and return the
+/// node's projector.
+fn capture_set(
     address: &str,
     wait: Duration,
-    session: &Path,
-) -> io::Result<(PathBuf, Projector)> {
-    let dir = next_pose_dir(session)?;
-    fs::create_dir_all(&dir)?;
+    dir: &Path,
+    set: &str,
+) -> io::Result<Option<Projector>> {
+    fs::create_dir_all(dir)?;
     let request = SequenceRequest {
-        set: "calibration".into(),
+        set: set.into(),
         pitch: 32,
         steps: 4,
         frames: 1,
@@ -158,14 +180,64 @@ pub fn capture_pose(
     if let Some(e) = failure {
         return Err(e);
     }
-    let projector = projector.ok_or_else(|| io::Error::other("no HELLO from the node"))?;
+    Ok(projector)
+}
+
+/// Capture one board pose into the next pose directory and return it with the projector.
+pub fn capture_pose(
+    address: &str,
+    wait: Duration,
+    session: &Path,
+) -> io::Result<(PathBuf, Projector)> {
+    let dir = next_pose_dir(session)?;
+    let projector = capture_set(address, wait, &dir, "calibration")?
+        .ok_or_else(|| io::Error::other("no HELLO from the node"))?;
     Ok((dir, projector))
 }
 
+/// Capture one board pair into the next pose directory and return it.
+pub fn capture_stereo_pose(address: &str, wait: Duration, session: &Path) -> io::Result<PathBuf> {
+    let dir = next_pose_dir(session)?;
+    capture_set(address, wait, &dir, "stereo-calibration")?;
+    Ok(dir)
+}
+
 pub fn detect(tool: &Tool, pose: &Path, board: &Board) -> io::Result<Detection> {
+    detect_image(tool, pose, board, "white.png")
+}
+
+/// Detect board corners in one image of a pose directory.
+pub fn detect_image(tool: &Tool, pose: &Path, board: &Board, image: &str) -> io::Result<Detection> {
     let mut extra = vec!["detect".into(), pose.to_string_lossy().into_owned()];
     extra.extend(board.args());
-    extra.push("--json".into());
+    extra.extend(["--image".into(), image.into(), "--json".into()]);
+    tool.json(&extra)
+}
+
+pub fn solve_stereo(tool: &Tool, session: &Path, board: &Board) -> io::Result<StereoSolve> {
+    let mut extra = vec![
+        "calibrate-stereo".into(),
+        session.to_string_lossy().into_owned(),
+    ];
+    extra.extend(board.args());
+    extra.extend([
+        "--out".into(),
+        session.join("stereo.yaml").to_string_lossy().into_owned(),
+        "--json".into(),
+    ]);
+    tool.json(&extra)
+}
+
+/// Write the depth frame parameters of a stereo calibration.
+pub fn depth_params(tool: &Tool, calibration: &Path, out: &Path) -> io::Result<DepthParamsResult> {
+    let extra = vec![
+        "depth-params".into(),
+        "--calibration".into(),
+        calibration.to_string_lossy().into_owned(),
+        "--out".into(),
+        out.to_string_lossy().into_owned(),
+        "--json".into(),
+    ];
     tool.json(&extra)
 }
 

@@ -1,6 +1,6 @@
 //! The three panels: configuration, preview and processing, and the scene.
 
-use crate::calibration::{self, Board, Detection, Solve, Tool};
+use crate::calibration::{self, Board, Detection, Solve, StereoSolve, Tool};
 use crate::client::{self, Event, Stats};
 use crate::depth::{DepthFrame, DepthResult, DepthSetup};
 use crate::protocol::{FrameHeader, Hello, Projector, SequenceRequest};
@@ -10,10 +10,23 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::Duration;
 
+type StereoDetection = Result<(Detection, Detection), String>;
+
 enum CalibrationEvent {
     Pose(String, Result<Detection, String>, Projector),
+    StereoPose(String, StereoDetection),
     Failed(String),
     Solved(Result<Solve, String>),
+    StereoSolved(Result<(StereoSolve, String), String>),
+}
+
+fn limit_label(value: f64, limit: f64, what: &str) -> egui::RichText {
+    let colour = if value < limit {
+        egui::Color32::LIGHT_GREEN
+    } else {
+        egui::Color32::LIGHT_RED
+    };
+    egui::RichText::new(format!("{what} {value:.3} px (limit {limit})")).color(colour)
 }
 
 struct DepthWorker {
@@ -32,6 +45,8 @@ pub struct ScanApp {
     poses: Vec<(String, Result<Detection, String>)>,
     projector: Option<Projector>,
     solve: Option<Result<Solve, String>>,
+    stereo_poses: Vec<(String, StereoDetection)>,
+    stereo_solve: Option<Result<(StereoSolve, String), String>>,
     set: String,
     pitch: u32,
     steps: u32,
@@ -63,6 +78,8 @@ impl Default for ScanApp {
             poses: Vec::new(),
             projector: None,
             solve: None,
+            stereo_poses: Vec::new(),
+            stereo_solve: None,
             set: "scan".to_owned(),
             pitch: 32,
             steps: 4,
@@ -158,7 +175,75 @@ impl ScanApp {
         self.events.is_some() || self.calibration_events.is_some()
     }
 
+    fn capture_stereo_pose(&mut self, ctx: &egui::Context) {
+        let (tx, rx) = mpsc::channel();
+        let (node, session, tool, board) = (
+            self.node.clone(),
+            PathBuf::from(&self.session),
+            Tool::parse(&self.tool),
+            self.board.clone(),
+        );
+        let repaint = ctx.clone();
+        thread::spawn(move || {
+            let event = match calibration::capture_stereo_pose(&node, Duration::ZERO, &session) {
+                Ok(dir) => {
+                    let name = dir
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let detections =
+                        tool.ok_or_else(|| "no tool command".to_owned())
+                            .and_then(|t| {
+                                let side = |image| {
+                                    calibration::detect_image(&t, &dir, &board, image)
+                                        .map_err(|e| e.to_string())
+                                };
+                                Ok((side("left.png")?, side("right.png")?))
+                            });
+                    CalibrationEvent::StereoPose(name, detections)
+                }
+                Err(e) => CalibrationEvent::Failed(e.to_string()),
+            };
+            let _ = tx.send(event);
+            repaint.request_repaint();
+        });
+        self.calibration_events = Some(rx);
+        self.status = "capturing stereo pose".to_owned();
+    }
+
+    fn start_stereo_solve(&mut self, ctx: &egui::Context) {
+        let (tx, rx) = mpsc::channel();
+        let (session, tool, board) = (
+            PathBuf::from(&self.session),
+            Tool::parse(&self.tool),
+            self.board.clone(),
+        );
+        let repaint = ctx.clone();
+        thread::spawn(move || {
+            let result = tool
+                .ok_or_else(|| "no tool command".to_owned())
+                .and_then(|t| {
+                    let solve = calibration::solve_stereo(&t, &session, &board)
+                        .map_err(|e| e.to_string())?;
+                    let params = calibration::depth_params(
+                        &t,
+                        Path::new(&solve.out),
+                        &session.join("depth.json"),
+                    )
+                    .map_err(|e| e.to_string())?;
+                    Ok((solve, params.out))
+                });
+            let _ = tx.send(CalibrationEvent::StereoSolved(result));
+            repaint.request_repaint();
+        });
+        self.calibration_events = Some(rx);
+        self.status = "solving stereo calibration".to_owned();
+    }
+
     fn capture_pose(&mut self, ctx: &egui::Context) {
+        if self.set == "stereo" {
+            return self.capture_stereo_pose(ctx);
+        }
         let (tx, rx) = mpsc::channel();
         let (node, session, tool, board) = (
             self.node.clone(),
@@ -191,6 +276,9 @@ impl ScanApp {
     }
 
     fn start_solve(&mut self, ctx: &egui::Context) {
+        if self.set == "stereo" {
+            return self.start_stereo_solve(ctx);
+        }
         let Some(projector) = self.projector.clone() else {
             return;
         };
@@ -232,6 +320,17 @@ impl ScanApp {
                     self.status = "calibration solved".to_owned();
                     self.solve = Some(result);
                 }
+                CalibrationEvent::StereoPose(name, detections) => {
+                    self.status = format!("captured {name}");
+                    self.stereo_poses.push((name, detections));
+                }
+                CalibrationEvent::StereoSolved(result) => {
+                    self.status = "stereo calibration solved".to_owned();
+                    if let Ok((_, params)) = &result {
+                        self.params_path.clone_from(params);
+                    }
+                    self.stereo_solve = Some(result);
+                }
             }
             self.calibration_events = None;
         }
@@ -269,6 +368,7 @@ impl ScanApp {
             );
         });
         let idle = !self.busy();
+        let stereo = self.set == "stereo";
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(idle, egui::Button::new("Capture pose"))
@@ -276,7 +376,11 @@ impl ScanApp {
             {
                 self.capture_pose(ctx);
             }
-            let enough = self.poses.len() >= 3 && self.projector.is_some();
+            let enough = if stereo {
+                self.stereo_poses.len() >= 3
+            } else {
+                self.poses.len() >= 3 && self.projector.is_some()
+            };
             if ui
                 .add_enabled(idle && enough, egui::Button::new("Solve"))
                 .clicked()
@@ -284,6 +388,39 @@ impl ScanApp {
                 self.start_solve(ctx);
             }
         });
+        if stereo {
+            for (name, detections) in &self.stereo_poses {
+                match detections {
+                    Ok((l, r)) => ui.label(format!(
+                        "{name}: left {} of {}, right {} of {} corners",
+                        l.corners, l.of, r.corners, r.of
+                    )),
+                    Err(e) => ui.label(format!("{name}: detection failed: {e}")),
+                };
+            }
+            match &self.stereo_solve {
+                Some(Ok((s, params))) => {
+                    ui.label(limit_label(s.left_rms_px, s.camera_limit_px, "left"));
+                    ui.label(limit_label(s.right_rms_px, s.camera_limit_px, "right"));
+                    ui.label(format!(
+                        "pair {:.3} px, baseline {:.2} mm, {} views",
+                        s.stereo_rms_px,
+                        1000.0 * s.baseline_m,
+                        s.views
+                    ));
+                    ui.label(format!("written to {}", s.out));
+                    ui.label(format!("depth parameters {params}"));
+                }
+                Some(Err(e)) => {
+                    ui.label(
+                        egui::RichText::new(format!("solve failed: {e}"))
+                            .color(egui::Color32::LIGHT_RED),
+                    );
+                }
+                None => {}
+            }
+            return;
+        }
         for (name, detection) in &self.poses {
             match detection {
                 Ok(d) => ui.label(format!("{name}: {} of {} corners", d.corners, d.of)),
@@ -292,17 +429,12 @@ impl ScanApp {
         }
         match &self.solve {
             Some(Ok(s)) => {
-                let limit = |value: f64, limit: f64, what: &str| {
-                    let colour = if value < limit {
-                        egui::Color32::LIGHT_GREEN
-                    } else {
-                        egui::Color32::LIGHT_RED
-                    };
-                    egui::RichText::new(format!("{what} {value:.3} px (limit {limit})"))
-                        .color(colour)
-                };
-                ui.label(limit(s.camera_rms_px, s.camera_limit_px, "camera"));
-                ui.label(limit(s.projector_rms_px, s.projector_limit_px, "projector"));
+                ui.label(limit_label(s.camera_rms_px, s.camera_limit_px, "camera"));
+                ui.label(limit_label(
+                    s.projector_rms_px,
+                    s.projector_limit_px,
+                    "projector",
+                ));
                 ui.label(format!(
                     "baseline {:.2} mm, {} views",
                     1000.0 * s.baseline_m,

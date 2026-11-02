@@ -660,3 +660,18 @@ On a Radeon RX 7900 GRE the stand-in's sweep frames, a mat with a ball bar and a
 sphere, give about 16,000 points in 108 to 152 ms each, with refinement at 97 to 135 ms
 of it. Point count sets the frame time, so a sparser sample grid in the parameters
 trades density for rate.
+
+## D41. Stereo calibration from the panel (2026-11-02)
+
+With the stereo set chosen, the calibration panel captures one board pair per pose into
+the session directory, detects the board in each image through the Python tool, and
+solves with `calibrate-stereo`. The solve writes `stereo.yaml` beside the poses, and
+`depth-params` then writes `depth.json` next to it, which the panel takes as the
+parameters of the next stereo run. `sls-scan calibrate --set stereo` runs the same steps
+without the window, and the application gate runs it on twelve board pairs from the
+stand-in node before the depth frames of D40.
+
+On the stand-in's twelve poses the solve reprojects to 0.076 and 0.065 px with a
+baseline of 200.19 mm, the figures of D25 for the same views. Two depth frames from that
+calibration give about 16,000 points each in 112 to 146 ms on a Radeon RX 7900 GRE. The
+projector path of D21 keeps its own branch of the panel, so one panel serves both heads.

@@ -7,7 +7,7 @@ use slscan_app::protocol::SequenceRequest;
 use slscan_app::rectify;
 use slscan_app::refine;
 use slscan_app::ui::ScanApp;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
@@ -211,8 +211,78 @@ fn headless_depth(args: &[String]) -> ExitCode {
     }
 }
 
+fn headless_calibrate_stereo(
+    node: &str,
+    wait: Duration,
+    poses: u32,
+    out: &Path,
+    tool: &calibration::Tool,
+    board: &calibration::Board,
+) -> ExitCode {
+    for _ in 0..poses {
+        let dir = match calibration::capture_stereo_pose(node, wait, out) {
+            Ok(dir) => dir,
+            Err(e) => {
+                eprintln!("pose capture failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+        let name = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let sides = ["left.png", "right.png"]
+            .map(|image| calibration::detect_image(tool, &dir, board, image));
+        match sides {
+            [Ok(l), Ok(r)] => println!(
+                "{name}: left {} of {}, right {} of {} corners",
+                l.corners, l.of, r.corners, r.of
+            ),
+            [Err(e), _] | [_, Err(e)] => println!("{name}: detection failed: {e}"),
+        }
+    }
+    let solve = match calibration::solve_stereo(tool, out, board) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("solve failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!(
+        "{} views, left {:.3} px, right {:.3} px (limit {}), pair {:.3} px, baseline {:.2} mm, written to {}",
+        solve.views,
+        solve.left_rms_px,
+        solve.right_rms_px,
+        solve.camera_limit_px,
+        solve.stereo_rms_px,
+        1000.0 * solve.baseline_m,
+        solve.out
+    );
+    if !solve.ok {
+        return ExitCode::FAILURE;
+    }
+    match calibration::depth_params(tool, Path::new(&solve.out), &out.join("depth.json")) {
+        Ok(p) => {
+            println!(
+                "depth parameters written to {}: {} × {}, reduced disparities {} to {}",
+                p.out,
+                p.width,
+                p.height,
+                p.lo,
+                p.lo + p.count as i32 - 1
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("depth parameters failed: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn headless_calibrate(args: &[String]) -> ExitCode {
     let mut node = "127.0.0.1:5600".to_owned();
+    let mut set = "calibration".to_owned();
     let mut poses = 12u32;
     let mut out = PathBuf::from("data/calibration");
     let mut tool = "python3 -m slscan.cli".to_owned();
@@ -234,6 +304,10 @@ fn headless_calibrate(args: &[String]) -> ExitCode {
             }
             "--tool" => {
                 tool.clone_from(value);
+                true
+            }
+            "--set" => {
+                set.clone_from(value);
                 true
             }
             "--poses" => value.parse().map(|v| poses = v).is_ok(),
@@ -259,6 +333,9 @@ fn headless_calibrate(args: &[String]) -> ExitCode {
         eprintln!("--tool is empty");
         return ExitCode::FAILURE;
     };
+    if set == "stereo" {
+        return headless_calibrate_stereo(&node, wait, poses, &out, &tool, &board);
+    }
     let mut projector = None;
     for _ in 0..poses {
         match calibration::capture_pose(&node, wait, &out) {
