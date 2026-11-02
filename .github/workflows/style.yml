@@ -9,13 +9,12 @@ on:
 
 jobs:
   style:
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install the markdown renderer
-        if: runner.environment == 'github-hosted'
         run: sudo apt-get update && sudo apt-get install -y discount
 
       - name: Run style gate

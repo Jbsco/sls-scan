@@ -9,8 +9,7 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
 
 - Phase 0, complete 2026-10-31. Scaffold. License, gates, design ledger, roadmap, docs,
   package skeleton with a tested pattern generator (Gray code encode and decode, phase
-  shift images). Acceptance: `verify.do` green, locally and in CI on the self-hosted
-  runner (D10).
+  shift images). Acceptance: `verify.do` green, locally and in CI (D14).
 - Phase 1, open. Calibration (Python tooling). Camera intrinsics from a ChArUco board,
   the projector as an inverse camera through projected Gray codes, stereo extrinsics,
   results saved as YAML with the board's square size as the scale. Acceptance:
