@@ -431,6 +431,39 @@ def cmd_stereo_bench(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def cmd_replay_reference(args: argparse.Namespace) -> int:
+    """Write the NumPy direct-matching points of every recorded stereo pair under a
+    directory, as the application's replay compares them."""
+    import json
+
+    import cv2
+
+    with open(args.params, encoding="utf-8") as f:
+        params = json.load(f)
+    if args.head:
+        cal = synthetic.true_stereo_calibration(synthetic.stereo_head(), synthetic.SMALL_BOARD)
+    else:
+        cal = calibrate.load_stereo(args.calibration)
+    depth = params["depth"]
+    frames = sorted(glob.glob(os.path.join(args.recorded, "frame_*")))
+    if not frames:
+        print(f"no frame_* directories in {args.recorded}")
+        return 1
+    for frame in frames:
+        left, right = (cv2.imread(os.path.join(frame, f"{side}.png"), cv2.IMREAD_GRAYSCALE)
+                       for side in ("left", "right"))
+        rect, _, _, points, refined, kept = stereo.direct_matches(
+            cal, left, right, depth["near"], depth["far"], depth["step"], params["window"],
+            depth["min_level"], params["max_move"], params["min_correlation"])
+        matched = points[kept]
+        cloud, in_range = stereo.triangulate(rect, matched, refined[kept], depth["near"],
+                                             depth["far"], return_kept=True)
+        np.column_stack([matched[in_range], cloud]).astype("<f8").tofile(
+            os.path.join(frame, "reference.bin"))
+        print(f"{os.path.basename(frame)}: {len(cloud)} reference points")
+    return 0
+
+
 def cmd_calibration_repeat(args: argparse.Namespace) -> int:
     """Calibrate the synthetic stereo head from independent sessions of jittered board
     poses and report how far their focal lengths and baselines spread."""
@@ -792,6 +825,16 @@ def main(argv=None) -> int:
     p.add_argument("--bar-step", type=int, default=4, help="sample spacing on the scale bar")
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_stereo_bench)
+
+    p = sub.add_parser("replay-reference",
+                       help="write the reference points of recorded stereo pairs for the "
+                            "application's replay")
+    p.add_argument("recorded", help="directory of frame_* directories with left.png and right.png")
+    p.add_argument("--params", default="data/depth.json", help="depth frame parameters")
+    p.add_argument("--calibration", default="data/stereo.yaml")
+    p.add_argument("--head", choices=("stereo",),
+                   help="use the synthetic head's true calibration instead")
+    p.set_defaults(func=cmd_replay_reference)
 
     p = sub.add_parser("calibration-repeat",
                        help="calibrate the synthetic stereo head from independent sessions "
