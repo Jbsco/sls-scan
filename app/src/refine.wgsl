@@ -26,10 +26,11 @@ const N: u32 = 14u;
 const LANES: u32 = 64u;
 const RHS: u32 = 105u;
 const SUMS: u32 = 119u;
-// Each lane's accumulator row is 119 long, odd, so lanes land on different memory banks.
-const STRIDE: u32 = 119u;
+const HALF: u32 = 60u;
+// Each lane's accumulator row is 61 long, odd, so lanes land on different memory banks.
+const STRIDE: u32 = 61u;
 
-var<workgroup> acc: array<f32, 7616>;
+var<workgroup> acc: array<f32, 3904>;
 var<workgroup> sums: array<f32, 120>;
 var<workgroup> chol: array<f32, 196>;
 var<workgroup> rhs: array<f32, 14>;
@@ -154,18 +155,28 @@ fn outer(a: vec3<f32>, b: vec3<f32>) -> mat3x3<f32> {
     return mat3x3<f32>(a * b.x, a * b.y, a * b.z);
 }
 
-fn store(row: u32, c: u32, d: u32, v: f32) {
-    acc[row + upper(c, d)] = v;
+fn store(row: u32, lo: u32, c: u32, d: u32, v: f32) {
+    let k = upper(c, d);
+    if (k >= lo && k < lo + HALF) {
+        acc[row + k - lo] = v;
+    }
 }
 
-fn reduce(lane: u32, count: u32) {
+fn store_rhs(row: u32, lo: u32, c: u32, v: f32) {
+    let k = RHS + c;
+    if (k >= lo && k < lo + HALF) {
+        acc[row + k - lo] = v;
+    }
+}
+
+fn reduce(lane: u32, lo: u32, count: u32) {
     workgroupBarrier();
     for (var c = lane; c < count; c += LANES) {
         var total = 0.0;
         for (var l = 0u; l < LANES; l++) {
             total += acc[l * STRIDE + c];
         }
-        sums[c] = total;
+        sums[lo + c] = total;
     }
     workgroupBarrier();
 }
@@ -362,40 +373,43 @@ fn refine(@builtin(workgroup_id) group: vec3<u32>,
             r1 += residual;
         }
         let row = lane * STRIDE;
+        for (var half = 0u; half < 2u; half++) {
+            let lo = half * HALF;
         for (var i = 0u; i < 3u; i++) {
             for (var j = 0u; j < 3u; j++) {
                 if (i <= j) {
-                    store(row, i, j, xx11[j][i]);
-                    store(row, i + 3u, j + 3u, xx22[j][i]);
-                    store(row, i + 6u, j + 6u, yy11[j][i]);
-                    store(row, i + 9u, j + 9u, yy22[j][i]);
+                    store(row, lo, i, j, xx11[j][i]);
+                    store(row, lo, i + 3u, j + 3u, xx22[j][i]);
+                    store(row, lo, i + 6u, j + 6u, yy11[j][i]);
+                    store(row, lo, i + 9u, j + 9u, yy22[j][i]);
                 }
-                store(row, i, j + 3u, xx12[j][i]);
-                store(row, i + 6u, j + 9u, yy12[j][i]);
-                store(row, i, j + 6u, xy11[j][i]);
-                store(row, i, j + 9u, xy12[j][i]);
-                store(row, i + 3u, j + 6u, xy21[j][i]);
-                store(row, i + 3u, j + 9u, xy22[j][i]);
+                store(row, lo, i, j + 3u, xx12[j][i]);
+                store(row, lo, i + 6u, j + 9u, yy12[j][i]);
+                store(row, lo, i, j + 6u, xy11[j][i]);
+                store(row, lo, i, j + 9u, xy12[j][i]);
+                store(row, lo, i + 3u, j + 6u, xy21[j][i]);
+                store(row, lo, i + 3u, j + 9u, xy22[j][i]);
             }
-            store(row, i, 12u, xg1[i]);
-            store(row, i + 3u, 12u, xg2[i]);
-            store(row, i, 13u, x11[i]);
-            store(row, i + 3u, 13u, x12[i]);
-            store(row, i + 6u, 12u, yg1[i]);
-            store(row, i + 9u, 12u, yg2[i]);
-            store(row, i + 6u, 13u, y11[i]);
-            store(row, i + 9u, 13u, y12[i]);
-            acc[row + RHS + i] = rx1[i];
-            acc[row + RHS + 3u + i] = rx2[i];
-            acc[row + RHS + 6u + i] = ry1[i];
-            acc[row + RHS + 9u + i] = ry2[i];
+            store(row, lo, i, 12u, xg1[i]);
+            store(row, lo, i + 3u, 12u, xg2[i]);
+            store(row, lo, i, 13u, x11[i]);
+            store(row, lo, i + 3u, 13u, x12[i]);
+            store(row, lo, i + 6u, 12u, yg1[i]);
+            store(row, lo, i + 9u, 12u, yg2[i]);
+            store(row, lo, i + 6u, 13u, y11[i]);
+            store(row, lo, i + 9u, 13u, y12[i]);
+            store_rhs(row, lo, i, rx1[i]);
+            store_rhs(row, lo, 3u + i, rx2[i]);
+            store_rhs(row, lo, 6u + i, ry1[i]);
+            store_rhs(row, lo, 9u + i, ry2[i]);
         }
-        store(row, 12u, 12u, gg);
-        store(row, 12u, 13u, g1);
-        store(row, 13u, 13u, ones);
-        acc[row + RHS + 12u] = rg;
-        acc[row + RHS + 13u] = r1;
-        reduce(lane, SUMS);
+        store(row, lo, 12u, 12u, gg);
+        store(row, lo, 12u, 13u, g1);
+        store(row, lo, 13u, 13u, ones);
+        store_rhs(row, lo, 12u, rg);
+        store_rhs(row, lo, 13u, r1);
+            reduce(lane, lo, min(HALF, SUMS - lo));
+        }
         solve(lane, u0, v0);
         if (workgroupUniformLoad(&state) != 0u) {
             break;
@@ -429,7 +443,7 @@ fn refine(@builtin(workgroup_id) group: vec3<u32>,
         for (var c = 0u; c < 5u; c++) {
             acc[lane * STRIDE + c] = moments[c];
         }
-        reduce(lane, 5u);
+        reduce(lane, 0u, 5u);
         let n = f32(pixels);
         let vf = sums[2] - sums[0] * sums[0] / n;
         let vg = sums[3] - sums[1] * sums[1] / n;
