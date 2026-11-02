@@ -1,8 +1,8 @@
 #!/bin/bash
 # Application gate: formatting, lints and tests of the Rust application, its capture
-# client against the stand-in node over the capture protocol, and its GPU decode, stereo
-# rectification, coarse disparity, refinement and depth frames against the NumPy and
-# OpenCV references.
+# client against the stand-in node over the capture protocol, depth frames on captured
+# pairs, and its GPU decode, stereo rectification, coarse disparity, refinement and depth
+# frames against the NumPy and OpenCV references.
 exec >&2
 if ! command -v cargo >/dev/null 2>&1; then
     echo "app: cargo not found - skipped"
@@ -21,6 +21,8 @@ RUN="cargo run --locked --quiet --manifest-path app/Cargo.toml --"
 $RUN capture --node "127.0.0.1:$PORT" --set scan --pitch 16 --wait 30
 $RUN capture --node "127.0.0.1:$PORT" --set calibration --wait 30
 $RUN capture --node "127.0.0.1:$PORT" --set stereo --frames 3 --wait 30
+python3 -m slscan.cli depth-params --head stereo --out "$SESSION/depth.json" >/dev/null
+$RUN depth --node "127.0.0.1:$PORT" --params "$SESSION/depth.json" --frames 2 --wait 30
 $RUN calibrate --node "127.0.0.1:$PORT" --wait 30 --poses 6 --out "$SESSION" \
     --squares-x 9 --squares-y 6 --square-mm 40 --marker-mm 30
 python3 -m slscan.cli decode-vectors --out "$SESSION/vectors" >/dev/null
