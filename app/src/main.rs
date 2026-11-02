@@ -302,6 +302,12 @@ struct StereoMeta {
     window: u32,
     iterations: u32,
     samples: usize,
+    #[serde(default)]
+    direct_samples: usize,
+    #[serde(default)]
+    max_move: f32,
+    #[serde(default)]
+    min_correlation: f32,
 }
 
 fn floats(bytes: &[u8]) -> Vec<f32> {
@@ -309,6 +315,95 @@ fn floats(bytes: &[u8]) -> Vec<f32> {
         .chunks_exact(4)
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect()
+}
+
+/// Shape terms, move limit and correlation gate of one refinement stage.
+type Stage = (u32, f32, Option<f32>);
+
+/// Run refinement stages in order, each starting from the right points of the one before.
+/// A sample is kept when every stage keeps it.
+fn run_stages(
+    refiner: &refine::Refiner,
+    meta: &StereoMeta,
+    images: (&[u8], &[u8]),
+    samples: &[f32],
+    stages: &[Stage],
+) -> Result<(Vec<[f32; 2]>, Vec<bool>), String> {
+    let mut current = samples.to_vec();
+    let mut kept = vec![true; samples.len() / refine::SAMPLE_FLOATS];
+    let mut points = Vec::new();
+    for &(terms, max_move, min_correlation) in stages {
+        let params = refine::RefineParams {
+            width: meta.width,
+            height: meta.height,
+            window: meta.window,
+            iterations: meta.iterations,
+            terms,
+            max_move,
+            min_correlation,
+        };
+        let (stage_points, stage_kept) = refiner.refine(&params, images.0, images.1, &current)?;
+        for (all, stage) in kept.iter_mut().zip(&stage_kept) {
+            *all &= *stage;
+        }
+        for (sample, point) in current
+            .chunks_exact_mut(refine::SAMPLE_FLOATS)
+            .zip(&stage_points)
+        {
+            sample[2..8].copy_from_slice(&[point[0], point[1], 1.0, 0.0, 0.0, 1.0]);
+        }
+        points = stage_points;
+    }
+    Ok((points, kept))
+}
+
+/// Refine one vector set three times and compare the last result with its reference.
+fn check_set(
+    label: &str,
+    refiner: &refine::Refiner,
+    meta: &StereoMeta,
+    images: (&[u8], &[u8]),
+    samples: &[f32],
+    reference: (&[f32], &[u8]),
+    stages: &[Stage],
+) -> Result<bool, String> {
+    let count = reference.1.len();
+    if samples.len() != count * refine::SAMPLE_FLOATS || reference.0.len() != 2 * count {
+        return Err(format!("{label} vectors do not match meta.json"));
+    }
+    let mut fastest = f64::INFINITY;
+    let mut result = None;
+    for _ in 0..3 {
+        let start = Instant::now();
+        result = Some(run_stages(refiner, meta, images, samples, stages)?);
+        fastest = fastest.min(start.elapsed().as_secs_f64() * 1000.0);
+    }
+    let Some((points, kept)) = result else {
+        return Err("no refinement ran".into());
+    };
+    let reference_kept: Vec<bool> = reference.1.iter().map(|&k| k != 0).collect();
+    let mismatched = kept
+        .iter()
+        .zip(&reference_kept)
+        .filter(|(a, b)| a != b)
+        .count();
+    let max_difference = points
+        .iter()
+        .zip(reference.0.chunks_exact(2))
+        .zip(kept.iter().zip(&reference_kept))
+        .filter(|(_, (a, b))| **a && **b)
+        .map(|((p, r), _)| (p[0] - r[0]).abs().max((p[1] - r[1]).abs()))
+        .fold(0.0f32, f32::max);
+    let fraction = mismatched as f64 / count.max(1) as f64;
+    println!(
+        "{label}: {count} samples refined with {} px windows in {fastest:.1} ms (fastest of three, with upload and readback)",
+        meta.window
+    );
+    println!(
+        "{label}: kept disagreements {mismatched} of {count} ({:.2} %), largest difference {max_difference:.5} px",
+        100.0 * fraction
+    );
+    Ok(fraction <= 0.005 && max_difference <= 0.01)
 }
 
 fn refine_check(args: &[String]) -> ExitCode {
@@ -339,15 +434,6 @@ fn refine_check(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let samples = floats(&samples);
-    let reference = floats(&refined);
-    if samples.len() != meta.samples * refine::SAMPLE_FLOATS
-        || reference.len() != 2 * meta.samples
-        || kept.len() != meta.samples
-    {
-        eprintln!("stereo vectors do not match meta.json");
-        return ExitCode::FAILURE;
-    }
     let refiner = match refine::Refiner::new(fallback) {
         Ok(r) => r,
         Err(e) if std::env::var_os("SLS_REQUIRE_GPU").is_none() => {
@@ -359,62 +445,57 @@ fn refine_check(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let params = refine::RefineParams {
-        width: meta.width,
-        height: meta.height,
-        window: meta.window,
-        iterations: meta.iterations,
-        terms: 6,
-        max_move: 1.0,
-        min_correlation: None,
-    };
-    let mut timings = Vec::new();
-    let mut result = None;
-    for _ in 0..3 {
-        let start = Instant::now();
-        match refiner.refine(&params, &left, &right, &samples) {
-            Ok(r) => result = Some(r),
-            Err(e) => {
-                eprintln!("refine failed: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
-        timings.push(start.elapsed().as_secs_f64() * 1000.0);
-    }
-    let Some((points, gpu_kept)) = result else {
+    if kept.len() != meta.samples {
+        eprintln!("stereo vectors do not match meta.json");
         return ExitCode::FAILURE;
-    };
-    let reference_kept: Vec<bool> = kept.iter().map(|&k| k != 0).collect();
-    let mismatched = gpu_kept
-        .iter()
-        .zip(&reference_kept)
-        .filter(|(a, b)| a != b)
-        .count();
-    let max_difference = points
-        .iter()
-        .zip(reference.chunks_exact(2))
-        .zip(gpu_kept.iter().zip(&reference_kept))
-        .filter(|(_, (a, b))| **a && **b)
-        .map(|((p, r), _)| (p[0] - r[0]).abs().max((p[1] - r[1]).abs()))
-        .fold(0.0f32, f32::max);
-    let fraction = mismatched as f64 / meta.samples.max(1) as f64;
-    let fastest = timings.iter().copied().fold(f64::INFINITY, f64::min);
+    }
     println!("adapter {}", refiner.adapter);
-    println!(
-        "{} samples refined with {} px windows in {fastest:.1} ms (fastest of three, with upload and readback)",
-        meta.samples, meta.window
+    let images = (left.as_slice(), right.as_slice());
+    let affine = check_set(
+        "affine start",
+        &refiner,
+        &meta,
+        images,
+        &floats(&samples),
+        (&floats(&refined), &kept),
+        &[(6, 1.0, None)],
     );
-    println!(
-        "kept disagreements {mismatched} of {} ({:.2} %), largest difference {max_difference:.5} px",
-        meta.samples,
-        100.0 * fraction
-    );
-    if fraction <= 0.005 && max_difference <= 0.01 {
-        println!("refine check: GPU matches the NumPy reference");
-        ExitCode::SUCCESS
+    let direct = if meta.direct_samples == 0 {
+        Ok(true)
     } else {
-        println!("refine check: GPU differs from the NumPy reference");
-        ExitCode::FAILURE
+        match (
+            read("direct-samples.bin"),
+            read("direct-refined.bin"),
+            read("direct-kept.bin"),
+        ) {
+            (Ok(s), Ok(f), Ok(k)) => check_set(
+                "direct",
+                &refiner,
+                &meta,
+                images,
+                &floats(&s),
+                (&floats(&f), &k),
+                &[
+                    (3, meta.max_move, Some(meta.min_correlation)),
+                    (6, 1.0, None),
+                ],
+            ),
+            _ => Err(format!("direct vectors missing in {}", dir.display())),
+        }
+    };
+    match (affine, direct) {
+        (Ok(true), Ok(true)) => {
+            println!("refine check: GPU matches the NumPy reference");
+            ExitCode::SUCCESS
+        }
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("refine failed: {e}");
+            ExitCode::FAILURE
+        }
+        _ => {
+            println!("refine check: GPU differs from the NumPy reference");
+            ExitCode::FAILURE
+        }
     }
 }
 
