@@ -618,3 +618,24 @@ Results are unchanged: every check keeps the same samples and matches within
 Samples take 13 to 14 Gauss-Newton iterations on average with the exit at 10⁻⁵ px. An
 exit at 10⁻⁴ px would save a quarter of them and move positions by under 0.001 px,
 which we keep in reserve for the CPU fallback.
+
+## D39. Block statistics once per pixel (2026-11-02)
+
+The correlation pass of D35 summed five block products at every reduced pixel and
+disparity: the left block's sum and sum of squares, the shifted right block's, and their
+cross sum. Four of those depend on one image alone. A new pass takes each image's block
+sum and sum of squares once per reduced pixel. The correlation pass reads the left's at
+its pixel and the right's at the column its disparity points at, and loops over the
+block for the cross sum alone.
+
+Each image's block sums reflect at that image's own borders, in the cross sum too, where
+D35 reflected the left coordinate and then shifted it. With the old cross sum, border
+pixels' right-block sums no longer matched the pixels the cross sum paired, and a few
+passed the checks with inflated correlations. The NumPy reference follows the same rule,
+and the kernel matches it on every reduced pixel of the sphere, plate and ball bar views.
+
+Direct matching keeps the same samples on all three views, and the ball bar, sphere and
+plate figures of D34 are unchanged within 0.1 µm. On a Radeon RX 7900 GRE the coarse
+pass stays at about 5 ms. The pass is for the CPU fallback, where block disparity took
+0.7 to 1.7 s of a depth frame on the hosted runners, and the application gate's log
+shows its effect there.
