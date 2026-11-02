@@ -3,13 +3,15 @@
 [![Tests](https://github.com/Jbsco/sls-scan/actions/workflows/test.yml/badge.svg)](https://github.com/Jbsco/sls-scan/actions/workflows/test.yml)
 [![Style](https://github.com/Jbsco/sls-scan/actions/workflows/style.yml/badge.svg)](https://github.com/Jbsco/sls-scan/actions/workflows/style.yml)
 
-A structured-light 3D scanner built from a camera and a projector on a rigid bar, with
-calibration, capture, decoding, triangulation, registration and meshing scripted on
-Linux. It scans objects from a few centimetres to a few metres across, at 0.2 to 0.5 mm
-within one view and 0.5 to 1 mm over a few metres, as meshes for CAD.
+A structured-light 3D scanner built from two synchronized cameras and a pattern light on a
+stiff bar, with calibration, capture, matching, registration and meshing scripted on
+Linux. The light throws a fixed random pattern, so parts scan without any coating, and
+every depth frame is one exposure, so the scanner can sweep around a part continuously.
+It measures objects from a few centimetres to a few metres across, as meshes for CAD.
+
 Handheld scanners sold for this work capture only through their makers' Windows and
-macOS software. This project applies the same measurement principle from a static rig,
-under the operator's control from calibration to export.
+macOS software. This project applies the same principle, under the operator's control
+from calibration to export.
 
 Nothing in this repository has run on hardware yet. Until the rig is built and the
 acceptance tests in `docs/accuracy.md` pass on it, use anything here at your own risk.
@@ -28,13 +30,13 @@ acceptance tests in `docs/accuracy.md` pass on it, use anything here at your own
 
 ## Status
 
-Phase 0 of `ROADMAP.md`, the scaffold, is complete. Calibration tooling (Phase 1) and
-the static reference pipeline (Phase 2) are implemented and verified on a virtual bench
-of synthetic captures (`DESIGN.md` D15 and D17). Phase 3 is in progress: the capture
-protocol, a stand-in node, and the application shell with its capture client, three
-panels and calibration from the configuration panel. Phase 4 has its decode kernel,
-checked against the NumPy reference, with triangulation and fusion on the GPU next. Bench acceptance of each phase waits on
-the hardware in `docs/hardware.md`.
+Phase 0 of `ROADMAP.md`, the scaffold, is complete. Calibration (Phase 1) and the static
+reference pipeline (Phase 2) are implemented and verified on a virtual bench of
+synthetic captures, for active stereo (`DESIGN.md` D25) and for the phase-shift option
+(D15 and D17). Phase 3 is in progress: the capture protocol, a stand-in node, and the
+application shell with its capture client, three panels and calibration runs. Phase 4
+has a decode kernel for the phase-shift option, with stereo matching on the GPU next.
+Bench acceptance of each phase waits on the hardware in `docs/hardware.md`.
 
 ## Applications
 
@@ -53,83 +55,72 @@ measured geometry. Among them:
 
 ## How it works
 
-1. **Calibrate.** Camera intrinsics come from a printed ChArUco board in 20 to 30
-   poses. The projector is calibrated as an inverse camera: Gray codes projected onto the
-   same board map its corners to projector pixels. A stereo calibration between the two
-   gives the baseline. The board's printed square size sets the absolute scale.
-2. **Capture.** The projector shows about 11 Gray code patterns and their inverses, then
-   three or four phase-shifted sinusoids, and the camera photographs each one, at two or
-   three exposures when the surface has both dark and light areas.
-3. **Decode.** The Gray codes give every camera pixel the projector column it sees, with
-   no ambiguity. The phase shifts refine that column to about a tenth of a pixel.
-4. **Triangulate.** Each camera pixel's ray meets its projector column's plane at a
-   point. One view is 10 to 12 million points before filtering.
-5. **Register.** Printed coded targets across the object, each seen in three or more
-   views, give the view poses. ICP on the overlaps refines them. Scale bars of measured
-   length in two orientations check the result.
-6. **Mesh and export.** Outlier removal, Poisson or ball-pivot meshing, hole filling,
-   quadric decimation to a size CAD can hold, alignment to datum points measured on the
-   object, and export as PLY, OBJ or STL.
+1. **Calibrate.** Each camera's intrinsics and the pair's extrinsics come from a printed
+   ChArUco board in 12 to 30 poses seen by both cameras. The board's measured square size
+   sets the absolute scale.
+2. **Capture.** One trigger pulse exposes both cameras at the same instant while the
+   pattern light throws its fixed random dots on the part. Each pair of frames is a depth
+   frame, up to 30 per second over gigabit Ethernet.
+3. **Match.** Both images are rectified so that matching points share a row. A coarse
+   disparity comes from semi-global matching, and each sample is refined to a small
+   fraction of a pixel by an affine window, which follows the different foreshortening
+   each camera sees on a slanted surface.
+4. **Triangulate.** Each matched pair of pixels gives a point in the left camera's frame.
+5. **Track and fuse.** While the scanner moves, each depth frame is aligned to the model
+   from its geometry and from markers on the mat around the part, and fused into a
+   volume.
+6. **Mesh and export.** Outlier removal, meshing, hole filling, decimation to a size CAD
+   can hold, alignment to datum points measured on the object, and export as PLY, OBJ or
+   STL.
 
-Decoding and triangulation are NumPy, written as the reference the GPU kernels are
-checked against (`DESIGN.md` D16). Calibration uses OpenCV, and meshing will use Open3D.
+Matching and triangulation are NumPy and OpenCV in `slscan/stereo.py`, written as the
+reference the GPU kernels are checked against. A phase-shift path with a calibrated
+projector (Gray codes and phase shifts) is also implemented, for edge-sharp static scans.
 
 ## Architecture
 
-Two paths share one calibration. The **preview path** runs live at 10 to 30 depth
-frames per second. A short phase-shift cycle from a 1 MP global-shutter camera
-synchronized to the projector is decoded and triangulated in WGSL compute shaders
-through wgpu, then fused into a coarse volume and drawn in the scene as the rig moves.
-The **final path** captures the full Gray code and phase-shift sequence per view at
-full resolution. It processes the sequence after the scan, in seconds per view on the
-GPU or tens of seconds on the CPU, then registers and meshes the result.
-
 The application is Rust with wgpu and egui, so one binary runs on an AMD or an NVIDIA
 card through Vulkan, and on the CPU through Mesa's software Vulkan when no card is
-present. It has three panels: configuration (devices, calibration, pattern set,
-exposure), preview and processing (live view, coverage, capture, the deferred queue),
-and the scene (the final mesh with its datums, scale bars, residual report and
-measurement tools).
+present. It has three panels: configuration (devices, calibration, exposure), preview
+and processing (live view, coverage, capture, the deferred queue), and the scene (the
+fused model with its datums, scale bars, residual report and measurement tools).
 
-Scan modes are static (view, reorient, view), continuous (sweep and fuse), and keyed
-(named targets define the object's frame). Python tools do the calibration solve and
-the mesh post-processing with OpenCV and Open3D, exchanging YAML and PLY files with the
-application. `DESIGN.md` D11 has the reasoning.
+The capture node is a Raspberry Pi 5 with both cameras and the trigger line, streaming
+frame pairs to the host over Ethernet. Matching, triangulation and fusion run on the
+host's GPU. Scan modes are continuous (sweep and fuse), static (view, reorient, view),
+and keyed (named markers define the object's frame). Python tools do the calibration
+solve and mesh post-processing. `DESIGN.md` D11 and D25 have the reasoning.
 
 ## Hardware
 
 | Part | Choice | Reason |
 |---|---|---|
-| Final camera | Raspberry Pi HQ camera, IMX477, 12 MP, 6 mm lens, on the Pi capture node | Full-resolution static views. f ≈ 3,870 px, a 1.05 × 0.78 m field at 1 m |
-| Preview camera | Raspberry Pi Global Shutter camera, IMX296, 1456 × 1088, triggered per pattern, on the Pi capture node | Live path at the projector rate, with a global shutter that freezes each pattern |
-| Capture node | Raspberry Pi 5: both cameras, HDMI to the projector, a GPIO trigger line, gigabit Ethernet to the host | Display timing, trigger and capture on one clock. USB cameras on the host are the alternative |
-| GPU | Any Vulkan-capable card (AMD or NVIDIA on Linux), or Mesa lavapipe on the CPU | One set of WGSL kernels for preview, final processing and the scene |
-| Projector | Used DLP with a native 1920 × 1080 DMD, 2,000 ANSI lumens or more, manual focus to 1 m, temporal processing off | DLP keeps binary patterns sharp. `docs/hardware.md` lists the requirements |
-| Bar | 40 × 40 aluminum extrusion, camera and projector at a 0.35 m baseline toed in to cross at 1 m, on a tripod | Calibration stays valid only while the pair does not move relative to each other |
-| Calibration board | ChArUco, printed flat on foam board | One board calibrates the camera, the projector and the pair |
-| Targets and scale bars | Printed ArUco targets, two bars with targets at a caliper-measured spacing | Registration across views and an independent check of scale |
-| Surface preparation | Matte scanning spray or dry developer | Gloss and black surfaces return no usable pattern without it |
+| Cameras | Two Raspberry Pi Global Shutter cameras, IMX296, 1456 × 1088, on the Pi capture node | One trigger pulse exposes both at once, so a moving scanner is no problem |
+| Lenses | 16 mm C-mount for near range (0.5 m), 6 mm CS-mount for a metre | Field of 157 mm or 0.84 m across at those distances |
+| Capture node | Raspberry Pi 5: both cameras, a GPIO trigger line, gigabit Ethernet to the host | Trigger and capture on one clock |
+| Pattern light | Any LED projector showing one random-dot image, or an LED slide projector | Puts texture on plain surfaces. It is neither calibrated nor synchronized |
+| GPU | Any Vulkan-capable card (AMD or NVIDIA on Linux), or Mesa lavapipe on the CPU | One set of WGSL kernels for matching, fusion and the scene |
+| Bar | Steel or carbon fibre, cameras 0.2 m apart for 0.5 m or 0.35 m apart for a metre, toed in | Calibration stays valid only while the cameras do not move relative to each other |
+| Calibration board | ChArUco, printed flat for a metre, glass or ceramic for near range | One board calibrates both cameras and the pair |
+| Markers and scale bars | Printed ArUco markers on the mat around the part, bars at a caliper-measured spacing | Tracking during sweeps and an independent check of scale |
 
-`docs/hardware.md` has the full list with prices, the rig geometry and the build notes.
+Glossy, black and transparent surfaces still need a matte spray. `docs/hardware.md` has
+the full list, trigger wiring, rates and build notes.
 
 ## Accuracy
 
-At a 1 m working distance with a 0.35 m baseline, the depth resolution is
-δz = z²·δp/(f·b). That is 0.07 mm with phase shift at δp ≈ 0.1 px, 0.2 mm at a
-realistic 0.3 px, and 0.7 mm with Gray code alone. Accuracy within one view, after calibration
-residuals and rig drift, is 0.2 to 0.5 mm over the 1 m field. Over a few metres, with
-targets and scale bars, 0.5 to 1 mm. `docs/accuracy.md` derives these and sets the
-acceptance tests: a flat plate, a sphere and the scale bars.
-
-A small-volume head with a 25 mm lens at 0.5 m targets 0.02 mm over objects up to about
-120 mm across, and supports continuous sweeps at up to 2 mm/s (`DESIGN.md` D23 and D24,
-`docs/hardware.md`).
+Depth resolution follows δz = z²·δd/(f·b), with δd the matching precision in pixels. On
+the virtual bench, two Global Shutter cameras with 16 mm lenses on a 0.2 m baseline at
+0.5 m match uncoated parts to about 0.01 px. An 80 mm plate measures 8 µm RMS and a ball
+bar's spacing lands within 0.02 mm. Matching windows average the surface, so curved
+surfaces read slightly inside, by 42 µm on a 25 mm sphere. `docs/accuracy.md` has the
+numbers, the acceptance tests and the error budget.
 
 ## Repository layout
 
 | Path | Contents |
 |---|---|
-| `slscan/` | Python package: pattern codes, calibration, decode, triangulation, artifact fits, synthetic captures, capture protocol with a stand-in node, and the commands in `cli.py` |
+| `slscan/` | Python package: calibration, stereo matching, the phase-shift path, artifact fits, synthetic captures, capture protocol with a stand-in node, and the commands in `cli.py` |
 | `app/` | Rust application: capture client, three panels, and a headless `capture` mode |
 | `tests/` | pytest tests of the pure functions, and the virtual bench on synthetic captures |
 | `docs/hardware.md` | Bill of materials, rig geometry and build notes |
@@ -158,7 +149,7 @@ modules, NumPy, Open3D, PyYAML, pytest). The application needs Rust 1.93, pinned
 
 The virtual bench runs the whole pipeline on synthetic captures, with no hardware:
 
-    slscan simulate --out data/simulated      # prints the calibrate, scan and measure commands
+    slscan simulate --head stereo --out data/simulated    # prints calibrate, scan and measure commands
     slscan node-sim --scene sphere            # stand-in capture node on port 5600
     cargo run --release --manifest-path app/Cargo.toml    # application window
 
