@@ -44,14 +44,14 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
 - Phase 7, open. Deferred full-resolution processing and export. Full sequence per
   view queued and processed on the GPU or CPU, meshing, hole filling, decimation,
   alignment to datums, PLY, OBJ and STL export, the residual report. Acceptance: a
-  decimated cab mesh imports into CAD and its datum points land within 1 mm of their
-  measured positions.
+  decimated mesh of an object a few metres across imports into CAD and its datum
+  points land within 1 mm of their measured positions.
 - Phase 8, open. The rig. Extrusion bar, mounts for both cameras and the projector,
   trigger wiring, tripod adapter, a case for the board and targets, drawings in CAD.
-  Acceptance: a calibration before and after carrying the rig to the vehicle agrees
+  Acceptance: a calibration before and after carrying the rig to a site agrees
   within 0.1 % in focal length and 0.2 mm in baseline.
-- Phase 9, open. Applications. A bare cab, a composite plug, a mold against its plug,
-  small parts on a turntable with a known axis. Acceptance per job: scale bars within
+- Phase 9, open. Applications. An interior a few metres across, a pattern and the mold
+  taken from it, small parts on a turntable with a known axis. Acceptance per job: scale bars within
   the Phase 5 figure and datum residuals within the Phase 7 figure.
 - Phase 10, candidates. HDR capture, color texture, a second camera for occlusion, a
   kilohertz DLP for faster preview, a one-shot coverage pattern, the Haskell reference
@@ -63,5 +63,5 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   120 Hz doubles the preview rate if the unit accepts it at 1080p.
 - Projector gamma: measured per unit and linearized in the phase shift, or avoided
   with a binary-only decode at lower precision.
-- CAD import size that holds the cab: decimation target in faces, measured on the
-  first import.
+- CAD import size that holds a scan a few metres across: decimation target in faces,
+  measured on the first import.

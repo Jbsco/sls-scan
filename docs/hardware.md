@@ -99,7 +99,7 @@ matter more than cost.
 - Painter's tape or dot stickers give plain panels texture for a photogrammetry pass,
   not needed for structured light, which carries its own texture in the patterns.
 - Doors closed or night work against ambient light. The patterns need contrast, and
-  sunlight through a windshield washes them out.
+  sunlight through a window washes them out.
 
 ## Live path
 

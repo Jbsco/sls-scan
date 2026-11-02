@@ -16,8 +16,8 @@ measurement principle with a calibration the operator owns, a pipeline that runs
 Linux end to end, and per-view accuracy that matches the handhelds on large parts.
 
 The cost is time: a view takes 10 to 15 s of capture and a minute or two of
-repositioning, so a cab is one to two hours of capture against twenty minutes with a
-handheld. For reference geometry taken once, that time is acceptable.
+repositioning, so an object a few metres across is one to two hours of capture against
+twenty minutes with a handheld. For reference geometry taken once, that time is acceptable.
 
 ## D3. The camera (2026-10-31)
 
@@ -170,7 +170,7 @@ capture) on a machine made for it and leaves GPU work and the panels on the host
 ## D14. A public repository with pull requests only (2026-11-01)
 
 The repository is public from 2026-11-01. Its sanitization gate holds across the whole
-history (no local paths, no vehicle or sibling names), its license is in place, and its
+history (no local paths, no downstream project or sibling names), its license is in place, and its
 README says that nothing has run on hardware yet. A public repository gets hosted
 runners, so the workflows run on `ubuntu-latest` and the self-hosted runner of D10 is
 removed, which keeps fork pull requests off the host.

@@ -47,7 +47,7 @@ These sit above resolution and set accuracy:
   alone accumulates drift with the view count.
 
 Expected accuracy for the reference rig: 0.2 to 0.5 mm within one view over the 1 m
-field, 0.5 to 1 mm across a cab-sized object with targets and scale bars.
+field, 0.5 to 1 mm over an object a few metres across with targets and scale bars.
 
 ## Acceptance tests
 
@@ -65,7 +65,7 @@ calibration and recorded with the scan.
   well as the views.
 - **Datum points.** On a real job, three or more points measured on the object with
   calipers or a tape between features. After alignment, their residuals are within 1 mm
-  across a cab.
+  over a few metres.
 
 A scan's report contains the scale bar lengths, the plate RMS from the day's calibration
 check and the datum residuals, so no result is quoted without its error.
