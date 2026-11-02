@@ -170,8 +170,9 @@ Its decode kernel is `app/src/decode.wgsl`, and it matches the NumPy decode (D22
 Rectification runs in `app/src/rectify.wgsl` from each camera's rectification parameters
 and matches `cv2.remap` within one grey level (D31). Second-order refinement runs in
 `app/src/refine.wgsl`, one workgroup per sample after a gradient pass, and matches the
-NumPy refinement (D29, D30). `slscan stereo-vectors` writes a raw and a rectified view
-with the rectification parameters, its affine matches and their NumPy refinement.
+NumPy refinement (D29, D30). It also runs both stages of direct matching (D33).
+`slscan stereo-vectors` writes a raw and a rectified view with the rectification
+parameters, its affine matches, its coarse samples and their NumPy refinements.
 `sls-scan rectify-check <directory>` and `sls-scan refine-check <directory>` compare the
 kernels with them.
 
