@@ -87,3 +87,30 @@ twelve synthetic board poses. Results from `slscan simulate` on 2026-11-01:
 
 A synthetic pass checks the arithmetic. It says nothing about lens, projector gamma or
 rig flex, which only the bench measures.
+
+## Small-volume head
+
+These results are the small-volume head of `DESIGN.md` D23 on the virtual bench. The HQ
+camera runs in its 2 × 2 binned mode (2028 × 1520, f = 8,065 px), with a calibration
+recovered from twelve synthetic poses of a 90 × 60 mm board. Commands: `slscan simulate --head small`, then
+the printed calibrate, scan and measure steps.
+
+| Test | Projector image 150 mm | Projector image 360 mm | Truth or target |
+|---|---|---|---|
+| Flat plate, 80 mm, tilted | 7.6 µm RMS | 17.1 µm RMS | under 10 µm |
+| Sphere radius | -3.4 µm | +0.2 µm | 12.5 mm sphere |
+| Sphere form | 5.2 µm RMS | 12.4 µm RMS | |
+| Ball bar spacing | -3.3 µm | -1.4 µm | 80.424 mm |
+
+Depth error of one preview cycle on a moving plate (`slscan motion-error --head small`):
+Global Shutter camera, 60 Hz, four steps, projector image 150 mm.
+
+| Sweep speed | Across the axis | Along the axis |
+|---|---|---|
+| Still | 7.1 µm | 7.1 µm |
+| 1 mm/s | 7.3 µm | 9.0 µm |
+| 2 mm/s | 7.7 µm | 13.3 µm |
+| 5 mm/s | 10.3 µm | 28.9 µm |
+
+These figures leave out lens and projector errors, thermal drift and target accuracy,
+which only the bench measures.
