@@ -138,5 +138,7 @@ def sweep_bench(rig, cal, scene: dict, poses: list, frames: list, voxel: float =
     return {"frames": len(frames), "points": len(model),
             "max_translation_error_m": max(e[0] for e in pose_errors),
             "max_rotation_error_deg": max(e[1] for e in pose_errors),
+            "last_translation_error_m": pose_errors[-1][0],
+            "last_rotation_error_deg": pose_errors[-1][1],
             "ball_bar_error_m": float(np.linalg.norm(centres[0] - centres[1]) - truth),
             "ball_radius_errors_m": radii, "mat_flatness_m": float(flatness)}
