@@ -21,9 +21,10 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   of both cameras under the pattern light, rectification, matching with affine windows,
   triangulation, filtering. This is the reference the GPU kernels are checked against.
   Acceptance: a flat plate fits a plane under 0.2 mm RMS over 0.5 m, and a scale bar
-  measures within 0.2 mm in one view. Matching, triangulation and artifact fits are in
-  place and pass on the virtual bench (D25), where the metre head meets both limits with
-  50 mm scale bar spheres (D45). Capture and acceptance wait on the rig.
+  measures within 0.2 mm in one view. Matching, triangulation and artifact fits pass on
+  the virtual bench (D25), where the metre head meets both limits with 50 mm scale bar
+  spheres (D45). Filtering drops isolated points (D56). Capture and acceptance wait on
+  the rig.
 - Phase 3, in progress. Application shell (Rust, wgpu, egui) and the capture node: two
   Global Shutter cameras on the Pi 5 fired by one trigger pulse, frame pairs streamed over
   Ethernet, stereo calibration from the configuration panel. In place: capture protocol

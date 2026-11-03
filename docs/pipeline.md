@@ -37,7 +37,8 @@ A second-order window of 25 pixels, fitted by Gauss-Newton, then follows the sur
 curvature (`DESIGN.md` D28). `--order 1` stops at the affine window, which is faster and
 reads curved surfaces slightly inside. `--near` and `--far` bound the depth search, and
 `--step` and `--window` set density and the trade between noise and curvature bias
-(`docs/accuracy.md`).
+(`docs/accuracy.md`). Triangulated points with no other point within three sample
+spacings are dropped (D56).
 
 `stereo.direct_matches` matches by Gauss-Newton alone: an affine window from the coarse
 disparity, kept on its correlation, then a second-order window (`DESIGN.md` D32). Its

@@ -185,3 +185,11 @@ def test_preview_follows_the_plate(head, pattern):
     points = stereo.triangulate(rect, left_pts, right_pts, 0.4, 0.6)
     assert len(points) > 5000
     assert geometry.fit_plane(points)[2] < 0.0003
+
+
+def test_drop_isolated_keeps_a_surface_and_drops_strays():
+    xs, ys = np.meshgrid(np.arange(20) * 0.001, np.arange(20) * 0.001)
+    surface = np.column_stack([xs.ravel(), ys.ravel(), np.full(xs.size, 0.5)])
+    strays = np.array([[0.01, 0.01, 0.45], [0.05, 0.0, 0.5]])
+    kept = stereo.drop_isolated(np.vstack([surface, strays]), 8, 4000.0)
+    assert len(kept) == len(surface) and np.allclose(kept, surface)

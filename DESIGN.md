@@ -983,3 +983,24 @@ and the loop closes within 15 µm. Sphere centres fitted to each half alone diff
 to 56 µm, perhaps because affine window bias changes with the view. A pose graph for
 loop closure waits for scans where drift outgrows this. A test tracks a 48-frame loop of
 point frames in seconds, where the old start diverged at frame 37.
+## D56. Isolated points dropped (2026-11-02)
+
+Phase 2 lists filtering after triangulation. `stereo.depth_points` now drops each point
+with no other point within three sample spacings, where one spacing at depth z is the
+sample step times z over the focal length. A failed match tends to land far from any
+surface, where it stands alone. Points near an edge or on a curved surface keep
+neighbours on at least one side.
+
+Against truth on rendered sweeps:
+
+| Frames | Points | Dropped | Beyond 1 mm, dropped | Within 0.1 mm, dropped |
+|---|---|---|---|---|
+| 25, affine windows, every 8 px | 236,023 | 7 | 2 of 3 | 0 |
+| 25, second-order windows, every 8 px | 230,241 | 7 | 0 of 0 | 3 |
+| 96-frame loop, affine, every 12 px | 403,643 | 15 | 8 of 12 | 6 |
+
+Every point more than 2 mm off is dropped, up to 95 mm. Points 1.0 to 1.6 mm off keep
+neighbours and stay. Ball bar and sphere figures of these sweeps move by up to 8 µm and
+the mat by 0.1 µm, since artifact fits take points near the artifact anyway. Exported
+and fused clouds of these sweeps then contain no point more than 2 mm off. The
+application's depth frames do not filter yet.

@@ -474,13 +474,31 @@ def preview_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
     return rect, left_pts, right_pts
 
 
+def drop_isolated(points: np.ndarray, step: int, focal: float,
+                  spacings: float = 3.0) -> np.ndarray:
+    """Return the points that have another point within spacings sample spacings, where
+    one spacing at depth z is step * z / focal."""
+    from scipy.spatial import cKDTree
+
+    if len(points) < 2:
+        return points[:0]
+    radius = spacings * step * points[:, 2] / focal
+    counts = cKDTree(points).query_ball_point(points, radius, return_length=True)
+    return points[counts > 1]
+
+
 def depth_points(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
                  near_m: float, far_m: float, step: int = 8, window: int = 21,
-                 min_level: float = 6.0, order: int = 1) -> tuple[np.ndarray, Rectification]:
+                 min_level: float = 6.0, order: int = 1,
+                 isolated_spacings: float = 3.0) -> tuple[np.ndarray, Rectification]:
     """Return points (N, 3) in metres in the left camera's frame from affine_matches.
-    Order 2 refines each affine match with a second-order window."""
+    Order 2 refines each affine match with a second-order window. Points with no other
+    point within isolated_spacings sample spacings are dropped, unless it is 0."""
     rect, rl, rr, left_pts, right_pts, warps = affine_matches(cal, left, right, near_m, far_m,
                                                               step, window, min_level)
     if order == 2:
         left_pts, right_pts = refine_second_order(rl, rr, left_pts, right_pts, warps, window)
-    return triangulate(rect, left_pts, right_pts, near_m, far_m), rect
+    points = triangulate(rect, left_pts, right_pts, near_m, far_m)
+    if isolated_spacings > 0:
+        points = drop_isolated(points, step, rect.left_projection[0, 0], isolated_spacings)
+    return points, rect
