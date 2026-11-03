@@ -81,6 +81,36 @@ def cmd_scan(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mesh_volume(args: argparse.Namespace) -> int:
+    """Mesh a TSDF volume saved as meta.json, tsdf.bin and weight.bin, as the application
+    and tsdf-vectors write it."""
+    import json
+
+    from . import mesh, tsdf
+
+    with open(os.path.join(args.volume, "meta.json"), encoding="utf-8") as f:
+        meta = json.load(f)
+    lower = np.asarray(meta["lower"], dtype=np.float64)
+    shape = tuple(int(n) for n in meta["shape"])
+    volume = tsdf.Volume(lower, lower + meta["voxel"] * (np.array(shape) - 1), meta["voxel"],
+                         meta["truncation"])
+    if volume.shape != shape:
+        print(f"{args.volume}: shape {shape} does not follow from its bounds")
+        return 1
+    volume.tsdf[:] = np.fromfile(os.path.join(args.volume, "tsdf.bin"), "<f4").reshape(shape)
+    volume.weight[:] = np.fromfile(os.path.join(args.volume, "weight.bin"),
+                                   "<f4").reshape(shape)
+    vertices, faces = mesh.surface_nets(volume)
+    if args.fill_mm:
+        vertices, faces, closed = mesh.fill_holes(vertices, faces, args.fill_mm / 1000.0)
+        print(f"{closed} holes up to {args.fill_mm:g} mm around filled")
+    if args.faces:
+        vertices, faces = mesh.decimate(vertices, faces, args.faces)
+    mesh.write_mesh(args.out, vertices, faces)
+    print(f"{len(vertices)} vertices and {len(faces)} triangles written to {args.out}")
+    return 0 if len(faces) else 1
+
+
 def cmd_report(args: argparse.Namespace) -> int:
     """Fit datum spheres in a PLY cloud or mesh, align them to their measured centres and
     report residuals and scale bar errors."""
@@ -903,6 +933,13 @@ def main(argv=None) -> int:
     p.add_argument("--faces", type=int, default=0,
                    help="with --mesh, decimate the mesh to at most this many triangles")
     p.set_defaults(func=cmd_sweep_bench)
+
+    p = sub.add_parser("mesh-volume", help="mesh a saved TSDF volume")
+    p.add_argument("volume", help="directory with meta.json, tsdf.bin and weight.bin")
+    p.add_argument("--out", required=True, help="mesh file, .ply, .obj or .stl")
+    p.add_argument("--fill-mm", type=float, default=0.0, help="close holes up to this perimeter")
+    p.add_argument("--faces", type=int, default=0, help="decimate to at most this many triangles")
+    p.set_defaults(func=cmd_mesh_volume)
 
     p = sub.add_parser("report", help="align datum spheres in a cloud or mesh to their "
                                       "measured centres and report residuals")
