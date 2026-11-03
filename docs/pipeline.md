@@ -151,10 +151,12 @@ a PLY per view in the camera frame.
 
 ## Register
 
-Each view's pose comes from geometry: a coarse match against the views already placed,
-then ICP on overlapping clouds (`DESIGN.md` D63). Optional ArUco markers on a mat, when
-three or more are seen, give a pose in the mat's frame instead. Scale bars are measured
-in the merged cloud and reported.
+Each view's pose comes from geometry (`DESIGN.md` D63, D69). `register.register` thins
+two views to a voxel grid, turns their normals toward each camera, and pairs points whose
+fast point feature histograms (FPFH) are each other's nearest. RANSAC on three pairs at a
+time shortlists motions, overlap of all points picks one, and point-to-plane ICP refines
+it. Optional markers on a mat, when three or more are seen, give a pose in the mat's
+frame instead. Scale bars are measured in the merged cloud and reported.
 
 ## Virtual bench
 
