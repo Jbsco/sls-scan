@@ -182,3 +182,19 @@ recovered calibration and `--order 2` for second-order windows of 25 px.
 The largest pose error varies between runs of the same command, from 0.051° to 0.072°
 with affine windows and recovered calibration. Artifact results agree within 0.1 µm
 between those runs.
+
+## Static views
+
+Ten synthetic views of a part about a metre across, registered from geometry as in
+`DESIGN.md` D70. Cameras stand 1.2 m out and 0.9 m up, 36° apart, and ray-cast points
+carry 40 µm of noise per coordinate. The part has two scale bars of 50.8 mm spheres, one
+level and 401 mm long, one rising and 388 mm long. Command: `slscan view-bench`, with
+`--voxel-mm` and `--seed`.
+
+| Coarse voxel | Pose error, largest over three seeds | Scale bar errors, largest | Phase 6 limit | Time |
+|---|---|---|---|---|
+| 10 mm | 0.078 mm, 0.0028° | +0.003 and +0.005 mm | 0.5 mm | 30 s |
+| 20 mm | 0.241 mm, 0.0083° | +0.009 and +0.010 mm | 0.5 mm | 12 s |
+
+Ray-cast points have no matching errors and no holes, so these figures measure
+registration alone.

@@ -613,19 +613,44 @@ def point_view(scene: list, r: np.ndarray, t: np.ndarray, rng: np.random.Generat
     return points + noise_m * rng.standard_normal(points.shape)
 
 
+def facing_plate(centre, normal, u, half_u: float, half_v: float) -> Plate:
+    """Return a plate at centre with the given normal, its u axis along u made square to
+    the normal."""
+    n = np.asarray(normal, dtype=float) / np.linalg.norm(normal)
+    u = np.asarray(u, dtype=float) - (np.asarray(u, dtype=float) @ n) * n
+    u /= np.linalg.norm(u)
+    return Plate(np.asarray(centre, dtype=float), np.column_stack([u, np.cross(n, u), n]),
+                 half_u, half_v)
+
+
 def static_object() -> list:
     """A part about 0.3 m across for registration tests: a base plate, two walls and four
     balls of different sizes, standing on the world's xy plane."""
-    def plate(centre, normal, u, half_u, half_v):
-        n = np.asarray(normal, dtype=float) / np.linalg.norm(normal)
-        u = np.asarray(u, dtype=float) - (np.asarray(u, dtype=float) @ n) * n
-        u /= np.linalg.norm(u)
-        return Plate(np.asarray(centre, dtype=float), np.column_stack([u, np.cross(n, u), n]),
-                     half_u, half_v)
-    return [plate([0.0, 0.0, 0.0], [0, 0, 1], [1, 0, 0], 0.15, 0.10),
-            plate([0.0, 0.10, 0.06], [0, -1, 0], [1, 0, 0], 0.15, 0.06),
-            plate([-0.15, 0.0, 0.04], [1, 0, 0.3], [0, 1, 0], 0.10, 0.04),
+    return [facing_plate([0.0, 0.0, 0.0], [0, 0, 1], [1, 0, 0], 0.15, 0.10),
+            facing_plate([0.0, 0.10, 0.06], [0, -1, 0], [1, 0, 0], 0.15, 0.06),
+            facing_plate([-0.15, 0.0, 0.04], [1, 0, 0.3], [0, 1, 0], 0.10, 0.04),
             Ball(np.array([0.05, 0.03, 0.04]), 0.04),
             Ball(np.array([-0.08, -0.04, 0.025]), 0.025),
             Ball(np.array([0.09, -0.06, 0.015]), 0.015),
             Ball(np.array([-0.05, 0.05, 0.03]), 0.03)]
+
+
+def metre_object() -> dict:
+    """A part about a metre across for registration tests, standing on the world's xy
+    plane: a base, a back wall, a slanted side, a raised step and four balls, with two
+    scale bars of 50.8 mm spheres about 400 mm apart, one level and clear of the base and
+    one rising across it."""
+    part = [facing_plate([0.0, 0.0, 0.0], [0, 0, 1], [1, 0, 0], 0.5, 0.3),
+            facing_plate([0.0, 0.3, 0.15], [0, -1, 0], [1, 0, 0], 0.5, 0.15),
+            facing_plate([-0.5, 0.0, 0.1], [1, 0, 0.4], [0, 1, 0], 0.3, 0.1),
+            facing_plate([0.3, -0.1, 0.1], [0, 0, 1], [1, 0.3, 0], 0.12, 0.08),
+            facing_plate([0.3, -0.18, 0.05], [0, -1, 0], [1, 0, 0], 0.12, 0.05),
+            Ball(np.array([0.3, 0.15, 0.08]), 0.08),
+            Ball(np.array([-0.25, -0.15, 0.05]), 0.05),
+            Ball(np.array([0.05, 0.2, 0.06]), 0.06),
+            Ball(np.array([-0.35, 0.12, 0.1]), 0.1)]
+    bars = [[Ball(np.array([-0.2, -0.22, 0.06]), 0.0254),
+             Ball(np.array([0.2, -0.24, 0.06]), 0.0254)],
+            [Ball(np.array([-0.15, 0.02, 0.12]), 0.0254),
+             Ball(np.array([0.12, 0.12, 0.38]), 0.0254)]]
+    return {"part": part, "scale-bars": bars}

@@ -1276,3 +1276,40 @@ Each registration took about 1.3 s. At 150 degrees the views mostly see opposite
 walls that have no thickness in the test object: 56% of points have normals opposite to
 the other view's, so their histograms differ. Ten views around an object are 36 degrees
 apart. Merging many views and the scale bar acceptance of Phase 6 come next.
+
+## D70. Many static views around an object (2026-11-03)
+
+`register.register_views` places views taken in order around an object in the first
+view's camera frame. Each view registers to its predecessor by D69, and poses chain.
+A round of refinement then runs point-to-plane ICP of every view but the first against
+all others, on points thinned to a quarter of the coarse voxel. Each view's features
+are computed once, and `bincount` builds the histograms, which gives the same features
+2.4 times faster.
+
+`slscan view-bench` checks Phase 6 acceptance on synthetic views. A part about a
+metre across has a base, a back wall, a slanted side, a raised step and four balls. Two
+scale bars of 50.8 mm spheres stand on it: one level and 401 mm long, one rising across
+it and 388 mm long. Ten cameras 1.2 m out and 0.9 m up, 36 degrees apart, ray-cast
+points every 1.9 mrad. Each coordinate gets 40 µm of noise, matching metre head plate RMS
+in D45.
+
+Over three seeds, with one round:
+
+| Voxel | Pose error, largest | Scale bar errors, largest | Time |
+|---|---|---|---|
+| 10 mm | 0.078 mm, 0.0028 degrees | +0.003 mm, +0.005 mm | 30 s |
+| 15 mm | 0.118 mm, 0.0043 degrees | +0.004 mm, +0.007 mm | 18 s |
+| 20 mm | 0.241 mm, 0.0083 degrees | +0.009 mm, +0.010 mm | 12 s |
+
+On one seed at 10 mm, largest pose error is 0.077 mm without refinement (24 s), 0.074 mm
+after one round (30 s) and 0.060 mm after two (38 s). We chose one round and 10 mm as
+command defaults, and its test runs 20 mm.
+
+The level bar first read +0.05 mm on every run, with true poses too. Its spheres rested
+on the base, and a 3 mm crop around each sphere took in base points near each contact.
+Lifting it 35 mm clear of the base removed that bias.
+
+The views are ray-cast points, not matched stereo pairs, so they lack matching errors at
+edges and holes where the pattern misses. A view that fails to register to its
+predecessor misplaces every later view. Each pair's record keeps its overlap for that
+check.

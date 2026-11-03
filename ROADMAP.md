@@ -49,8 +49,8 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
 - Phase 6, in progress. Many static views. View poses from geometry by a coarse match
   and ICP refinement, optional markers, datums defining the object's frame, a merged
   cloud (D63). Acceptance: two scale bars in different orientations measure within 0.5 mm
-  after a 10-view scan of an object a metre across. Two synthetic views up to 120 degrees
-  apart register within 0.002 degrees and 13 µm (D69).
+  after a 10-view scan of an object a metre across. Ten synthetic views of such an object
+  register from geometry with both scale bars within 0.01 mm (D69, D70).
 - Phase 7, in progress. Deferred processing and export. Dense matching of selected
   frames, meshing, hole filling, decimation, alignment to datums, PLY, OBJ and STL
   export, the residual report. Acceptance: a decimated mesh imports into CAD and its
