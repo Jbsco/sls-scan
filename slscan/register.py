@@ -141,6 +141,6 @@ def register(source: np.ndarray, target: np.ndarray, voxel: float,
     pairs = feature_pairs(fs, ft)
     r, tr, overlap = ransac(s, t, pairs, 1.5 * voxel, rng)
     fine = track.voxel_average(target, voxel / 4.0)
-    r, tr, rms = track.icp(source, fine, track.normals(fine), r, tr,
-                           max_distances=(3.0 * voxel, voxel, voxel / 2.0, voxel / 4.0))
+    r, tr, rms = track.icp(track.voxel_average(source, voxel / 4.0), fine, track.normals(fine),
+                           r, tr, max_distances=(3.0 * voxel, voxel, voxel / 2.0, voxel / 4.0))
     return r, tr, {"pairs": len(pairs), "overlap": overlap, "rms": rms}
