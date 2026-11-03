@@ -805,3 +805,17 @@ frame took 60 to 68 ms on a Radeon RX 7900 GRE, and NumPy took about 12 s per pa
 The application gate records two pairs after its panel calibration and replays them on
 lavapipe. These pairs come from the stand-in's renderer. Pairs from the cameras wait on
 the rig.
+
+## D48. Triangulation on the CPU (2026-11-02)
+
+Phase 4 listed a triangulation kernel. We keep triangulation on the CPU in double
+precision, because it takes under a millisecond there. A release build triangulates
+15,600 to 16,300 points of the stand-in's sweep in 0.6 to 0.8 ms on a Ryzen 7 7700X.
+Each of those frames takes 114 to 157 ms, and refinement 103 to 140 ms of it. Fusion
+runs on the host (D42), so points come back to it with or without a kernel. The 41 ms
+in the application gate's log on hosted runners comes from a debug build.
+
+Single precision would also move points. On 16,000 points of the near head between 0.4
+and 0.6 m, the same least squares in float32 lands a median 0.03 µm, a 99th percentile
+0.16 µm and at most 0.39 µm from true positions, measured in NumPy. In float64 every
+point lands within 0.0001 µm.
