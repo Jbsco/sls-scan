@@ -41,6 +41,8 @@ pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub adapter: String,
+    /// The adapter runs on the CPU, as lavapipe does.
+    pub software: bool,
 }
 
 impl Gpu {
@@ -64,6 +66,7 @@ impl Gpu {
             device,
             queue,
             adapter: format!("{} ({:?}, {:?})", info.name, info.backend, info.device_type),
+            software: info.device_type == wgpu::DeviceType::Cpu,
         })
     }
 

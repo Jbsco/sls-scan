@@ -128,6 +128,12 @@ impl ScanApp {
         let frame = DepthFrame::new(false)?;
         let adapter = frame.adapter.clone();
         let params = setup.params();
+        let preview = setup.preview_params().filter(|_| frame.software());
+        let kind = if preview.is_some() {
+            "previews"
+        } else {
+            "depth frames"
+        };
         let (jobs_tx, jobs_rx) = mpsc::channel::<DepthJob>();
         let (results_tx, results_rx) = mpsc::channel();
         let repaint = ctx.clone();
@@ -142,9 +148,9 @@ impl ScanApp {
                     }
                 };
                 let cameras = (&setup.cameras.left, &setup.cameras.right);
-                let depth = frame.depth(&params, cameras, &left, &right);
+                let depth = frame.measure(&params, preview.as_ref(), cameras, &left, &right);
                 let start = std::time::Instant::now();
-                if let Ok(d) = &depth {
+                if let (Ok(d), None) = (&depth, &preview) {
                     fusion.add(&d.points);
                 }
                 let live = LiveFrame {
@@ -163,7 +169,7 @@ impl ScanApp {
             results: results_rx,
             in_flight: 0,
         });
-        self.depth_status = format!("depth frames on {adapter}");
+        self.depth_status = format!("{kind} on {adapter}");
         Ok(())
     }
 

@@ -24,7 +24,10 @@ $RUN capture --node "127.0.0.1:$PORT" --set stereo --frames 3 --wait 30
 $RUN capture --node "127.0.0.1:$PORT" --set stereo --frames 150 --rate 30 --wait 30
 $RUN calibrate --node "127.0.0.1:$PORT" --set stereo --wait 30 --poses 12 --out "$SESSION/stereo" \
     --squares-x 9 --squares-y 6 --square-mm 10 --marker-mm 7.5
-$RUN depth --node "127.0.0.1:$PORT" --params "$SESSION/stereo/depth.json" --frames 2 --wait 30
+$RUN depth --node "127.0.0.1:$PORT" --params "$SESSION/stereo/depth.json" --frames 2 --wait 30 \
+    --mode depth
+$RUN depth --node "127.0.0.1:$PORT" --params "$SESSION/stereo/depth.json" --frames 4 --wait 30 \
+    --mode preview
 $RUN capture --node "127.0.0.1:$PORT" --set stereo --frames 2 --wait 30 --out "$SESSION/recorded"
 python3 -m slscan.cli depth-params --calibration "$SESSION/stereo/stereo.yaml" --step 16 \
     --out "$SESSION/replay.json" >/dev/null

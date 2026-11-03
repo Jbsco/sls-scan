@@ -357,6 +357,27 @@ impl DepthFrame {
         })
     }
 
+    /// The adapter runs on the CPU, where a full depth frame takes seconds.
+    pub fn software(&self) -> bool {
+        self.gpu.software
+    }
+
+    /// Measure one raw stereo pair: a preview at `preview` settings when given, else a full
+    /// depth frame.
+    pub fn measure(
+        &self,
+        params: &DepthParams,
+        preview: Option<&CoarseParams>,
+        cameras: (&RectifyParams, &RectifyParams),
+        left_raw: &[u8],
+        right_raw: &[u8],
+    ) -> Result<DepthResult, String> {
+        match preview {
+            Some(coarse) => self.preview(params, coarse, cameras, left_raw, right_raw),
+            None => self.depth(params, cameras, left_raw, right_raw),
+        }
+    }
+
     /// Measure one raw stereo pair.
     pub fn depth(
         &self,

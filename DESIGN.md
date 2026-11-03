@@ -848,3 +848,16 @@ pair. On llvmpipe one preview's 99th percentile reached 1.27 µm, past the depth
 A preview took 2.6 to 3.3 ms on a Radeon RX 7900 GRE. On llvmpipe on the hosted
 runner, two previews of about 18,600 points took 137 and 142 ms in a debug build, about 7
 per second, where full depth frames of about 4,000 points took 3.2 to 3.3 s.
+
+## D50. Previews on software adapters (2026-11-02)
+
+wgpu reports lavapipe as a CPU device. On such an adapter the application and `sls-scan
+depth` run the preview of D49 in place of full depth frames, so the CPU fallback keeps its
+rate. `sls-scan depth --mode depth` or `--mode preview` overrides the choice, and the
+application gate runs both modes against the stand-in.
+
+Previews are not fused. On three stand-in sweep frames, ICP aligned the second and third
+previews with residuals of 137 and 148 µm, where full depth frames of the same sweep
+aligned at 17 to 21 µm. Silhouette blocks up to 40 mm off would also enter the model. The
+scene draws each preview's points, and the fused model waits for full depth frames on a
+GPU.
