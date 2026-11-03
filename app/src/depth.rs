@@ -1,6 +1,7 @@
 //! One depth frame from a raw stereo pair: rectification, block disparity and direct
 //! refinement on the GPU, sample selection and triangulation on the CPU, following
-//! `coarse_samples`, `direct_refine` and `triangulate` in `slscan/stereo.py`.
+//! `coarse_samples`, `direct_refine` and `triangulate` in `slscan/stereo.py`. A preview
+//! skips refinement and triangulates block disparity, following `preview_matches`.
 
 use crate::coarse::{BlockMatcher, CoarseParams};
 use crate::gpu::Gpu;
@@ -48,6 +49,14 @@ pub struct DepthSection {
     pub min_level: f32,
 }
 
+/// Block matching scale and search of the preview, as `slscan depth-params` writes them.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct PreviewSection {
+    pub scale: u32,
+    pub lo: i32,
+    pub count: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct Cameras {
     pub left: RectifyParams,
@@ -66,6 +75,8 @@ pub struct DepthSetup {
     pub coarse: CoarseSetup,
     pub depth: DepthSection,
     pub cameras: Cameras,
+    #[serde(default)]
+    pub preview: Option<PreviewSection>,
 }
 
 impl DepthSetup {
@@ -96,6 +107,18 @@ impl DepthSetup {
             near_m: self.depth.near,
             far_m: self.depth.far,
         }
+    }
+
+    /// Block matching parameters of the preview: the depth frame's, at the preview's scale
+    /// and search.
+    pub fn preview_params(&self) -> Option<CoarseParams> {
+        let preview = self.preview.as_ref()?;
+        Some(CoarseParams {
+            scale: preview.scale,
+            lo: preview.lo,
+            count: preview.count,
+            ..self.params().coarse
+        })
     }
 }
 
@@ -200,6 +223,46 @@ pub fn select(
         }
     }
     (samples, guesses)
+}
+
+/// Match every reduced pixel that block matching matched and whose block of the rectified
+/// left image averages `min_level` or more, at the centre of its block, as
+/// `preview_matches` in `slscan/stereo.py` does.
+pub fn preview_matches(
+    coarse: &CoarseParams,
+    min_level: f32,
+    left: &[u8],
+    disparity: &[f32],
+    valid: &[bool],
+) -> Vec<([f32; 2], [f32; 2])> {
+    let scale = coarse.scale as usize;
+    let width = coarse.width as usize;
+    let small_width = width / scale;
+    let centre = (coarse.scale as f32 - 1.0) / 2.0;
+    let threshold = f64::from(min_level) * (scale * scale) as f64;
+    let lit = |i: usize| {
+        let (x0, y0) = ((i % small_width) * scale, (i / small_width) * scale);
+        let sum: u32 = (y0..y0 + scale)
+            .map(|y| {
+                left[y * width + x0..y * width + x0 + scale]
+                    .iter()
+                    .map(|&v| u32::from(v))
+                    .sum::<u32>()
+            })
+            .sum();
+        f64::from(sum) >= threshold
+    };
+    valid
+        .iter()
+        .zip(disparity)
+        .enumerate()
+        .filter(|(i, (v, _))| **v && lit(*i))
+        .map(|(i, (_, d))| {
+            let x = ((i % small_width) * scale) as f32 + centre;
+            let y = ((i / small_width) * scale) as f32 + centre;
+            ([x, y], [x - d * coarse.scale as f32, y])
+        })
+        .collect()
 }
 
 /// Triangulate rectified matches, as OpenCV's linear method does for a consistent pair,
@@ -362,5 +425,69 @@ impl DepthFrame {
         lap("triangulate", &mut timings);
         out.timings = timings;
         Ok(out)
+    }
+
+    /// Measure one raw stereo pair from block disparity alone at the preview's `coarse`
+    /// settings, with no refinement.
+    pub fn preview(
+        &self,
+        params: &DepthParams,
+        coarse: &CoarseParams,
+        cameras: (&RectifyParams, &RectifyParams),
+        left_raw: &[u8],
+        right_raw: &[u8],
+    ) -> Result<DepthResult, String> {
+        let (w, h) = (coarse.width, coarse.height);
+        let pixels = w as usize * h as usize;
+        if left_raw.len() != pixels || right_raw.len() != pixels {
+            return Err("image sizes do not match the parameters".into());
+        }
+        let mut timings = Vec::new();
+        let mut clock = Instant::now();
+        let mut lap = |name: &'static str, timings: &mut Vec<(&'static str, f64)>| {
+            timings.push((name, clock.elapsed().as_secs_f64() * 1000.0));
+            clock = Instant::now();
+        };
+        let left_raw = self.gpu.upload("left raw", left_raw);
+        let right_raw = self.gpu.upload("right raw", right_raw);
+        let left_buffer = self.rectifier.rectify_buffer(cameras.0, w, h, &left_raw)?;
+        let right_buffer = self.rectifier.rectify_buffer(cameras.1, w, h, &right_raw)?;
+        let mut left = self.gpu.download(&left_buffer, left_buffer.size())?;
+        left.truncate(pixels);
+        lap("rectify", &mut timings);
+        let (disparity, valid) =
+            self.matcher
+                .disparity_buffers(coarse, &left_buffer, &right_buffer)?;
+        let (disparity, valid) = self.matcher.download(&disparity, &valid)?;
+        lap("coarse", &mut timings);
+        let matches = preview_matches(coarse, params.min_level, &left, &disparity, &valid);
+        let mut out = depth_result(cameras, &matches, params.near_m, params.far_m);
+        lap("triangulate", &mut timings);
+        out.timings = timings;
+        Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preview_matches_stand_at_block_centres() {
+        let coarse = CoarseParams {
+            width: 16,
+            height: 8,
+            scale: 8,
+            block: 7,
+            lo: 0,
+            count: 4,
+            min_correlation: 0.6,
+            margin: 0.05,
+            fill: 2,
+        };
+        let mut left = vec![6u8; 16 * 8];
+        left[15] = 5;
+        let matches = preview_matches(&coarse, 6.0, &left, &[1.5, 2.0], &[true, true]);
+        assert_eq!(matches, vec![([3.5, 3.5], [-8.5, 3.5])]);
     }
 }
