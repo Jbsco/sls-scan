@@ -1030,3 +1030,27 @@ truncation gives 63,014 vertices and 123,638 triangles, 6.2 MB as STL. Its verti
 the ball bar 31.1 µm short, the spheres 111.2 and 140.2 µm small, mostly the affine
 window bias of D26 with the voxel bias of D51, and the mat at 2.9 µm RMS. Decimation,
 hole filling and datum alignment come next.
+
+## D58. Decimation by quadric error (2026-11-02)
+
+Phase 7 names decimation to the face count CAD accepts. `mesh.decimate` collapses edges
+in order of least quadric error, after Garland and Heckbert. Each vertex sums the planes
+of its triangles, weighted by area. Each boundary edge adds a plane through it at right
+angles to its triangle, weighted a thousand times, so a scan's open border keeps its
+outline. A collapse that would turn a triangle over is skipped. The merged vertex sits
+where the summed quadric is least, or at the edge's midpoint when that point is undefined
+or lies more than four edge lengths away.
+
+A surface-nets sphere of 23,556 triangles decimated to 4,000 stays closed, with every
+vertex within 11 µm of the true sphere and its radius 2.3 µm long. On the 25-frame sweep
+with second-order windows, at 0.5 mm voxels and 1 mm truncation:
+
+| Triangles | Off the full mesh, 99th percentile and largest | Ball bar | Time |
+|---|---|---|---|
+| 121,708 | | -10.6 µm | |
+| 12,170 | 10 µm, 34 µm | -15.8 µm | 36 s |
+| 2,434 | 26 µm, 50 µm | -37.5 µm | 41 s |
+
+Deviation is measured from points sampled on decimated triangles, along the full mesh's
+vertex normals. NumPy with a Python heap sets a reference pace, not a working one.
+`slscan sweep-bench --mesh --faces` decimates before writing.
