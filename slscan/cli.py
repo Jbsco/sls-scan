@@ -433,7 +433,8 @@ def cmd_stereo_bench(args: argparse.Namespace) -> int:
 
 def cmd_replay_reference(args: argparse.Namespace) -> int:
     """Write the NumPy direct-matching points of every recorded stereo pair under a
-    directory, as the application's replay compares them."""
+    directory, and its preview points when the parameters have a preview, as the
+    application's replay compares them."""
     import json
 
     import cv2
@@ -460,7 +461,19 @@ def cmd_replay_reference(args: argparse.Namespace) -> int:
                                              depth["far"], return_kept=True)
         np.column_stack([matched[in_range], cloud]).astype("<f8").tofile(
             os.path.join(frame, "reference.bin"))
-        print(f"{os.path.basename(frame)}: {len(cloud)} reference points")
+        line = f"{os.path.basename(frame)}: {len(cloud)} reference points"
+        if "preview" in params:
+            coarse = params["coarse"]
+            rect, left_pts, right_pts = stereo.preview_matches(
+                cal, left, right, depth["near"], depth["far"], params["preview"]["scale"],
+                depth["min_level"], coarse["block"], coarse["min_correlation"], coarse["margin"],
+                coarse["fill"])
+            preview, in_range = stereo.triangulate(rect, left_pts, right_pts, depth["near"],
+                                                   depth["far"], return_kept=True)
+            np.column_stack([left_pts[in_range], preview]).astype("<f8").tofile(
+                os.path.join(frame, "preview.bin"))
+            line += f", {len(preview)} preview points"
+        print(line)
     return 0
 
 

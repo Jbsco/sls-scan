@@ -229,3 +229,6 @@ def test_replay_reference_writes_points_per_recorded_pair(tmp_path):
                      "--head", "stereo"]) == 0
     rows = np.fromfile(frame / "reference.bin", "<f8").reshape(-1, 5)
     assert len(rows) > 50 and np.all((rows[:, 4] > 0.4) & (rows[:, 4] < 0.6))
+    preview = np.fromfile(frame / "preview.bin", "<f8").reshape(-1, 5)
+    assert len(preview) > 50 and np.all((preview[:, 4] > 0.4) & (preview[:, 4] < 0.6))
+    assert np.all(preview[:, :2] % 8 == 3.5)
