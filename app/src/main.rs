@@ -1338,16 +1338,26 @@ fn tsdf_check(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     };
     let read = |name: &str| std::fs::read(dir.join(name));
-    let (meta, frames, poses, tsdf, weight) = match (
+    let (meta, frames, poses, tsdf, weight, surface, keys) = match (
         read("meta.json"),
         read("frames.bin"),
         read("poses.bin"),
         read("tsdf.bin"),
         read("weight.bin"),
+        read("surface.bin"),
+        read("surface-keys.bin"),
     ) {
-        (Ok(m), Ok(f), Ok(p), Ok(t), Ok(w)) => {
-            (m, doubles(&f), doubles(&p), floats(&t), floats(&w))
-        }
+        (Ok(m), Ok(f), Ok(p), Ok(t), Ok(w), Ok(s), Ok(k)) => (
+            m,
+            doubles(&f),
+            doubles(&p),
+            floats(&t),
+            floats(&w),
+            doubles(&s),
+            k.chunks_exact(4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect::<Vec<u32>>(),
+        ),
         _ => {
             eprintln!("TSDF vectors missing in {}", dir.display());
             return ExitCode::FAILURE;
@@ -1370,6 +1380,7 @@ fn tsdf_check(args: &[String]) -> ExitCode {
         || poses.len() != 12 * meta.counts.len()
         || tsdf.len() != spec.voxels()
         || weight.len() != spec.voxels()
+        || surface.len() != 3 * keys.len()
     {
         eprintln!("TSDF vectors do not match meta.json");
         return ExitCode::FAILURE;
@@ -1446,7 +1457,51 @@ fn tsdf_check(args: &[String]) -> ExitCode {
         p99 * scale,
         largest * scale
     );
-    if differing as f64 <= 0.001 * observed.max(1) as f64 && p99 * scale <= 0.1 {
+    let volume_ok = differing as f64 <= 0.001 * observed.max(1) as f64 && p99 * scale <= 0.1;
+    let expected: std::collections::HashMap<u32, [f64; 3]> = keys
+        .iter()
+        .zip(surface.chunks_exact(3))
+        .map(|(&k, p)| (k, [p[0], p[1], p[2]]))
+        .collect();
+    let capacity = u32::try_from(2 * expected.len() + 1024).unwrap_or(u32::MAX);
+    let start = Instant::now();
+    let (points, found) = match integrator.surface(capacity) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("surface failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let surface_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let mut extra = 0usize;
+    let mut gaps = Vec::new();
+    for (p, k) in points.iter().zip(&found) {
+        match expected.get(k) {
+            Some(r) => {
+                let squares: f64 = (0..3).map(|d| (f64::from(p[d]) - r[d]).powi(2)).sum();
+                gaps.push(squares.sqrt());
+            }
+            None => extra += 1,
+        }
+    }
+    let missing = expected.len() - gaps.len();
+    gaps.sort_by(f64::total_cmp);
+    let gap = |q: usize| gaps.get(q).copied().unwrap_or(0.0) * 1e6;
+    let surface_p99 = gap(gaps.len() * 99 / 100);
+    let beyond = gaps.iter().filter(|&&g| g > 5e-6).count();
+    println!(
+        "{} surface points in {:.1} ms against {}: {missing} missing, {extra} extra, distance median {:.4} µm, 99th percentile {surface_p99:.4} µm, largest {:.4} µm, {beyond} beyond 5 µm",
+        points.len(),
+        surface_ms,
+        expected.len(),
+        gap(gaps.len() / 2),
+        gaps.last().copied().unwrap_or(0.0) * 1e6
+    );
+    let reference = expected.len().max(1) as f64;
+    let surface_ok = (missing + extra) as f64 <= 0.005 * reference
+        && surface_p99 <= 1.0
+        && beyond as f64 <= 0.005 * reference;
+    if volume_ok && surface_ok {
         println!("TSDF check: GPU matches the NumPy reference");
         ExitCode::SUCCESS
     } else {
