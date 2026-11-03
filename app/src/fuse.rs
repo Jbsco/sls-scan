@@ -403,7 +403,6 @@ pub struct Fusion {
     model: Vec<Vec3>,
     normals: Vec<Vec3>,
     pose: Pose,
-    velocity: Pose,
     pub poses: Vec<Pose>,
     pub last_rms: Option<f64>,
 }
@@ -416,7 +415,6 @@ impl Fusion {
             model: Vec::new(),
             normals: Vec::new(),
             pose: Pose::IDENTITY,
-            velocity: Pose::IDENTITY,
             poses: Vec::new(),
             last_rms: None,
         }
@@ -428,27 +426,14 @@ impl Fusion {
     }
 
     /// Align a frame's points (in its own camera frame) to the model, starting from the
-    /// last pose advanced by the last motion, and add them. Returns the frame's pose.
+    /// last pose, and add them. Returns the frame's pose.
     pub fn add(&mut self, points: &[Vec3]) -> Pose {
         if points.is_empty() {
             self.poses.push(self.pose);
             return self.pose;
         }
         if !self.model.is_empty() {
-            let (r, t) = (self.pose.rotation, self.pose.translation);
-            let guess = Pose {
-                rotation: mul(&self.velocity.rotation, &r),
-                translation: add(
-                    &mul_vec(&self.velocity.rotation, &t),
-                    &self.velocity.translation,
-                ),
-            };
-            let (new, rms) = icp(points, &self.model, &self.normals, guess);
-            let step = mul(&new.rotation, &transpose(&r));
-            self.velocity = Pose {
-                rotation: step,
-                translation: sub(&new.translation, &mul_vec(&step, &t)),
-            };
+            let (new, rms) = icp(points, &self.model, &self.normals, self.pose);
             self.pose = new;
             self.last_rms = Some(rms);
         }

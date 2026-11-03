@@ -71,22 +71,18 @@ def icp(source: np.ndarray, target: np.ndarray, target_normals: np.ndarray, rota
 def fuse(frames, voxel: float = 0.0005) -> tuple[list, np.ndarray]:
     """Track and fuse a sequence of point sets (each in its own camera frame).
 
-    The world is the first frame's camera frame. Returns each frame's pose (rotation,
-    translation into the world) and the fused model as voxel averages.
+    The world is the first frame's camera frame, and each frame's ICP starts from the
+    previous frame's pose. Returns each frame's pose (rotation, translation into the world)
+    and the fused model as voxel averages.
     """
     poses, model, raw = [], None, []
     r, t = np.eye(3), np.zeros(3)
-    velocity = (np.eye(3), np.zeros(3))
     for points in frames:
         if len(points) == 0:
             poses.append((r, t))
             continue
         if model is not None:
-            guess_r = velocity[0] @ r
-            guess_t = velocity[0] @ t + velocity[1]
-            new_r, new_t, _ = icp(points, model, model_normals, guess_r, guess_t)
-            velocity = (new_r @ r.T, new_t - new_r @ r.T @ t)
-            r, t = new_r, new_t
+            r, t, _ = icp(points, model, model_normals, r, t)
         poses.append((r, t))
         raw.append(points @ r.T + t)
         model = voxel_average(np.vstack(raw), voxel)
