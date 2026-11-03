@@ -135,15 +135,17 @@ fn headless_depth(args: &[String]) -> ExitCode {
     let mut frames = 1u32;
     let mut params = PathBuf::from("data/depth.json");
     let mut out: Option<PathBuf> = None;
+    let mut mode = "auto".to_owned();
     for pair in args.chunks(2) {
         let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
-            eprintln!("arguments come in pairs: --node, --params, --frames, --wait, --out");
+            eprintln!("arguments come in pairs: --node, --params, --frames, --wait, --out, --mode");
             return ExitCode::FAILURE;
         };
         match key.as_str() {
             "--node" => node.clone_from(value),
             "--params" => params = PathBuf::from(value),
             "--out" => out = Some(PathBuf::from(value)),
+            "--mode" => mode.clone_from(value),
             "--frames" => match value.parse() {
                 Ok(v) => frames = v,
                 Err(_) => {
@@ -182,7 +184,27 @@ fn headless_depth(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    println!("adapter {}", frame.adapter);
+    let preview = match mode.as_str() {
+        "depth" => None,
+        "auto" => setup.preview_params().filter(|_| frame.software()),
+        "preview" => match setup.preview_params() {
+            Some(p) => Some(p),
+            None => {
+                eprintln!("{} has no preview section", params.display());
+                return ExitCode::FAILURE;
+            }
+        },
+        _ => {
+            eprintln!("--mode takes auto, depth or preview");
+            return ExitCode::FAILURE;
+        }
+    };
+    let kind = if preview.is_some() {
+        "previews"
+    } else {
+        "depth frames"
+    };
+    println!("{kind} on adapter {}", frame.adapter);
     let depth_params = setup.params();
     let request = SequenceRequest {
         set: "stereo".to_owned(),
@@ -201,7 +223,8 @@ fn headless_depth(args: &[String]) -> ExitCode {
             } else if let Some(l) = left.take() {
                 let pair = name.trim_end_matches("/right").to_owned();
                 let cameras = (&setup.cameras.left, &setup.cameras.right);
-                results.push((pair, frame.depth(&depth_params, cameras, &l, &pixels)));
+                let result = frame.measure(&depth_params, preview.as_ref(), cameras, &l, &pixels);
+                results.push((pair, result));
             }
         }
         _ => {}
@@ -212,6 +235,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
     }
     let mut ok = !results.is_empty();
     let mut fusion = fuse::Fusion::new(FUSION_VOXEL_M);
+    let mut last: &[[f64; 3]] = &[];
     for (pair, result) in &results {
         match result {
             Ok(d) => {
@@ -221,18 +245,26 @@ fn headless_depth(args: &[String]) -> ExitCode {
                     .iter()
                     .map(|(name, ms)| format!("{name} {ms:.1}"))
                     .collect();
-                let start = Instant::now();
-                fusion.add(&d.points);
-                let fused = start.elapsed().as_secs_f64() * 1000.0;
-                let rms = fusion
-                    .last_rms
-                    .map_or_else(String::new, |r| format!(", ICP residual {:.1} µm", r * 1e6));
+                let fused = if preview.is_some() {
+                    String::new()
+                } else {
+                    let start = Instant::now();
+                    fusion.add(&d.points);
+                    let ms = start.elapsed().as_secs_f64() * 1000.0;
+                    let rms = fusion
+                        .last_rms
+                        .map_or_else(String::new, |r| format!(", ICP residual {:.1} µm", r * 1e6));
+                    format!(
+                        ", fused in {ms:.1} ms into {} points{rms}",
+                        fusion.model().len()
+                    )
+                };
                 println!(
-                    "{pair}: {} points in {total:.1} ms ({} ms), fused in {fused:.1} ms into {} points{rms}",
+                    "{pair}: {} points in {total:.1} ms ({} ms){fused}",
                     d.points.len(),
-                    stages.join(", "),
-                    fusion.model().len()
+                    stages.join(", ")
                 );
+                last = &d.points;
                 ok &= !d.points.is_empty();
             }
             Err(e) => {
@@ -242,10 +274,15 @@ fn headless_depth(args: &[String]) -> ExitCode {
         }
     }
     if let Some(path) = &out {
-        match depth::write_ply(path, fusion.model()) {
+        let (points, what) = if preview.is_some() {
+            (last, "preview")
+        } else {
+            (fusion.model(), "fused")
+        };
+        match depth::write_ply(path, points) {
             Ok(()) => println!(
-                "{} fused points written to {}",
-                fusion.model().len(),
+                "{} {what} points written to {}",
+                points.len(),
                 path.display()
             ),
             Err(e) => {
