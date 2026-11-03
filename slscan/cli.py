@@ -411,14 +411,17 @@ def cmd_tsdf_vectors(args: argparse.Namespace) -> int:
                                            window)
         frames.append(points)
     tracked, _ = track.fuse(frames)
-    volume, surface = tsdf.fuse(frames, tracked, rect, args.step, window,
-                                args.voxel_mm / 1000.0, args.truncation_mm / 1000.0)
+    volume, _ = tsdf.fuse(frames, tracked, rect, args.step, window, args.voxel_mm / 1000.0,
+                          args.truncation_mm / 1000.0)
     os.makedirs(args.out, exist_ok=True)
     np.concatenate(frames).astype("<f8").tofile(os.path.join(args.out, "frames.bin"))
     np.array([np.concatenate([r.ravel(), t]) for r, t in tracked]).astype("<f8").tofile(
         os.path.join(args.out, "poses.bin"))
     volume.tsdf.astype("<f4").tofile(os.path.join(args.out, "tsdf.bin"))
     volume.weight.astype("<f4").tofile(os.path.join(args.out, "weight.bin"))
+    surface, keys = tsdf.surface(volume, return_keys=True)
+    surface.astype("<f8").tofile(os.path.join(args.out, "surface.bin"))
+    keys.astype("<u4").tofile(os.path.join(args.out, "surface-keys.bin"))
     meta = {"counts": [int(len(f)) for f in frames], "step": args.step, "window": window,
             "width": rect.size[0], "height": rect.size[1],
             "rotation": rect.left_rotation.ravel().tolist(),
