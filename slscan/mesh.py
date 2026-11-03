@@ -1,8 +1,8 @@
-"""Triangle meshes from a TSDF volume by surface nets, and their export as PLY, OBJ and
-STL. Each cell between eight observed voxels whose distances change sign gets one vertex,
-the mean of its edges' zero crossings, and each crossing edge joins the four cells around
-it in a quad facing the side where the distance is positive, split along the diagonal
-that leaves the larger smallest triangle."""
+"""Triangle meshes from a TSDF volume by surface nets, their decimation by quadric error,
+and their export as PLY, OBJ and STL. Each cell between eight observed voxels whose
+distances change sign gets one vertex, the mean of its edges' zero crossings, and each
+crossing edge joins the four cells around it in a quad facing the side where the distance
+is positive, split along the diagonal that leaves the larger smallest triangle."""
 
 import numpy as np
 
@@ -76,6 +76,112 @@ def surface_nets(volume: Volume) -> tuple[np.ndarray, np.ndarray]:
     faces = np.vstack([np.where(first[:, None], quad[:, [0, 1, 2]], quad[:, [0, 1, 3]]),
                        np.where(first[:, None], quad[:, [0, 2, 3]], quad[:, [1, 2, 3]])])
     return vertices, faces
+
+
+def decimate(vertices: np.ndarray, faces: np.ndarray, target: int,
+             boundary_weight: float = 1000.0) -> tuple[np.ndarray, np.ndarray]:
+    """Collapse edges by least quadric error (Garland and Heckbert) until at most target
+    triangles remain. Each vertex sums the planes of its triangles; boundary edges add a
+    plane through them perpendicular to their triangle, weighted by boundary_weight, so
+    open borders keep their shape. A collapse that would flip a triangle is skipped.
+    Returns the remaining vertices and triangles."""
+    import heapq
+
+    v = vertices.astype(np.float64).copy()
+    f = faces.astype(np.int64).copy()
+    a, b, c = v[f[:, 0]], v[f[:, 1]], v[f[:, 2]]
+    n = np.cross(b - a, c - a)
+    area = np.linalg.norm(n, axis=1)
+    n = n / np.where(area > 0, area, 1.0)[:, None]
+    planes = np.column_stack([n, -np.einsum("ij,ij->i", n, a)])
+    q = np.zeros((len(v), 4, 4))
+    kp = np.einsum("fi,fj->fij", planes, planes) * (area / 2)[:, None, None]
+    for k in range(3):
+        np.add.at(q, f[:, k], kp)
+    edge_faces = {}
+    for i, tri in enumerate(f):
+        for k in range(3):
+            e = (min(tri[k], tri[(k + 1) % 3]), max(tri[k], tri[(k + 1) % 3]))
+            edge_faces.setdefault(e, []).append(i)
+    for (p0, p1), owners in edge_faces.items():
+        if len(owners) == 1:
+            d = v[p1] - v[p0]
+            side = np.cross(d, n[owners[0]])
+            norm = np.linalg.norm(side)
+            if norm > 0:
+                side /= norm
+                plane = np.append(side, -side @ v[p0])
+                kb = np.outer(plane, plane) * boundary_weight * np.linalg.norm(d) ** 2
+                q[p0] += kb
+                q[p1] += kb
+    vertex_faces = [set() for _ in range(len(v))]
+    for i, tri in enumerate(f):
+        for k in tri:
+            vertex_faces[k].add(i)
+    alive = np.ones(len(f), dtype=bool)
+    version = np.zeros(len(v), dtype=np.int64)
+    removed = np.zeros(len(v), dtype=bool)
+
+    def place(p0, p1):
+        m = q[p0] + q[p1]
+        a3 = m[:3, :3]
+        try:
+            x = np.linalg.solve(a3, -m[:3, 3])
+            if np.linalg.norm(x - (v[p0] + v[p1]) / 2) > 4 * np.linalg.norm(v[p0] - v[p1]):
+                raise np.linalg.LinAlgError
+        except np.linalg.LinAlgError:
+            x = (v[p0] + v[p1]) / 2
+        h = np.append(x, 1.0)
+        return float(h @ m @ h), x
+
+    heap = []
+    for p0, p1 in edge_faces:
+        heap.append((place(p0, p1)[0], p0, p1, 0, 0))
+    heapq.heapify(heap)
+    count = len(f)
+    while count > target and heap:
+        cost, p0, p1, s0, s1 = heapq.heappop(heap)
+        if removed[p0] or removed[p1] or version[p0] != s0 or version[p1] != s1:
+            continue
+        _, x = place(p0, p1)
+        shared = vertex_faces[p0] & vertex_faces[p1]
+        changed = (vertex_faces[p0] | vertex_faces[p1]) - shared
+        flips = False
+        for i in changed:
+            tri = f[i]
+            old = v[tri]
+            new = old.copy()
+            new[(tri == p0) | (tri == p1)] = x
+            n_old = np.cross(old[1] - old[0], old[2] - old[0])
+            n_new = np.cross(new[1] - new[0], new[2] - new[0])
+            if n_old @ n_new <= 0:
+                flips = True
+                break
+        if flips:
+            continue
+        v[p0] = x
+        q[p0] += q[p1]
+        removed[p1] = True
+        for i in shared:
+            alive[i] = False
+            count -= 1
+            for k in f[i]:
+                vertex_faces[k].discard(i)
+        for i in vertex_faces[p1]:
+            f[i][f[i] == p1] = p0
+            vertex_faces[p0].add(i)
+        vertex_faces[p1] = set()
+        version[p0] += 1
+        neighbours = {k for i in vertex_faces[p0] for k in f[i]} - {p0}
+        for k in neighbours:
+            cost, _ = place(p0, k)
+            lo, hi = (p0, k) if p0 < k else (k, p0)
+            heapq.heappush(heap, (cost, lo, hi, version[lo], version[hi]))
+    kept = f[alive]
+    used = np.unique(kept)
+    index = np.full(len(v), -1, dtype=np.int64)
+    index[used] = np.arange(len(used))
+    return v[used], index[kept]
 
 
 def face_normals(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:

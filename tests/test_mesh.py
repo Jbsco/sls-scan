@@ -41,3 +41,14 @@ def test_mesh_files_round_trip(tmp_path):
     stl = (tmp_path / "m.stl").read_bytes()
     assert int(np.frombuffer(stl[80:84], "<u4")[0]) == len(faces)
     assert len(stl) == 84 + 50 * len(faces)
+
+
+def test_decimated_sphere_stays_closed_and_round():
+    centre, radius = np.array([0.01, -0.02, 0.5]), 0.0125
+    vertices, faces = mesh.surface_nets(sphere_volume(centre, radius))
+    fewer, kept = mesh.decimate(vertices, faces, 4000)
+    assert len(kept) <= 4000 and len(fewer) < len(vertices) / 4
+    edges = np.sort(np.concatenate([kept[:, [0, 1]], kept[:, [1, 2]], kept[:, [2, 0]]]), axis=1)
+    _, uses = np.unique(edges, axis=0, return_counts=True)
+    assert np.all(uses == 2)
+    assert np.max(np.abs(np.linalg.norm(fewer - centre, axis=1) - radius)) < 0.00002
