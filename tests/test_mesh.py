@@ -52,3 +52,22 @@ def test_decimated_sphere_stays_closed_and_round():
     _, uses = np.unique(edges, axis=0, return_counts=True)
     assert np.all(uses == 2)
     assert np.max(np.abs(np.linalg.norm(fewer - centre, axis=1) - radius)) < 0.00002
+
+
+def test_fill_holes_closes_small_holes_only():
+    centre, radius = np.array([0.01, -0.02, 0.5]), 0.0125
+    vertices, faces = mesh.surface_nets(sphere_volume(centre, radius))
+    tops = vertices[faces].mean(axis=1)
+    small = np.linalg.norm(tops - (centre + [0, 0, radius]), axis=1) < 0.0015
+    large = np.linalg.norm(tops - (centre - [0, 0, radius]), axis=1) < 0.006
+    open_faces = faces[~small & ~large]
+    filled_vertices, filled, closed = mesh.fill_holes(vertices, open_faces, 0.02)
+    assert closed == 1 and len(filled) > len(open_faces)
+    edges = np.sort(np.concatenate([filled[:, [0, 1]], filled[:, [1, 2]], filled[:, [2, 0]]]),
+                    axis=1)
+    _, uses = np.unique(edges, axis=0, return_counts=True)
+    assert np.sum(uses == 1) > 0 and np.all(uses <= 2)
+    new = filled[len(open_faces):]
+    centroids = filled_vertices[new].mean(axis=1)
+    outward = np.einsum("ij,ij->i", mesh.face_normals(filled_vertices, new), centroids - centre)
+    assert np.all(outward > 0)
