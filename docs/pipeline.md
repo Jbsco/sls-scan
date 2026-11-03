@@ -236,4 +236,6 @@ On a software adapter such as lavapipe, the worker and `sls-scan depth` run prev
 place of depth frames and leave them out of the fused model (D50). Each depth frame drops
 isolated points (D59) and folds into a coarse TSDF at its tracked pose, and the scene
 panel draws that volume's surface (D54). `sls-scan depth --surface` writes it as PLY,
-and `--volume` saves the volume for `slscan mesh-volume` to mesh (D62).
+and `--volume` saves the volume for `slscan mesh-volume` to mesh (D62). The scene panel's
+Export mesh button saves and meshes it in one step, as `sls-scan depth --mesh` does
+(D65).
