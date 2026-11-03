@@ -97,14 +97,24 @@ def cmd_mesh_volume(args: argparse.Namespace) -> int:
     volume.weight[:] = np.fromfile(os.path.join(args.volume, "weight.bin"),
                                    "<f4").reshape(shape)
     vertices, faces = mesh.surface_nets(volume)
+    closed = 0
     if args.fill_mm:
         vertices, faces, closed = mesh.fill_holes(vertices, faces, args.fill_mm / 1000.0)
         print(f"{closed} holes up to {args.fill_mm:g} mm around filled")
     if args.faces:
         vertices, faces = mesh.decimate(vertices, faces, args.faces)
+    if not len(faces):
+        if args.json:
+            print(json.dumps({"error": f"{args.volume}: the volume has no surface"}))
+        else:
+            print(f"{args.volume}: the volume has no surface")
+        return 1
     mesh.write_mesh(args.out, vertices, faces)
     print(f"{len(vertices)} vertices and {len(faces)} triangles written to {args.out}")
-    return 0 if len(faces) else 1
+    if args.json:
+        print(json.dumps({"out": args.out, "vertices": int(len(vertices)),
+                          "triangles": int(len(faces)), "holes": int(closed)}))
+    return 0
 
 
 def cmd_report(args: argparse.Namespace) -> int:
@@ -935,6 +945,7 @@ def main(argv=None) -> int:
     p.add_argument("--out", required=True, help="mesh file, .ply, .obj or .stl")
     p.add_argument("--fill-mm", type=float, default=0.0, help="close holes up to this perimeter")
     p.add_argument("--faces", type=int, default=0, help="decimate to at most this many triangles")
+    p.add_argument("--json", action="store_true", help="end with one JSON line for the application")
     p.set_defaults(func=cmd_mesh_volume)
 
     p = sub.add_parser("report", help="align datum spheres in a cloud or mesh to their "
