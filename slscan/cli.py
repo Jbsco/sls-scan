@@ -542,13 +542,23 @@ def cmd_sweep_bench(args: argparse.Namespace) -> int:
     scene = synthetic.sweep_scene()
     poses = synthetic.sweep_poses(args.frames, args.yaw, args.pitch)
     window = 25 if args.order == 2 else 21
-    frames = [stereo.depth_points(cal, im["left"], im["right"], 0.4, 0.6, args.step, window,
-                                  order=args.order)[0]
-              for im in synthetic.sweep_captures(rig, scene, poses, pattern, args.seed)]
-    result = track.sweep_bench(rig, cal, scene, poses, frames)
+    frames, rect = [], None
+    for im in synthetic.sweep_captures(rig, scene, poses, pattern, args.seed):
+        points, rect = stereo.depth_points(cal, im["left"], im["right"], 0.4, 0.6, args.step,
+                                           window, order=args.order)
+        frames.append(points)
+    voxel = args.voxel_mm / 1000.0
+    surface = None
+    if args.tsdf:
+        from . import tsdf
+
+        def surface(tracked):
+            return tsdf.fuse(frames, tracked, rect, args.step, window, voxel,
+                             args.truncation_mm / 1000.0)[1]
+    result = track.sweep_bench(rig, cal, scene, poses, frames, voxel, surface)
     print(f"{result['frames']} frames, sweep ±{args.yaw:g}° yaw and ±{args.pitch:g}° pitch, "
           f"{'recovered' if args.recovered else 'true'} calibration, order {args.order} windows, "
-          f"{result['points']} fused points")
+          f"{result['points']} {'TSDF surface' if args.tsdf else 'fused'} points")
     print(f"pose error: translation up to {1e6 * result['max_translation_error_m']:.1f} µm, "
           f"rotation up to {result['max_rotation_error_deg']:.4f}°")
     print(f"ball bar spacing error {1e6 * result['ball_bar_error_m']:+.1f} µm, sphere radius errors "
@@ -785,6 +795,10 @@ def main(argv=None) -> int:
     p.add_argument("--order", type=int, choices=(1, 2), default=1,
                    help="1 for affine windows, 2 for second-order windows that follow curvature")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--voxel-mm", type=float, default=0.5, help="fusion voxel size")
+    p.add_argument("--tsdf", action="store_true",
+                   help="measure a TSDF surface in place of the fused points")
+    p.add_argument("--truncation-mm", type=float, default=1.0, help="TSDF truncation distance")
     p.set_defaults(func=cmd_sweep_bench)
 
     p = sub.add_parser("measure", help="fit an acceptance artifact to a point cloud")

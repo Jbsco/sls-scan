@@ -861,3 +861,38 @@ previews with residuals of 137 and 148 µm, where full depth frames of the same 
 aligned at 17 to 21 µm. Silhouette blocks up to 40 mm off would also enter the model. The
 scene draws each preview's points, and the fused model waits for full depth frames on a
 GPU.
+
+## D51. TSDF fusion reference (2026-11-02)
+
+Phase 5 asks for TSDF fusion of the depth stream, and Phase 4 for a coarse TSDF kernel.
+`slscan/tsdf.py` is the NumPy reference for both. Each tracked depth frame becomes a depth
+image at its sample grid. Every voxel projects into that image, reads depth by bilinear
+interpolation and averages its distance to the surface along the camera axis. Distances
+are truncated in front of the surface and dropped more than one truncation behind it.
+Interpolation skips grid cells whose four depths differ by more than one truncation, so
+silhouettes do not bridge to the background.
+
+The surface is the set of zero crossings
+between observed neighbours, and `slscan sweep-bench --tsdf` measures it in place of the
+fused points.
+
+On the 25-frame sweep of D26 with second-order windows and a sample every 8 px, over
+three noise seeds:
+
+| Fusion | Ball bar spacing | Sphere radii | Mat flatness |
+|---|---|---|---|
+| Points, 0.5 mm voxels | +2.4 to +11.4 µm | -7.4 to +21.3 µm | 15.5 to 17.0 µm RMS |
+| TSDF, 0.5 mm voxels, 1 mm truncation | -10.5 to -5.2 µm | -18.3 to -9.9 µm | 4.1 to 4.8 µm RMS |
+| TSDF, 1 mm voxels, 2 mm truncation | -23.8 to -12.6 µm | -33.1 to -19.6 µm | 4.1 to 5.0 µm RMS |
+
+Tracked poses drifted by 36 to 170 µm and 0.025 to 0.034° against the truth. It seems
+likely that the TSDF mat is flatter because each voxel averages distances from many
+frames. TSDF spheres read small by an amount that grows with the voxel, perhaps from
+linear zero crossings of a curved distance field. NumPy integrates the 25 frames into 18 million
+voxels of 0.5 mm in 8 to 18 s.
+
+Samples every 16 px, 1.8 mm apart at 0.5 m, are too sparse. On a five-frame sweep the
+TSDF then read sphere radii up to 224 µm small and the ball bar 120 to 138 µm off. Grid
+cells on a sphere's sides then span more than one truncation, which likely leaves those
+sides unobserved. A coarse TSDF needs
+samples every 8 px or closer.

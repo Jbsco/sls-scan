@@ -38,12 +38,13 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   frames. Its kernels (D29, D31, D35) and CPU triangulation (D48) give a 61 ms plate
   frame on a desktop GPU (D38), live in the application (D40). Recorded stand-in pairs
   match NumPy (D47). An unrefined preview reaches 7 per second on llvmpipe (D49).
-- Phase 5, in progress. Continuous scanning. Pose tracking from geometry and from markers on the
-  mat around the part, TSDF fusion of the depth stream, loop closure on revisited areas.
-  Acceptance: a sweep around a part fuses to a model whose ball bar is within 0.05 mm and
-  shows no doubling at revisited surfaces. ICP tracking and point fusion pass a
-  synthetic sweep (D26), and the application
-  fuses its live depth frames with a Rust port of both (D42).
+- Phase 5, in progress. Continuous scanning. Pose tracking from geometry and from markers
+  on the mat around the part, TSDF fusion of the depth stream, loop closure on revisited
+  areas. Acceptance: a sweep around a part fuses to a model whose ball bar is within 0.05
+  mm and shows no doubling at revisited surfaces. ICP tracking and point fusion pass a
+  synthetic sweep (D26), and the application fuses its live depth frames with a Rust port
+  of both (D42). A NumPy TSDF reference keeps the ball bar within 0.03 mm on the same
+  sweep (D51).
 - Phase 6, open. Many static views. Marker detection, view poses from the markers, ICP
   refinement, keyed markers defining the object's frame, a merged cloud. Acceptance: two
   scale bars in different orientations measure within 0.5 mm after a 10-view scan of an
