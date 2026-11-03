@@ -160,8 +160,10 @@ frame instead. Scale bars are measured in the merged cloud and reported.
 
 `register.register_views` places views taken in order around an object. Each view
 registers to the one before, then rounds of ICP refine every view against all others
-(D70). `slscan view-bench` runs this on synthetic views of a part a metre across and
-reports pose and scale bar errors against the truth.
+(D70). `slscan register` runs it on view clouds saved as PLY files. It writes the merged
+cloud, averaged over 0.5 mm voxels, and a JSON file of each view's pose and overlap.
+`slscan view-bench` runs this on synthetic views of a part a metre across and reports
+pose and scale bar errors against the truth.
 
 ## Virtual bench
 
