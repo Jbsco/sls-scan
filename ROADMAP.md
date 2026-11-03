@@ -32,13 +32,13 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   captured in step at 30 fps with no drops over a minute, and a calibration run end to
   end from the panel. A minute of paced pairs from the stand-in passes (D46).
 - Phase 4, in progress. GPU matching and preview. WGSL kernels for rectification, coarse
-  disparity, refinement, triangulation and a coarse TSDF, with the CPU fallback through
-  lavapipe. Acceptance: 15 depth frames per second at 1.6 MP on either machine's GPU, 3
-  or more on the CPU fallback, and kernel outputs within tolerance of the Phase 2
-  reference on recorded frames. Kernels for decode (D22), rectification (D31), block
-  disparity (D35) and refinement (D29, D30, D33) give a 61 ms plate depth frame on a
-  desktop GPU (D36, D38), live in the application (D40). Recorded stand-in pairs match
-  the NumPy reference (D47).
+  disparity, refinement and a coarse TSDF, with the CPU fallback through lavapipe.
+  Acceptance: 15 depth frames per second at 1.6 MP on either machine's GPU, 3 or more on
+  the CPU fallback, and kernel outputs within tolerance of the Phase 2 reference on
+  recorded frames. Rectification (D31), block disparity (D35) and refinement (D29)
+  kernels with triangulation on the CPU (D48) give a 61 ms plate depth frame on a desktop
+  GPU (D36, D38). It runs live (D40) and matches NumPy's reference on recorded stand-in
+  pairs (D47).
 - Phase 5, in progress. Continuous scanning. Pose tracking from geometry and from markers on the
   mat around the part, TSDF fusion of the depth stream, loop closure on revisited areas.
   Acceptance: a sweep around a part fuses to a model whose ball bar is within 0.05 mm and
