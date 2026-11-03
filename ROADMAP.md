@@ -40,11 +40,11 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   frame on a desktop GPU (D38), live (D40). Recorded pairs (D47) and TSDF kernels (D52,
   D53) match NumPy. Unrefined previews reach 7 per second on llvmpipe (D49).
 - Phase 5, in progress. Continuous scanning. Pose tracking from geometry, with optional
-  markers on a mat around the part (D63), TSDF fusion of the depth stream, loop closure
-  on revisited areas. Acceptance: a sweep around a part fuses to a model whose ball bar
-  is within 0.05 mm and shows no doubling at revisited surfaces. ICP tracking with point
-  fusion (D26) and a TSDF (D51) keep a synthetic sweep's ball bar within 0.03 mm. The
-  application ports both (D42, D52) and draws a live coarse TSDF (D54). A closed loop
+  markers on a mat (D63) and removable dots on long smooth panels (D64), TSDF fusion of
+  the depth stream, loop closure on revisited areas. Acceptance: a sweep around a part
+  fuses to a model whose ball bar is within 0.05 mm and shows no doubling at revisited
+  surfaces. ICP tracking with point fusion (D26) and a TSDF (D51) keep a synthetic
+  sweep's ball bar within 0.03 mm, live in the application (D42, D54). A closed loop
   returns within 15 µm with no doubling (D55).
 - Phase 6, open. Many static views. View poses from geometry by a coarse match and ICP
   refinement, optional markers, datums defining the object's frame, a merged cloud (D63).
