@@ -289,9 +289,17 @@ impl Integrator {
                 usage: wgpu::BufferUsages::UNIFORM,
             });
         let count = init("count", &[0u8; 4]);
-        let slots = capacity.max(1) as usize;
-        let points = init("points", &vec![0u8; slots * 12]);
-        let keys = init("keys", &vec![0u8; slots * 4]);
+        let list = |label: &str, bytes: u64| {
+            self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            })
+        };
+        let slots = u64::from(capacity.max(1));
+        let points = list("points", slots * 12);
+        let keys = list("keys", slots * 4);
         let entries: Vec<wgpu::BindGroupEntry> = [
             (0, &params),
             (2, &self.tsdf),
