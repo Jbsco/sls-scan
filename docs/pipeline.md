@@ -163,8 +163,8 @@ a report of scale bar lengths and datum residuals.
 ## Preview path
 
 Every synchronized frame pair is a depth frame: rectification, coarse disparity, affine
-and second-order refinement, triangulation, and TSDF integration at a coarse voxel size,
-all in WGSL kernels on the host. Poses come from the frame's geometry against the model, helped by
+and second-order refinement, and TSDF integration at a coarse voxel size in WGSL kernels
+on the host, with triangulation on its CPU in double precision (`DESIGN.md` D48). Poses come from the frame's geometry against the model, helped by
 markers on the mat around the part. The scene draws the volume and the live cloud as
 the scanner moves, which shows coverage and gaps. In continuous mode the fused model is
 the result, and dense matching of selected frames refines it afterwards.
