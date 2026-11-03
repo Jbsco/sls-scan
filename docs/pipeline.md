@@ -190,6 +190,9 @@ given that directory, compare the kernels with them.
 `app/src/depth.rs` chains the kernels into a depth frame from a raw pair, and `sls-scan
 depth-check` compares its points with the NumPy reference (D36). The kernels share one
 device, and the rectified pair stays on it through block matching and refinement (D37).
+`app/src/tsdf.wgsl` folds depth frames into the TSDF volume of `tsdf.py` with one
+invocation per voxel, and `sls-scan tsdf-check` compares it with the NumPy volume that
+`slscan tsdf-vectors` writes (D52).
 
 Recorded pairs replay through the same path (D47):
 

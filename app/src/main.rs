@@ -7,6 +7,7 @@ use slscan_app::gpu;
 use slscan_app::protocol::SequenceRequest;
 use slscan_app::rectify;
 use slscan_app::refine;
+use slscan_app::tsdf;
 use slscan_app::ui::ScanApp;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -1317,6 +1318,144 @@ fn depth_check(args: &[String]) -> ExitCode {
 }
 
 #[derive(serde::Deserialize)]
+struct TsdfMeta {
+    counts: Vec<usize>,
+    step: u32,
+    window: u32,
+    width: u32,
+    height: u32,
+    rotation: [f64; 9],
+    projection: [f64; 12],
+    lower: [f64; 3],
+    shape: [u32; 3],
+    voxel: f64,
+    truncation: f64,
+}
+
+fn tsdf_check(args: &[String]) -> ExitCode {
+    let Some(dir) = args.first().map(PathBuf::from) else {
+        eprintln!("usage: sls-scan tsdf-check <vector directory>");
+        return ExitCode::FAILURE;
+    };
+    let read = |name: &str| std::fs::read(dir.join(name));
+    let (meta, frames, poses, tsdf, weight) = match (
+        read("meta.json"),
+        read("frames.bin"),
+        read("poses.bin"),
+        read("tsdf.bin"),
+        read("weight.bin"),
+    ) {
+        (Ok(m), Ok(f), Ok(p), Ok(t), Ok(w)) => {
+            (m, doubles(&f), doubles(&p), floats(&t), floats(&w))
+        }
+        _ => {
+            eprintln!("TSDF vectors missing in {}", dir.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let meta: TsdfMeta = match serde_json::from_slice(&meta) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("meta.json: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let spec = tsdf::VolumeSpec {
+        lower: meta.lower,
+        voxel: meta.voxel,
+        truncation: meta.truncation,
+        shape: meta.shape,
+    };
+    if frames.len() != 3 * meta.counts.iter().sum::<usize>()
+        || poses.len() != 12 * meta.counts.len()
+        || tsdf.len() != spec.voxels()
+        || weight.len() != spec.voxels()
+    {
+        eprintln!("TSDF vectors do not match meta.json");
+        return ExitCode::FAILURE;
+    }
+    let integrator = match tsdf::Integrator::new(false, spec.clone()) {
+        Ok(i) => i,
+        Err(e) if std::env::var_os("SLS_REQUIRE_GPU").is_none() => {
+            println!("no GPU adapter, TSDF check skipped: {e}");
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            eprintln!("no GPU adapter: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!("adapter {}", integrator.adapter);
+    let camera = tsdf::LeftCamera {
+        rotation: meta.rotation,
+        projection: meta.projection,
+    };
+    let start = Instant::now();
+    let mut offset = 0;
+    for (&count, pose) in meta.counts.iter().zip(poses.chunks_exact(12)) {
+        let points: Vec<[f64; 3]> = frames[offset..offset + 3 * count]
+            .chunks_exact(3)
+            .map(|c| [c[0], c[1], c[2]])
+            .collect();
+        offset += 3 * count;
+        let grid = tsdf::depth_grid(
+            &points,
+            &camera,
+            meta.step,
+            meta.window,
+            (meta.width, meta.height),
+        );
+        let rotation: [f64; 9] = std::array::from_fn(|i| pose[i]);
+        let translation = [pose[9], pose[10], pose[11]];
+        if let Err(e) = integrator.integrate(&grid, &camera, &rotation, &translation) {
+            eprintln!("integration failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+    let (gpu_tsdf, gpu_weight) = match integrator.read() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("readback failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+    let observed = weight.iter().filter(|&&w| w > 0.0).count();
+    let differing = weight
+        .iter()
+        .zip(&gpu_weight)
+        .filter(|(a, b)| a != b)
+        .count();
+    let mut distances: Vec<f64> = tsdf
+        .iter()
+        .zip(&gpu_tsdf)
+        .zip(weight.iter().zip(&gpu_weight))
+        .filter(|(_, (a, b))| **a > 0.0 && a == b)
+        .map(|((a, b), _)| f64::from((a - b).abs()))
+        .collect();
+    distances.sort_by(f64::total_cmp);
+    let at = |q: usize| distances.get(q).copied().unwrap_or(0.0);
+    let (median, p99) = (at(distances.len() / 2), at(distances.len() * 99 / 100));
+    let largest = distances.last().copied().unwrap_or(0.0);
+    let scale = meta.truncation * 1e6;
+    println!(
+        "{} frames into {} voxels in {elapsed:.1} ms with upload and readback; {observed} observed, {differing} with other weights, distance difference median {:.4} µm, 99th percentile {:.4} µm, largest {:.4} µm",
+        meta.counts.len(),
+        spec.voxels(),
+        median * scale,
+        p99 * scale,
+        largest * scale
+    );
+    if differing as f64 <= 0.001 * observed.max(1) as f64 && p99 * scale <= 0.1 {
+        println!("TSDF check: GPU matches the NumPy reference");
+        ExitCode::SUCCESS
+    } else {
+        println!("TSDF check: GPU differs from the NumPy reference");
+        ExitCode::FAILURE
+    }
+}
+
+#[derive(serde::Deserialize)]
 struct FusionMeta {
     counts: Vec<usize>,
     voxel: f64,
@@ -1436,6 +1575,7 @@ fn main() -> ExitCode {
         Some("coarse-check") => return coarse_check(&args[2..]),
         Some("depth-check") => return depth_check(&args[2..]),
         Some("fusion-check") => return fusion_check(&args[2..]),
+        Some("tsdf-check") => return tsdf_check(&args[2..]),
         Some("replay") => return replay(&args[2..]),
         _ => {}
     }

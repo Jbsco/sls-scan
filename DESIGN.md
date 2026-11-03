@@ -896,3 +896,23 @@ TSDF then read sphere radii up to 224 µm small and the ball bar 120 to 138 µm 
 cells on a sphere's sides then span more than one truncation, which likely leaves those
 sides unobserved. A coarse TSDF needs
 samples every 8 px or closer.
+
+## D52. TSDF integration on the GPU (2026-11-02)
+
+`app/src/tsdf.wgsl` folds one depth frame into the volume of D51 with one invocation per
+voxel. `app/src/tsdf.rs` builds each frame's depth grid on the CPU from its points and
+the left camera's rectification, as `tsdf.depth_grid` does, and keeps distances and
+weights on the device. The host composes one matrix and offset from the frame's pose and
+the rectifying rotation, and the kernel moves voxel centres into the rectified frame with
+them in single precision.
+
+`slscan tsdf-vectors` writes four frames of a short sweep, their tracked poses and the
+NumPy volume at 1 mm voxels and 2 mm truncation. `sls-scan tsdf-check` integrates the
+same frames on the GPU and compares. Of 340,622 observed voxels, one has another weight.
+Distances differ by a median of 0.0001 µm, a 99th percentile of 0.039 µm and at most
+0.11 µm. The check allows 0.1 % of observed voxels to differ in weight and a 99th
+percentile of 0.1 µm.
+
+On a Radeon RX 7900 GRE the four frames take 13.8 ms with upload and readback. The
+25-frame sweep of D51 at 0.5 mm voxels and 1 mm truncation, 17.9 million voxels, takes
+77.9 ms, and 209 of its 9.3 million observed voxels differ in weight.

@@ -193,6 +193,18 @@ def test_fusion_vectors_command_writes_consistent_files(tmp_path):
     assert (out / "model.bin").stat().st_size == 24 * meta["model"]
 
 
+def test_tsdf_vectors_command_writes_consistent_files(tmp_path):
+    out = tmp_path / "tsdf"
+    assert cli.main(["tsdf-vectors", "--out", str(out), "--frames", "2", "--step", "16"]) == 0
+    meta = json.loads((out / "meta.json").read_text())
+    assert len(meta["counts"]) == 2 and min(meta["counts"]) > 0 and meta["surface"] > 0
+    assert (out / "frames.bin").stat().st_size == 24 * sum(meta["counts"])
+    assert (out / "poses.bin").stat().st_size == 8 * 12 * 2
+    voxels = int(np.prod(meta["shape"]))
+    assert (out / "tsdf.bin").stat().st_size == 4 * voxels
+    assert (out / "weight.bin").stat().st_size == 4 * voxels
+
+
 def test_calibration_repeat_passes_with_a_board_filling_the_view(capsys):
     assert cli.main(["calibration-repeat", "--sessions", "3"]) == 0
     assert "largest focal length change" in capsys.readouterr().out
