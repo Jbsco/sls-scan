@@ -207,6 +207,15 @@ def test_tsdf_vectors_command_writes_consistent_files(tmp_path):
     assert (out / "surface-keys.bin").stat().st_size == 4 * meta["surface"]
 
 
+def test_mesh_volume_command_meshes_tsdf_vectors(tmp_path):
+    out = tmp_path / "tsdf"
+    assert cli.main(["tsdf-vectors", "--out", str(out), "--frames", "2", "--step", "16"]) == 0
+    mesh_path = tmp_path / "volume.stl"
+    assert cli.main(["mesh-volume", str(out), "--out", str(mesh_path)]) == 0
+    triangles = int(np.frombuffer(mesh_path.read_bytes()[80:84], "<u4")[0])
+    assert triangles > 1000
+
+
 def test_calibration_repeat_passes_with_a_board_filling_the_view(capsys):
     assert cli.main(["calibration-repeat", "--sessions", "3"]) == 0
     assert "largest focal length change" in capsys.readouterr().out
