@@ -1160,3 +1160,12 @@ featureless spans only, and peel off afterwards. The light-off frames of D63 see
 under room light. Complex shapes such as cavities, mechanical parts and sculptures stay
 geometry-only with no preparation. Detecting, triangulating and matching dots between
 frames comes next.
+
+## D65. Mesh export from the scene panel (2026-11-03)
+
+A scene panel now has a mesh path, a hole limit, a triangle limit and an Export mesh
+button. On export, the depth worker saves its live volume beside that path, and a
+thread runs `slscan mesh-volume --json` through the tool command calibration uses, so
+the window never waits on meshing. `sls-scan depth --mesh` runs these steps headless,
+closing holes up to 10 mm, and the application gate exports a mesh that way. Four
+frames of a stand-in sweep export as 30,128 triangles.

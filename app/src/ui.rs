@@ -37,6 +37,8 @@ const FUSION_VOXEL_M: f64 = 0.0005;
 enum DepthJob {
     Pair(Vec<u8>, Vec<u8>),
     Reset,
+    /// Save the live volume to a directory and reply with the outcome.
+    Save(PathBuf, mpsc::Sender<Result<(), String>>),
 }
 
 struct LiveFrame {
@@ -84,6 +86,11 @@ pub struct ScanApp {
     depth_status: String,
     depth_frames: usize,
     depth_skipped: usize,
+    mesh_path: String,
+    mesh_fill_mm: f64,
+    mesh_faces: u32,
+    export: Option<Receiver<Result<calibration::MeshResult, String>>>,
+    export_status: String,
 }
 
 impl Default for ScanApp {
@@ -118,6 +125,11 @@ impl Default for ScanApp {
             depth_status: String::new(),
             depth_frames: 0,
             depth_skipped: 0,
+            mesh_path: "data/scan.stl".to_owned(),
+            mesh_fill_mm: 10.0,
+            mesh_faces: 0,
+            export: None,
+            export_status: String::new(),
         }
     }
 }
@@ -153,6 +165,10 @@ impl ScanApp {
                     DepthJob::Reset => {
                         fusion = Fusion::new(FUSION_VOXEL_M);
                         volume.reset();
+                        continue;
+                    }
+                    DepthJob::Save(dir, reply) => {
+                        let _ = reply.send(volume.save(&dir));
                         continue;
                     }
                 };
@@ -717,9 +733,92 @@ impl ScanApp {
         }
     }
 
-    /// Draw the fused model from the front, shaded by depth.
-    fn scene(&self, ui: &mut egui::Ui) {
+    /// Save the live volume beside the mesh path and mesh it through the tool, off the
+    /// interface thread.
+    fn export_mesh(&mut self, ctx: &egui::Context) {
+        let Some(worker) = &self.depth else {
+            self.export_status = "no live volume: run a stereo sequence first".to_owned();
+            return;
+        };
+        let Some(tool) = calibration::Tool::parse(&self.tool) else {
+            self.export_status = "no tool command".to_owned();
+            return;
+        };
+        let out = PathBuf::from(&self.mesh_path);
+        let dir = PathBuf::from(format!("{}.volume", self.mesh_path));
+        let (saved_tx, saved_rx) = mpsc::channel();
+        if worker
+            .jobs
+            .send(DepthJob::Save(dir.clone(), saved_tx))
+            .is_err()
+        {
+            self.export_status = "depth worker stopped".to_owned();
+            return;
+        }
+        let (fill_mm, faces) = (self.mesh_fill_mm, self.mesh_faces);
+        let (tx, rx) = mpsc::channel();
+        let repaint = ctx.clone();
+        thread::spawn(move || {
+            let result = saved_rx
+                .recv()
+                .map_err(|e| e.to_string())
+                .and_then(|saved| saved)
+                .and_then(|()| {
+                    calibration::mesh_volume(&tool, &dir, &out, fill_mm, faces)
+                        .map_err(|e| e.to_string())
+                });
+            let _ = tx.send(result);
+            repaint.request_repaint();
+        });
+        self.export = Some(rx);
+        self.export_status = "exporting".to_owned();
+    }
+
+    fn poll_export(&mut self) {
+        let Some(rx) = &self.export else {
+            return;
+        };
+        if let Ok(result) = rx.try_recv() {
+            self.export_status = match result {
+                Ok(m) => format!(
+                    "{} triangles and {} vertices written to {}, {} holes filled",
+                    m.triangles, m.vertices, m.out, m.holes
+                ),
+                Err(e) => format!("export failed: {e}"),
+            };
+            self.export = None;
+        }
+    }
+
+    /// Draw the fused model from the front, shaded by depth, and export it as a mesh.
+    fn scene(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.heading("Scene");
+        ui.horizontal(|ui| {
+            ui.label("Mesh");
+            ui.text_edit_singleline(&mut self.mesh_path);
+        });
+        ui.add(
+            egui::DragValue::new(&mut self.mesh_fill_mm)
+                .range(0.0..=100.0)
+                .prefix("fill holes up to ")
+                .suffix(" mm"),
+        );
+        ui.add(
+            egui::DragValue::new(&mut self.mesh_faces)
+                .range(0..=10_000_000)
+                .prefix("triangles at most ")
+                .suffix(" (0 keeps all)"),
+        );
+        let ready = self.depth.is_some() && self.export.is_none();
+        if ui
+            .add_enabled(ready, egui::Button::new("Export mesh"))
+            .clicked()
+        {
+            self.export_mesh(ctx);
+        }
+        if !self.export_status.is_empty() {
+            ui.label(&self.export_status);
+        }
         if self.cloud.is_empty() {
             ui.label("No model yet.");
             return;
@@ -758,6 +857,7 @@ impl eframe::App for ScanApp {
         self.poll(&ctx);
         self.poll_calibration();
         self.poll_depth();
+        self.poll_export();
         egui::Panel::left("configuration")
             .default_size(300.0)
             .show_inside(ui, |ui| {
@@ -765,7 +865,7 @@ impl eframe::App for ScanApp {
             });
         egui::Panel::right("scene")
             .default_size(240.0)
-            .show_inside(ui, |ui| self.scene(ui));
+            .show_inside(ui, |ui| self.scene(ui, &ctx));
         egui::CentralPanel::default().show_inside(ui, |ui| self.preview(ui));
     }
 }

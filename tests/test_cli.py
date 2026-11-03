@@ -207,13 +207,17 @@ def test_tsdf_vectors_command_writes_consistent_files(tmp_path):
     assert (out / "surface-keys.bin").stat().st_size == 4 * meta["surface"]
 
 
-def test_mesh_volume_command_meshes_tsdf_vectors(tmp_path):
+def test_mesh_volume_command_meshes_tsdf_vectors(tmp_path, capsys):
     out = tmp_path / "tsdf"
     assert cli.main(["tsdf-vectors", "--out", str(out), "--frames", "2", "--step", "16"]) == 0
     mesh_path = tmp_path / "volume.stl"
     assert cli.main(["mesh-volume", str(out), "--out", str(mesh_path)]) == 0
     triangles = int(np.frombuffer(mesh_path.read_bytes()[80:84], "<u4")[0])
     assert triangles > 1000
+    capsys.readouterr()
+    assert cli.main(["mesh-volume", str(out), "--out", str(mesh_path), "--json"]) == 0
+    result = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert result["triangles"] == triangles and result["out"] == str(mesh_path)
 
 
 def test_calibration_repeat_passes_with_a_board_filling_the_view(capsys):

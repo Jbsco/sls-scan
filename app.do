@@ -26,7 +26,8 @@ $RUN capture --node "127.0.0.1:$PORT" --set stereo --frames 150 --rate 30 --wait
 $RUN calibrate --node "127.0.0.1:$PORT" --set stereo --wait 30 --poses 12 --out "$SESSION/stereo" \
     --squares-x 9 --squares-y 6 --square-mm 10 --marker-mm 7.5
 $RUN depth --node "127.0.0.1:$PORT" --params "$SESSION/stereo/depth.json" --frames 2 --wait 30 \
-    --mode depth --surface "$SESSION/surface.ply" --volume "$SESSION/volume"
+    --mode depth --surface "$SESSION/surface.ply" --volume "$SESSION/volume" \
+    --mesh "$SESSION/scan.stl"
 python3 -m slscan.cli mesh-volume "$SESSION/volume" --out "$SESSION/volume.stl"
 $RUN depth --node "127.0.0.1:$PORT" --params "$SESSION/stereo/depth.json" --frames 4 --wait 30 \
     --mode preview

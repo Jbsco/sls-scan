@@ -139,10 +139,12 @@ fn headless_depth(args: &[String]) -> ExitCode {
     let mut mode = "auto".to_owned();
     let mut surface_out: Option<PathBuf> = None;
     let mut volume_out: Option<PathBuf> = None;
+    let mut mesh_out: Option<PathBuf> = None;
+    let mut tool = "python3 -m slscan.cli".to_owned();
     for pair in args.chunks(2) {
         let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
             eprintln!(
-                "arguments come in pairs: --node, --params, --frames, --wait, --out, --mode, --surface, --volume"
+                "arguments come in pairs: --node, --params, --frames, --wait, --out, --mode, --surface, --volume, --mesh, --tool"
             );
             return ExitCode::FAILURE;
         };
@@ -153,6 +155,8 @@ fn headless_depth(args: &[String]) -> ExitCode {
             "--mode" => mode.clone_from(value),
             "--surface" => surface_out = Some(PathBuf::from(value)),
             "--volume" => volume_out = Some(PathBuf::from(value)),
+            "--mesh" => mesh_out = Some(PathBuf::from(value)),
+            "--tool" => tool.clone_from(value),
             "--frames" => match value.parse() {
                 Ok(v) => frames = v,
                 Err(_) => {
@@ -362,6 +366,23 @@ fn headless_depth(args: &[String]) -> ExitCode {
             Ok(()) => println!("TSDF volume written to {}", dir.display()),
             Err(e) => {
                 eprintln!("volume: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    if let Some(path) = &mesh_out {
+        let dir = PathBuf::from(format!("{}.volume", path.display()));
+        let meshed = volume.save(&dir).and_then(|()| {
+            let tool = calibration::Tool::parse(&tool).ok_or("no tool command")?;
+            calibration::mesh_volume(&tool, &dir, path, 10.0, 0).map_err(|e| e.to_string())
+        });
+        match meshed {
+            Ok(m) => println!(
+                "mesh of {} triangles and {} vertices written to {}, {} holes filled",
+                m.triangles, m.vertices, m.out, m.holes
+            ),
+            Err(e) => {
+                eprintln!("mesh: {e}");
                 return ExitCode::FAILURE;
             }
         }
