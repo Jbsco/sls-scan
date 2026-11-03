@@ -5,7 +5,7 @@ use crate::client::{self, Event, Stats};
 use crate::depth::{DepthFrame, DepthResult, DepthSetup};
 use crate::fuse::{self, Fusion, Vec3};
 use crate::protocol::{FrameHeader, Hello, Projector, SequenceRequest};
-use crate::tsdf;
+use crate::{mesh, tsdf};
 use eframe::egui;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
@@ -37,8 +37,9 @@ const FUSION_VOXEL_M: f64 = 0.0005;
 enum DepthJob {
     Pair(Vec<u8>, Vec<u8>),
     Reset,
-    /// Save the live volume to a directory and reply with the outcome.
-    Save(PathBuf, mpsc::Sender<Result<(), String>>),
+    /// Mesh the live volume, closing holes up to a size in metres and decimating to a
+    /// triangle count when it is not 0, and reply with the mesh.
+    Mesh(f64, usize, mpsc::Sender<Result<mesh::Mesh, String>>),
 }
 
 struct LiveFrame {
@@ -89,7 +90,7 @@ pub struct ScanApp {
     mesh_path: String,
     mesh_fill_mm: f64,
     mesh_faces: u32,
-    export: Option<Receiver<Result<calibration::MeshResult, String>>>,
+    export: Option<Receiver<Result<(usize, usize), String>>>,
     export_status: String,
 }
 
@@ -167,8 +168,8 @@ impl ScanApp {
                         volume.reset();
                         continue;
                     }
-                    DepthJob::Save(dir, reply) => {
-                        let _ = reply.send(volume.save(&dir));
+                    DepthJob::Mesh(fill_m, faces, reply) => {
+                        let _ = reply.send(volume.mesh(fill_m, faces));
                         continue;
                     }
                 };
@@ -733,39 +734,35 @@ impl ScanApp {
         }
     }
 
-    /// Save the live volume beside the mesh path and mesh it through the tool, off the
-    /// interface thread.
+    /// Mesh the live volume in the depth worker and write it from a thread, so the
+    /// window does not wait on the file.
     fn export_mesh(&mut self, ctx: &egui::Context) {
         let Some(worker) = &self.depth else {
             self.export_status = "no live volume: run a stereo sequence first".to_owned();
             return;
         };
-        let Some(tool) = calibration::Tool::parse(&self.tool) else {
-            self.export_status = "no tool command".to_owned();
-            return;
-        };
         let out = PathBuf::from(&self.mesh_path);
-        let dir = PathBuf::from(format!("{}.volume", self.mesh_path));
-        let (saved_tx, saved_rx) = mpsc::channel();
-        if worker
-            .jobs
-            .send(DepthJob::Save(dir.clone(), saved_tx))
-            .is_err()
-        {
+        let (mesh_tx, mesh_rx) = mpsc::channel();
+        let job = DepthJob::Mesh(
+            self.mesh_fill_mm / 1000.0,
+            self.mesh_faces as usize,
+            mesh_tx,
+        );
+        if worker.jobs.send(job).is_err() {
             self.export_status = "depth worker stopped".to_owned();
             return;
         }
-        let (fill_mm, faces) = (self.mesh_fill_mm, self.mesh_faces);
         let (tx, rx) = mpsc::channel();
         let repaint = ctx.clone();
         thread::spawn(move || {
-            let result = saved_rx
+            let result = mesh_rx
                 .recv()
                 .map_err(|e| e.to_string())
-                .and_then(|saved| saved)
-                .and_then(|()| {
-                    calibration::mesh_volume(&tool, &dir, &out, fill_mm, faces)
-                        .map_err(|e| e.to_string())
+                .and_then(|m| m)
+                .and_then(|m| {
+                    mesh::write_mesh(&out, &m)
+                        .map(|()| (m.faces.len(), m.vertices.len()))
+                        .map_err(|e| format!("{}: {e}", out.display()))
                 });
             let _ = tx.send(result);
             repaint.request_repaint();
@@ -780,9 +777,9 @@ impl ScanApp {
         };
         if let Ok(result) = rx.try_recv() {
             self.export_status = match result {
-                Ok(m) => format!(
-                    "{} triangles and {} vertices written to {}, {} holes filled",
-                    m.triangles, m.vertices, m.out, m.holes
+                Ok((triangles, vertices)) => format!(
+                    "{triangles} triangles and {vertices} vertices written to {}",
+                    self.mesh_path
                 ),
                 Err(e) => format!("export failed: {e}"),
             };

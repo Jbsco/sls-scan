@@ -140,11 +140,11 @@ fn headless_depth(args: &[String]) -> ExitCode {
     let mut surface_out: Option<PathBuf> = None;
     let mut volume_out: Option<PathBuf> = None;
     let mut mesh_out: Option<PathBuf> = None;
-    let mut tool = "python3 -m slscan.cli".to_owned();
+    let mut faces = 0usize;
     for pair in args.chunks(2) {
         let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
             eprintln!(
-                "arguments come in pairs: --node, --params, --frames, --wait, --out, --mode, --surface, --volume, --mesh, --tool"
+                "arguments come in pairs: --node, --params, --frames, --wait, --out, --mode, --surface, --volume, --mesh, --faces"
             );
             return ExitCode::FAILURE;
         };
@@ -156,7 +156,13 @@ fn headless_depth(args: &[String]) -> ExitCode {
             "--surface" => surface_out = Some(PathBuf::from(value)),
             "--volume" => volume_out = Some(PathBuf::from(value)),
             "--mesh" => mesh_out = Some(PathBuf::from(value)),
-            "--tool" => tool.clone_from(value),
+            "--faces" => match value.parse() {
+                Ok(v) => faces = v,
+                Err(_) => {
+                    eprintln!("--faces takes a number");
+                    return ExitCode::FAILURE;
+                }
+            },
             "--frames" => match value.parse() {
                 Ok(v) => frames = v,
                 Err(_) => {
@@ -371,15 +377,19 @@ fn headless_depth(args: &[String]) -> ExitCode {
         }
     }
     if let Some(path) = &mesh_out {
-        let dir = PathBuf::from(format!("{}.volume", path.display()));
-        let meshed = volume.save(&dir).and_then(|()| {
-            let tool = calibration::Tool::parse(&tool).ok_or("no tool command")?;
-            calibration::mesh_volume(&tool, &dir, path, 10.0, 0).map_err(|e| e.to_string())
+        let start = Instant::now();
+        let meshed = volume.mesh(0.01, faces).and_then(|m| {
+            slscan_app::mesh::write_mesh(path, &m)
+                .map(|()| m)
+                .map_err(|e| format!("{}: {e}", path.display()))
         });
         match meshed {
             Ok(m) => println!(
-                "mesh of {} triangles and {} vertices written to {}, {} holes filled",
-                m.triangles, m.vertices, m.out, m.holes
+                "mesh of {} triangles and {} vertices written to {} in {:.1} ms",
+                m.faces.len(),
+                m.vertices.len(),
+                path.display(),
+                start.elapsed().as_secs_f64() * 1000.0
             ),
             Err(e) => {
                 eprintln!("mesh: {e}");
