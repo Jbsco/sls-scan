@@ -16,7 +16,7 @@ struct Params {
     fy: f32,
     cx: f32,
     cy: f32,
-    pad0: f32,
+    capacity: u32,
     pad1: f32,
     pad2: f32,
     m0: f32,
@@ -37,6 +37,9 @@ struct Params {
 @group(0) @binding(1) var<storage, read> grid: array<f32>;
 @group(0) @binding(2) var<storage, read_write> tsdf: array<f32>;
 @group(0) @binding(3) var<storage, read_write> weight: array<f32>;
+@group(0) @binding(4) var<storage, read_write> count: atomic<u32>;
+@group(0) @binding(5) var<storage, read_write> points: array<f32>;
+@group(0) @binding(6) var<storage, read_write> keys: array<u32>;
 
 fn depth_at(x: u32, y: u32) -> f32 {
     return grid[y * params.grid_width + x];
@@ -90,4 +93,40 @@ fn integrate(@builtin(global_invocation_id) id: vec3<u32>) {
     let w = weight[i];
     tsdf[i] = (tsdf[i] * w + value) / (w + 1.0);
     weight[i] = w + 1.0;
+}
+
+fn observed(i: u32) -> bool {
+    return weight[i] > 0.0 && abs(tsdf[i]) < 1.0;
+}
+
+// One voxel per invocation: append the zero crossings to its next voxel along each axis.
+@compute @workgroup_size(64)
+fn surface(@builtin(global_invocation_id) id: vec3<u32>) {
+    let i = id.y * params.stride + id.x;
+    if (i >= params.nx * params.ny * params.nz || !observed(i)) {
+        return;
+    }
+    let index = vec3<u32>(i / (params.nz * params.ny), (i / params.nz) % params.ny, i % params.nz);
+    let size = vec3<u32>(params.nx, params.ny, params.nz);
+    let strides = vec3<u32>(params.ny * params.nz, params.nz, 1u);
+    let a = tsdf[i];
+    for (var axis = 0u; axis < 3u; axis++) {
+        if (index[axis] + 1u >= size[axis]) {
+            continue;
+        }
+        let j = i + strides[axis];
+        let b = tsdf[j];
+        if (!observed(j) || (a > 0.0) == (b > 0.0)) {
+            continue;
+        }
+        var offset = vec3<f32>(f32(index.x), f32(index.y), f32(index.z));
+        offset[axis] += a / (a - b);
+        let slot = atomicAdd(&count, 1u);
+        if (slot < params.capacity) {
+            points[3u * slot] = params.lower_x + params.voxel * offset.x;
+            points[3u * slot + 1u] = params.lower_y + params.voxel * offset.y;
+            points[3u * slot + 2u] = params.lower_z + params.voxel * offset.z;
+            keys[slot] = 3u * i + axis;
+        }
+    }
 }

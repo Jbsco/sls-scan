@@ -203,6 +203,8 @@ def test_tsdf_vectors_command_writes_consistent_files(tmp_path):
     voxels = int(np.prod(meta["shape"]))
     assert (out / "tsdf.bin").stat().st_size == 4 * voxels
     assert (out / "weight.bin").stat().st_size == 4 * voxels
+    assert (out / "surface.bin").stat().st_size == 24 * meta["surface"]
+    assert (out / "surface-keys.bin").stat().st_size == 4 * meta["surface"]
 
 
 def test_calibration_repeat_passes_with_a_board_filling_the_view(capsys):

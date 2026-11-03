@@ -75,3 +75,13 @@ def test_sphere_keeps_its_radius():
     assert len(surface) > 2000 and rms < 0.000005
     assert abs(fitted_radius - radius) < 0.00003
     assert np.linalg.norm(fitted_centre - centre) < 0.00002
+
+
+def test_surface_keys_name_each_crossing():
+    volume = tsdf.Volume(np.zeros(3), np.full(3, 0.002), 0.001, 0.002)
+    volume.weight[:] = 1.0
+    volume.tsdf[:] = 0.5
+    volume.tsdf[:, :, 2] = -0.5
+    points, keys = tsdf.surface(volume, return_keys=True)
+    assert len(points) == 9 and np.allclose(points[:, 2], 0.0015)
+    assert sorted(keys) == sorted((i * 9 + j * 3 + 1) * 3 + 2 for i in range(3) for j in range(3))
