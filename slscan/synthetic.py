@@ -633,3 +633,24 @@ def static_object() -> list:
             Ball(np.array([-0.08, -0.04, 0.025]), 0.025),
             Ball(np.array([0.09, -0.06, 0.015]), 0.015),
             Ball(np.array([-0.05, 0.05, 0.03]), 0.03)]
+
+
+def metre_object() -> dict:
+    """A part about a metre across for registration tests, standing on the world's xy
+    plane: a base, a back wall, a slanted side, a raised step and four balls, with two
+    scale bars of 50.8 mm spheres about 400 mm apart, one level and clear of the base and
+    one rising across it."""
+    part = [facing_plate([0.0, 0.0, 0.0], [0, 0, 1], [1, 0, 0], 0.5, 0.3),
+            facing_plate([0.0, 0.3, 0.15], [0, -1, 0], [1, 0, 0], 0.5, 0.15),
+            facing_plate([-0.5, 0.0, 0.1], [1, 0, 0.4], [0, 1, 0], 0.3, 0.1),
+            facing_plate([0.3, -0.1, 0.1], [0, 0, 1], [1, 0.3, 0], 0.12, 0.08),
+            facing_plate([0.3, -0.18, 0.05], [0, -1, 0], [1, 0, 0], 0.12, 0.05),
+            Ball(np.array([0.3, 0.15, 0.08]), 0.08),
+            Ball(np.array([-0.25, -0.15, 0.05]), 0.05),
+            Ball(np.array([0.05, 0.2, 0.06]), 0.06),
+            Ball(np.array([-0.35, 0.12, 0.1]), 0.1)]
+    bars = [[Ball(np.array([-0.2, -0.22, 0.06]), 0.0254),
+             Ball(np.array([0.2, -0.24, 0.06]), 0.0254)],
+            [Ball(np.array([-0.15, 0.02, 0.12]), 0.0254),
+             Ball(np.array([0.12, 0.12, 0.38]), 0.0254)]]
+    return {"part": part, "scale-bars": bars}
