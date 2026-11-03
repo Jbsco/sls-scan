@@ -187,6 +187,24 @@ class Plate:
     half_u: float
     half_v: float
     albedo: float = 0.8
+    dots: tuple = ()
+    dot_radius: float = 0.004
+    dot_albedo: float = 0.05
+
+    def shade(self, origin: np.ndarray, directions: np.ndarray, t: np.ndarray) -> np.ndarray:
+        """Albedo at each hit: dot_albedo within dot_radius of a dot centre (u, v in the
+        plate's axes), albedo elsewhere."""
+        albedo = np.full(len(t), self.albedo)
+        if not self.dots:
+            return albedo
+        from scipy.spatial import cKDTree
+
+        hit = np.isfinite(t)
+        local = (origin + t[hit, np.newaxis] * directions[hit] - self.centre) @ self.axes[:, :2]
+        distance, _ = cKDTree(np.asarray(self.dots)).query(local,
+                                                           distance_upper_bound=self.dot_radius)
+        albedo[np.nonzero(hit)[0][np.isfinite(distance)]] = self.dot_albedo
+        return albedo
 
     def hit(self, origin: np.ndarray, directions: np.ndarray) -> np.ndarray:
         normal = self.axes[:, 2]
@@ -204,6 +222,9 @@ class Ball:
     centre: np.ndarray
     radius: float
     albedo: float = 0.8
+
+    def shade(self, origin: np.ndarray, directions: np.ndarray, t: np.ndarray) -> np.ndarray:
+        return np.full(len(t), self.albedo)
 
     def hit(self, origin: np.ndarray, directions: np.ndarray) -> np.ndarray:
         offset = origin - self.centre
@@ -224,7 +245,7 @@ def nearest_hit(scene: list, origin: np.ndarray, directions: np.ndarray) -> tupl
         ts = shape.hit(origin, directions)
         closer = ts < t
         t[closer] = ts[closer]
-        albedo[closer] = shape.albedo
+        albedo[closer] = shape.shade(origin, directions[closer], ts[closer])
     return t, albedo
 
 
@@ -354,7 +375,8 @@ def transform_scene(scene: list, r: np.ndarray, t: np.ndarray) -> list:
     moved = []
     for s in scene:
         if isinstance(s, Plate):
-            moved.append(Plate(r @ s.centre + t, r @ s.axes, s.half_u, s.half_v, s.albedo))
+            moved.append(Plate(r @ s.centre + t, r @ s.axes, s.half_u, s.half_v, s.albedo,
+                               s.dots, s.dot_radius, s.dot_albedo))
         else:
             moved.append(Ball(r @ s.centre + t, s.radius, s.albedo))
     return moved
