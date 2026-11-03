@@ -505,6 +505,23 @@ def sweep_poses(frames: int, yaw_deg: float = 25.0, pitch_deg: float = 8.0,
     return poses
 
 
+def loop_poses(frames: int, yaw_deg: float = 25.0, pitch_deg: float = 8.0,
+               distance_m: float = 0.5) -> list:
+    """Head poses (world to head) around a closed loop about a target at distance_m ahead
+    of the first pose: yaw follows -yaw_deg cos and pitch pitch_deg sin of one turn, and a
+    last pose repeats the first, so frames + 1 poses in all."""
+    target = np.array([0.0, 0.0, distance_m])
+    poses = []
+    for i in range(frames + 1):
+        s = (i % frames) / frames
+        orient = rotation(pitch_deg * math.sin(2.0 * math.pi * s),
+                          -yaw_deg * math.cos(2.0 * math.pi * s))
+        centre = target - orient @ np.array([0.0, 0.0, distance_m])
+        r = orient.T
+        poses.append((r, -r @ centre))
+    return poses
+
+
 def sweep_scene(distance_m: float = 0.5) -> dict:
     """A part on a mat for sweep tests, in the world frame of sweep_poses: a 140 mm mat, a
     ball bar of two 25 mm spheres about 80 mm apart, and a 16 mm sphere."""
