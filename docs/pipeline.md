@@ -146,10 +146,10 @@ a PLY per view in the camera frame.
 
 ## Register
 
-ArUco targets detected in the camera images give each view's pose in the target frame
-once three or more targets with known positions are seen. Target positions come from a
-bundle adjustment over all views. ICP (Open3D) refines the poses on overlapping clouds.
-Scale bars are measured in the merged cloud and reported.
+Each view's pose comes from geometry: a coarse match against the views already placed,
+then ICP on overlapping clouds (`DESIGN.md` D63). Optional ArUco markers on a mat, when
+three or more are seen, give a pose in the mat's frame instead. Scale bars are measured
+in the merged cloud and reported.
 
 ## Virtual bench
 
@@ -176,10 +176,11 @@ measured on the object, and reports datum residuals and scale bar errors (D60).
 
 Every synchronized frame pair is a depth frame: rectification, coarse disparity, affine
 and second-order refinement, and TSDF integration at a coarse voxel size in WGSL kernels
-on the host, with triangulation on its CPU in double precision (`DESIGN.md` D48). Poses come from the frame's geometry against the model, helped by
-markers on the mat around the part. The scene draws the volume and the live cloud as
-the scanner moves, which shows coverage and gaps. In continuous mode the fused model is
-the result, and dense matching of selected frames refines it afterwards.
+on the host, with triangulation on its CPU in double precision (`DESIGN.md` D48). Poses
+come from the frame's geometry against the model, helped by optional markers on a mat
+around the part (D63). The scene draws the volume and the live cloud as the scanner
+moves, which shows coverage and gaps. In continuous mode the fused model is the result,
+and dense matching of selected frames refines it afterwards.
 
 In the phase-shift option a depth frame is a cycle of phase-shifted patterns instead.
 Its decode kernel is `app/src/decode.wgsl`, and it matches the NumPy decode (D22).
