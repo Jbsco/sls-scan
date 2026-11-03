@@ -228,6 +228,6 @@ path without the window. The calibration panel captures board pairs, solves the 
 calibration through the Python tool and writes those parameters for the next run (D41).
 
 On a software adapter such as lavapipe, the worker and `sls-scan depth` run previews in
-place of depth frames and leave them out of the fused model (D50). Each depth frame also
-folds into a coarse TSDF at its tracked pose, and the scene panel draws that volume's
-surface (D54). `sls-scan depth --surface` writes it as PLY.
+place of depth frames and leave them out of the fused model (D50). Each depth frame drops
+isolated points (D59) and folds into a coarse TSDF at its tracked pose, and the scene
+panel draws that volume's surface (D54). `sls-scan depth --surface` writes it as PLY.
