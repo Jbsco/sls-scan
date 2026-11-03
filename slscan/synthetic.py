@@ -187,6 +187,24 @@ class Plate:
     half_u: float
     half_v: float
     albedo: float = 0.8
+    dots: tuple = ()
+    dot_radius: float = 0.004
+    dot_albedo: float = 0.05
+
+    def shade(self, origin: np.ndarray, directions: np.ndarray, t: np.ndarray) -> np.ndarray:
+        """Albedo at each hit: dot_albedo within dot_radius of a dot centre (u, v in the
+        plate's axes), albedo elsewhere."""
+        albedo = np.full(len(t), self.albedo)
+        if not self.dots:
+            return albedo
+        from scipy.spatial import cKDTree
+
+        hit = np.isfinite(t)
+        local = (origin + t[hit, np.newaxis] * directions[hit] - self.centre) @ self.axes[:, :2]
+        distance, _ = cKDTree(np.asarray(self.dots)).query(local,
+                                                           distance_upper_bound=self.dot_radius)
+        albedo[np.nonzero(hit)[0][np.isfinite(distance)]] = self.dot_albedo
+        return albedo
 
     def hit(self, origin: np.ndarray, directions: np.ndarray) -> np.ndarray:
         normal = self.axes[:, 2]
@@ -204,6 +222,9 @@ class Ball:
     centre: np.ndarray
     radius: float
     albedo: float = 0.8
+
+    def shade(self, origin: np.ndarray, directions: np.ndarray, t: np.ndarray) -> np.ndarray:
+        return np.full(len(t), self.albedo)
 
     def hit(self, origin: np.ndarray, directions: np.ndarray) -> np.ndarray:
         offset = origin - self.centre
@@ -224,7 +245,7 @@ def nearest_hit(scene: list, origin: np.ndarray, directions: np.ndarray) -> tupl
         ts = shape.hit(origin, directions)
         closer = ts < t
         t[closer] = ts[closer]
-        albedo[closer] = shape.albedo
+        albedo[closer] = shape.shade(origin, directions[closer], ts[closer])
     return t, albedo
 
 
@@ -354,7 +375,8 @@ def transform_scene(scene: list, r: np.ndarray, t: np.ndarray) -> list:
     moved = []
     for s in scene:
         if isinstance(s, Plate):
-            moved.append(Plate(r @ s.centre + t, r @ s.axes, s.half_u, s.half_v, s.albedo))
+            moved.append(Plate(r @ s.centre + t, r @ s.axes, s.half_u, s.half_v, s.albedo,
+                               s.dots, s.dot_radius, s.dot_albedo))
         else:
             moved.append(Ball(r @ s.centre + t, s.radius, s.albedo))
     return moved
@@ -446,6 +468,19 @@ def stereo_capture(rig: StereoRig, scene: list, pattern: np.ndarray, rng: np.ran
                         borderValue=0.0).ravel()
         image = sv.albedo * (ambient + gain * np.where(sv.lit, lit, 0.0))
         image = image + noise * rng.standard_normal(image.shape)
+        return np.clip(np.rint(image), 0, 255).astype(np.uint8).reshape(sv.shape)
+    return {"left": render(rig.left, rig.left_rotation, rig.left_translation),
+            "right": render(rig.right, rig.right_rotation, rig.right_translation)}
+
+
+def stereo_room_view(rig: StereoRig, scene: list, rng: np.random.Generator, room: float = 120.0,
+                     noise: float = 1.0) -> dict:
+    """Render the scene in both cameras under room light alone, with the pattern light
+    off."""
+    def render(camera, r_cam, t_cam):
+        shapes = transform_scene(scene, r_cam, t_cam)
+        sv = scene_view(Rig(camera, rig.light, r_cam.T, -r_cam.T @ t_cam), shapes)
+        image = sv.albedo * room + noise * rng.standard_normal(sv.albedo.shape)
         return np.clip(np.rint(image), 0, 255).astype(np.uint8).reshape(sv.shape)
     return {"left": render(rig.left, rig.left_rotation, rig.left_translation),
             "right": render(rig.right, rig.right_rotation, rig.right_translation)}

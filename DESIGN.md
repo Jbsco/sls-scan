@@ -1209,3 +1209,36 @@ frame, a hand sweep at 30 fps. With dots every 120 mm and 50 µm of noise on eac
 A test slides 0.24 m along such a panel in 24 frames, where tracking drifts 219 mm
 without dots and 0.03 mm with them. Dots enter here as positions. Finding them in
 light-off frames, triangulating them, and the Rust port come next.
+
+## D68. Finding reference dots (2026-11-03)
+
+`stereo.find_dots` places dark dots seen with the pattern light off in the left camera's
+frame. `stereo.dot_centres` marks regions darker than their 61-pixel local mean by 40% of
+it and centres each by its darkness. A region touching the image border or the edge of
+the rectified image is dropped, since part of its dot may be missing.
+
+Each rectified left dot pairs with the one right dot on its row whose disparity lies
+within 10 mm of the depth measured there by the pattern-lit pair taken next to it. Dots
+with no lit depth around them, or with no partner or several, are dropped.
+
+We pair by lit depth because dots sit closer together than the disparity search is wide.
+On the near head, depths from 0.4 to 0.6 m span about 730 px of disparity, and dots every
+40 mm at 0.5 m are about 370 px apart. Pairing each row in left-to-right order slipped by
+one dot whenever each camera saw a different dot at its image edge, which placed dots
+about 85 mm too deep. Dots cut by an image edge moved their centres by 1 to 5 mm.
+
+A rendered slide measured the result: near head, 30 frames over 200 mm along a flat
+plate at 0.5 m tilted 8 degrees, dots of 2 mm radius every 40 mm, and a 15 mm dot radius
+in `track.fuse`. Each frame gave about 10 dots and 7,200 points.
+
+| Tracking | Pose drift, largest |
+|---|---|
+| Geometry only | 203 mm |
+| Dots paired by row order | 86 to 144 mm |
+| Dots paired by lit depth | 0.041 mm |
+
+In the test scene, 9 dots lie within 76 µm of their true positions (median 33 µm). The
+NumPy reference depth matches coarsely by semi-global matching, which leaves a strip as
+wide as its disparity search unmatched: about 730 px of 1,456 for 0.4 to 0.6 m on the
+near head. Dots in that strip have no lit depth and are dropped, so the test and the
+slide use 0.45 to 0.55 m. Block matching, the GPU path's coarse stage, covers the width.
