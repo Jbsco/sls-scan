@@ -1004,3 +1004,29 @@ neighbours and stay. Ball bar and sphere figures of these sweeps move by up to 8
 the mat by 0.1 µm, since artifact fits take points near the artifact anyway. Exported
 and fused clouds of these sweeps then contain no point more than 2 mm off. The
 application's depth frames do not filter yet.
+## D57. Meshes by surface nets (2026-11-02)
+
+Phase 7 asks for meshing and export. `slscan/mesh.py` meshes a TSDF volume by surface
+nets. Each cell between eight observed voxels whose distances change sign gets one
+vertex, the mean of its edges' zero crossings. Each crossing edge joins the four cells
+around it in a quad facing the positive side, split along the diagonal that leaves the
+larger smallest triangle.
+
+The plan named Poisson reconstruction from Open3D, which needs an oriented cloud. A TSDF
+already has a signed distance, so its zero set meshes directly, and Open3D is absent on
+the host. We chose surface nets over marching cubes because it needs no case table, and
+its vertices come from the zero crossings `tsdf.surface` finds. `mesh.write_mesh` writes
+binary PLY, ASCII OBJ or binary STL by extension.
+
+A sphere of 12.5 mm radius, sampled as an exact distance field at 0.5 mm voxels, meshes
+closed: every edge belongs to two triangles, and every triangle faces out. Its vertices
+fit a sphere 4.5 µm small with 1.7 µm RMS, and none lies more than 7.5 µm off. A grid
+whose voxel centres fall on the sphere gives coincident vertices and zero-area
+triangles, so the test grid is offset by a fraction of a voxel.
+
+`slscan sweep-bench --tsdf --mesh` meshes the sweep's volume and measures its vertices.
+The 25-frame sweep with affine windows, a sample every 8 px, 0.5 mm voxels and 1 mm
+truncation gives 63,014 vertices and 123,638 triangles, 6.2 MB as STL. Its vertices read
+the ball bar 31.1 µm short, the spheres 111.2 and 140.2 µm small, mostly the affine
+window bias of D26 with the voxel bias of D51, and the mat at 2.9 µm RMS. Decimation,
+hole filling and datum alignment come next.
