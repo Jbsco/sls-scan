@@ -137,9 +137,12 @@ fn headless_depth(args: &[String]) -> ExitCode {
     let mut params = PathBuf::from("data/depth.json");
     let mut out: Option<PathBuf> = None;
     let mut mode = "auto".to_owned();
+    let mut surface_out: Option<PathBuf> = None;
     for pair in args.chunks(2) {
         let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
-            eprintln!("arguments come in pairs: --node, --params, --frames, --wait, --out, --mode");
+            eprintln!(
+                "arguments come in pairs: --node, --params, --frames, --wait, --out, --mode, --surface"
+            );
             return ExitCode::FAILURE;
         };
         match key.as_str() {
@@ -147,6 +150,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
             "--params" => params = PathBuf::from(value),
             "--out" => out = Some(PathBuf::from(value)),
             "--mode" => mode.clone_from(value),
+            "--surface" => surface_out = Some(PathBuf::from(value)),
             "--frames" => match value.parse() {
                 Ok(v) => frames = v,
                 Err(_) => {
@@ -237,6 +241,12 @@ fn headless_depth(args: &[String]) -> ExitCode {
     let mut ok = !results.is_empty();
     let mut fusion = fuse::Fusion::new(FUSION_VOXEL_M);
     let mut last: &[[f64; 3]] = &[];
+    let mut volume = tsdf::Live::coarse();
+    let mut surface = Vec::new();
+    let camera = tsdf::LeftCamera {
+        rotation: setup.cameras.left.rotation,
+        projection: setup.cameras.left.projection,
+    };
     for (pair, result) in &results {
         match result {
             Ok(d) => {
@@ -255,8 +265,41 @@ fn headless_depth(args: &[String]) -> ExitCode {
                     let rms = fusion
                         .last_rms
                         .map_or_else(String::new, |r| format!(", ICP residual {:.1} µm", r * 1e6));
+                    let start = Instant::now();
+                    let grid = tsdf::depth_grid(
+                        &d.points,
+                        &camera,
+                        depth_params.step,
+                        depth_params.window,
+                        (setup.width, setup.height),
+                    );
+                    let tsdf = match fusion.poses.last() {
+                        Some(pose) => {
+                            let rotation: [f64; 9] =
+                                std::array::from_fn(|k| pose.rotation[k / 3][k % 3]);
+                            volume.add(
+                                frame.gpu(),
+                                &grid,
+                                &d.points,
+                                &camera,
+                                (&rotation, &pose.translation),
+                            )
+                        }
+                        None => Ok(Vec::new()),
+                    };
+                    let tsdf_ms = start.elapsed().as_secs_f64() * 1000.0;
+                    let tsdf = match tsdf {
+                        Ok(s) => {
+                            surface = s;
+                            format!(", TSDF surface {} points in {tsdf_ms:.1} ms", surface.len())
+                        }
+                        Err(e) => {
+                            ok = false;
+                            format!(", TSDF failed: {e}")
+                        }
+                    };
                     format!(
-                        ", fused in {ms:.1} ms into {} points{rms}",
+                        ", fused in {ms:.1} ms into {} points{rms}{tsdf}",
                         fusion.model().len()
                     )
                 };
@@ -284,6 +327,19 @@ fn headless_depth(args: &[String]) -> ExitCode {
             Ok(()) => println!(
                 "{} {what} points written to {}",
                 points.len(),
+                path.display()
+            ),
+            Err(e) => {
+                eprintln!("{}: {e}", path.display());
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    if let Some(path) = &surface_out {
+        match depth::write_ply(path, &surface) {
+            Ok(()) => println!(
+                "{} TSDF surface points written to {}",
+                surface.len(),
                 path.display()
             ),
             Err(e) => {
