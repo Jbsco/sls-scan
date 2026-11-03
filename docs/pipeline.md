@@ -158,6 +158,11 @@ time shortlists motions, overlap of all points picks one, and point-to-plane ICP
 it. Optional markers on a mat, when three or more are seen, give a pose in the mat's
 frame instead. Scale bars are measured in the merged cloud and reported.
 
+`register.register_views` places views taken in order around an object. Each view
+registers to the one before, then rounds of ICP refine every view against all others
+(D70). `slscan view-bench` runs this on synthetic views of a part a metre across and
+reports pose and scale bar errors against the truth.
+
 ## Virtual bench
 
 `slscan simulate` writes a synthetic calibration capture and three scenes (`plate`,
