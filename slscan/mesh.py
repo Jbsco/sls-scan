@@ -1,8 +1,8 @@
-"""Triangle meshes from a TSDF volume by surface nets. Each cell between eight observed
-voxels whose distances change sign gets one vertex, the mean of its edges' zero
-crossings, and each crossing edge joins the four cells around it in a quad facing the
-side where the distance is positive, split along the diagonal that leaves the larger
-smallest triangle."""
+"""Triangle meshes from a TSDF volume by surface nets, and their export as PLY, OBJ and
+STL. Each cell between eight observed voxels whose distances change sign gets one vertex,
+the mean of its edges' zero crossings, and each crossing edge joins the four cells around
+it in a quad facing the side where the distance is positive, split along the diagonal
+that leaves the larger smallest triangle."""
 
 import numpy as np
 
@@ -84,3 +84,36 @@ def face_normals(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:
     n = np.cross(b - a, c - a)
     length = np.linalg.norm(n, axis=1, keepdims=True)
     return n / np.where(length > 0, length, 1.0)
+
+
+def write_mesh(path: str, vertices: np.ndarray, faces: np.ndarray) -> None:
+    """Write a mesh as binary PLY, ASCII OBJ or binary STL by the path's extension."""
+    if path.endswith(".obj"):
+        with open(path, "w", encoding="ascii") as f:
+            for p in vertices:
+                f.write(f"v {p[0]:.9g} {p[1]:.9g} {p[2]:.9g}\n")
+            for t in faces + 1:
+                f.write(f"f {t[0]} {t[1]} {t[2]}\n")
+    elif path.endswith(".stl"):
+        records = np.zeros(len(faces), dtype=[("normal", "<f4", 3), ("corners", "<f4", (3, 3)),
+                                              ("attribute", "<u2")])
+        records["normal"] = face_normals(vertices, faces)
+        records["corners"] = vertices[faces]
+        with open(path, "wb") as f:
+            f.write(b"\0" * 80)
+            f.write(np.uint32(len(faces)).tobytes())
+            f.write(records.tobytes())
+    elif path.endswith(".ply"):
+        header = ("ply\nformat binary_little_endian 1.0\n"
+                  f"element vertex {len(vertices)}\nproperty float x\nproperty float y\n"
+                  f"property float z\nelement face {len(faces)}\n"
+                  "property list uchar int vertex_indices\nend_header\n")
+        rows = np.zeros(len(faces), dtype=[("n", "u1"), ("v", "<i4", 3)])
+        rows["n"] = 3
+        rows["v"] = faces
+        with open(path, "wb") as f:
+            f.write(header.encode("ascii"))
+            f.write(np.ascontiguousarray(vertices, dtype="<f4").tobytes())
+            f.write(rows.tobytes())
+    else:
+        raise ValueError(f"{path}: mesh files end in .ply, .obj or .stl")

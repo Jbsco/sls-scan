@@ -28,3 +28,16 @@ def test_sphere_mesh_is_closed_and_faces_out():
     assert np.all(outward > 0)
     _, fitted, rms = geometry.fit_sphere(vertices)
     assert abs(fitted - radius) < 0.00001 and rms < 0.000005
+
+
+def test_mesh_files_round_trip(tmp_path):
+    vertices, faces = mesh.surface_nets(sphere_volume(np.array([0.0, 0.0, 0.5]), 0.004))
+    for name in ("m.ply", "m.obj", "m.stl"):
+        mesh.write_mesh(str(tmp_path / name), vertices, faces)
+    assert np.allclose(geometry.read_ply(str(tmp_path / "m.ply")), vertices, atol=1e-7)
+    lines = (tmp_path / "m.obj").read_text().splitlines()
+    assert sum(line.startswith("v ") for line in lines) == len(vertices)
+    assert sum(line.startswith("f ") for line in lines) == len(faces)
+    stl = (tmp_path / "m.stl").read_bytes()
+    assert int(np.frombuffer(stl[80:84], "<u4")[0]) == len(faces)
+    assert len(stl) == 84 + 50 * len(faces)
