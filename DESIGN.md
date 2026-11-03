@@ -916,3 +916,24 @@ percentile of 0.1 µm.
 On a Radeon RX 7900 GRE the four frames take 13.8 ms with upload and readback. The
 25-frame sweep of D51 at 0.5 mm voxels and 1 mm truncation, 17.9 million voxels, takes
 77.9 ms, and 209 of its 9.3 million observed voxels differ in weight.
+
+## D53. TSDF surface on the GPU (2026-11-02)
+
+A second entry point of `app/src/tsdf.wgsl` finds the surface of D51 on the device, so
+the application can draw it without reading the volume back. One invocation per voxel
+checks its next voxel along each axis. It appends each zero crossing between observed
+voxels to a list through an atomic counter, with its key: three times the flat index of
+its lower voxel plus its axis. `tsdf.surface` returns the same keys, and `slscan
+tsdf-vectors` writes the NumPy surface with them.
+
+`sls-scan tsdf-check` matches GPU and NumPy crossings by key. On the four-frame vectors
+at 1 mm voxels, all 9,917 crossings match, with a median distance of 0.021 µm and a
+99th percentile of 0.31 µm. Two lie beyond 5 µm. It seems likely that a crossing between
+two nearly equal distances moves far for a small change in either.
+
+The check allows 0.5 % of crossings on one side only, a 99th percentile of 1 µm and
+0.1 % beyond 5 µm. The 25-frame sweep at 0.5 mm voxels has 64,309 crossings against 64,303, 48 on one side
+only, and 60 beyond 5 µm.
+
+On a Radeon RX 7900 GRE extraction takes 0.8 ms for 624,870 voxels and 3.4 ms for 17.9
+million, with readback of the points.
