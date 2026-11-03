@@ -1433,7 +1433,7 @@ fn tsdf_check(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     };
     let read = |name: &str| std::fs::read(dir.join(name));
-    let (meta, frames, poses, tsdf, weight, surface, keys) = match (
+    let (meta, frames, poses, tsdf, weight, surface, keys, mesh_files) = match (
         read("meta.json"),
         read("frames.bin"),
         read("poses.bin"),
@@ -1441,8 +1441,9 @@ fn tsdf_check(args: &[String]) -> ExitCode {
         read("weight.bin"),
         read("surface.bin"),
         read("surface-keys.bin"),
+        read("mesh-vertices.bin").and_then(|v| read("mesh-faces.bin").map(|f| (v, f))),
     ) {
-        (Ok(m), Ok(f), Ok(p), Ok(t), Ok(w), Ok(s), Ok(k)) => (
+        (Ok(m), Ok(f), Ok(p), Ok(t), Ok(w), Ok(s), Ok(k), Ok(mf)) => (
             m,
             doubles(&f),
             doubles(&p),
@@ -1452,6 +1453,7 @@ fn tsdf_check(args: &[String]) -> ExitCode {
             k.chunks_exact(4)
                 .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
                 .collect::<Vec<u32>>(),
+            mf,
         ),
         _ => {
             eprintln!("TSDF vectors missing in {}", dir.display());
@@ -1596,7 +1598,42 @@ fn tsdf_check(args: &[String]) -> ExitCode {
     let surface_ok = (missing + extra) as f64 <= 0.005 * reference
         && surface_p99 <= 1.0
         && beyond as f64 <= 0.005 * reference;
-    if volume_ok && surface_ok {
+    let reference_vertices = doubles(&mesh_files.0);
+    let reference_faces: Vec<u32> = mesh_files
+        .1
+        .chunks_exact(4)
+        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
+    let start = Instant::now();
+    let mesh = slscan_app::mesh::surface_nets(&spec, &tsdf, &weight);
+    let mesh_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let same_faces = mesh
+        .faces
+        .iter()
+        .flatten()
+        .copied()
+        .eq(reference_faces.iter().copied());
+    let largest = if mesh.vertices.len() * 3 == reference_vertices.len() {
+        mesh.vertices
+            .iter()
+            .flatten()
+            .zip(&reference_vertices)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0, f64::max)
+    } else {
+        f64::INFINITY
+    };
+    println!(
+        "mesh of the NumPy volume in {mesh_ms:.1} ms: {} vertices against {}, {} triangles against {}, triangles {}, vertex difference largest {:.6} µm",
+        mesh.vertices.len(),
+        reference_vertices.len() / 3,
+        mesh.faces.len(),
+        reference_faces.len() / 3,
+        if same_faces { "equal" } else { "differ" },
+        largest * 1e6
+    );
+    let mesh_ok = same_faces && largest <= 1e-9;
+    if volume_ok && surface_ok && mesh_ok {
         println!("TSDF check: GPU matches the NumPy reference");
         ExitCode::SUCCESS
     } else {
