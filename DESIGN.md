@@ -1313,3 +1313,33 @@ The views are ray-cast points, not matched stereo pairs, so they lack matching e
 edges and holes where the pattern misses. A view that fails to register to its
 predecessor misplaces every later view. Each pair's record keeps its overlap for that
 check.
+
+## D71. Stereo views on the static-view bench (2026-11-03)
+
+`slscan view-bench --stereo` renders each view as a pattern-lit pair for the metre head
+of D45 and matches it directly at an 8 px step. Its views have matching errors at edges,
+and holes wherever both cameras and the light do not all see a surface. Truth for each
+view is its left camera's pose.
+
+The command counts views placed within 10 mm of truth and exits with an error when one
+is not. A scale bar check alone misses a misplaced view, because it crops each sphere at
+its true position: a run with views misplaced by up to 2.8 m read both bars within
+0.11 mm. Wrong matches seen so far land 0.29 m or more from truth, and calibration
+offsets stay under 2 mm.
+
+Camera placement decides whether views behind a part register. From 1.1 m out and 0.8 m
+up, views 144 to 216 degrees around had 66 to 93% of their points on the flat back of
+the wall, and three of nine pairs failed. A flat surface leaves motion along it free,
+the smooth-panel case of D63 and D64. From 0.8 m out and 1.0 m up, the command's
+default, those views see over the wall.
+
+| Calibration | Points per view | Pose error, largest | Scale bar errors | Run time |
+|---|---|---|---|---|
+| True | 7,514 | 0.204 mm, 0.0109 degrees | +0.078 and -0.091 mm | 262 s |
+| Recovered from twelve board poses | 7,394 | 1.665 mm, 0.0946 degrees | -0.126 and +0.008 mm | 250 s |
+
+Matching takes nearly all of each run, and registration takes 5 s. With a recovered
+calibration, pose error rises to 1.7 mm at the view opposite the first and falls to
+0.2 mm at the last, and more ICP rounds leave it there. That shape seems likely to come
+from a fixed offset between recovered and true camera frames, since merged views stay
+consistent and both scale bars read within 0.13 mm. Phase 6 acceptance asks for 0.5 mm.
