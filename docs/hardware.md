@@ -11,10 +11,12 @@ on a stiff bar, a pattern light between them, and a Raspberry Pi 5 as the captur
 | Lenses, near range | 16 mm C-mount, 1" format, rated 10 MP, focus to 0.2 m: Raspberry Pi or Waveshare 16 mm telephoto, one per camera | check vendor | f = 4,638 px, field 157 × 117 mm at 0.5 m |
 | Lenses, a metre | 6 mm CS-mount, one per camera | $25 each | f = 1,739 px, field 0.84 × 0.63 m at 1 m |
 | Capture node | Raspberry Pi 5 with both CSI connectors used, one GPIO line to both trigger inputs, gigabit Ethernet to the host | owned or $80 | Trigger and capture on one clock |
-| Pattern light | Any LED projector showing one random-dot image, or an LED slide projector with a dot slide | low cost | Requirements below |
+| Pattern light | An LED behind a random-dot slide and a lens, or an LED projector showing one random-dot image | low cost | Requirements below; only the LED and slide version switches per frame |
+| Light switch | Logic-level N-channel MOSFET on one Pi GPIO line, in the LED's supply | $2 | Drops the light for chosen frames (`DESIGN.md` D63) |
 | Bar | Steel or carbon fibre, cameras 0.2 m apart for 0.5 m, 0.35 m apart for a metre, toed in | $40 | Aluminium shifts depth scale about 0.01 mm per kelvin at near range |
 | Calibration board | ChArUco: A2 printed on foam board for a metre, 11 × 8 squares of 12 mm, 132 × 96 mm, on glass or ceramic for near range (D44) | $15 or vendor | The measured square size sets the scale |
-| Markers | ArUco markers on a mat or table around the part, 20 to 40 | $5 | Tracking during sweeps, never on the part |
+| Markers, optional | Printed ArUco markers on a mat around the part, 20 to 40 | $5 | Bench work where the part's shape gives tracking little to hold, never on the part (D63) |
+| Polarizers, optional | Linear polarizing film over the light, one polarizing filter per lens, crossed | $20 to $40 | May replace matte spray on glossy surfaces, untried |
 | Scale bars and artifacts | Two bars at a caliper-measured spacing, with spheres of 50 mm or more at their ends for a metre (D45); for near range a 25 mm sphere, a ball bar and a flat, each calibrated | $10 or vendor | Acceptance tests of `docs/accuracy.md` |
 | Spray | Matte scanning spray | $15 to $25 | Only for glossy, black or transparent surfaces |
 | Host | A Linux machine with a Vulkan-capable GPU (AMD or NVIDIA) and Ethernet | owned | Mesa lavapipe runs the same kernels on the CPU without a card |
@@ -38,6 +40,10 @@ on a stiff bar, a pattern light between them, and a Raspberry Pi 5 as the captur
   matching, because soft dots locate more precisely than hard edges.
 - **Light source.** LED. A laser dot projector adds speckle that differs between the two
   cameras.
+- **Switching.** The node turns the LED off for chosen frames through the MOSFET, between
+  exposures, so those frames see the scene under room light (D63). A video projector
+  cannot do this in step with the trigger, since a black frame over HDMI arrives on the
+  projector's own clock.
 - **Brightness.** Enough for exposures of a few milliseconds over the field, so a moving
   scanner does not blur. Ambient light lowers contrast without stopping the match.
 - **Not needed.** Calibration, synchronization, refresh rate, gamma and trigger outputs.
@@ -87,7 +93,10 @@ on a stiff bar, a pattern light between them, and a Raspberry Pi 5 as the captur
 - Glossy paint, black plastic, bare metal and glass return too little light to match.
   A matte scanning spray covers them, and sublimating sprays leave nothing behind after a
   few hours.
-- Markers go on the mat or table around the part, not on the part.
+- Glossy surfaces may also scan through crossed polarizers on the light and both lenses,
+  which suppress mirror reflections of the dots. This is untried.
+- Markers are optional (D63). When used, they go on the mat or table around the part, not
+  on the part.
 
 ## Phase-shift option
 
