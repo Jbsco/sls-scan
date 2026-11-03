@@ -50,10 +50,11 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   refinement, keyed markers defining the object's frame, a merged cloud. Acceptance: two
   scale bars in different orientations measure within 0.5 mm after a 10-view scan of an
   object a metre across.
-- Phase 7, open. Deferred processing and export. Dense matching of selected frames,
-  meshing, hole filling, decimation, alignment to datums, PLY, OBJ and STL export, the
-  residual report. Acceptance: a decimated mesh imports into CAD and its datum points land
-  within 1 mm of their measured positions over a metre.
+- Phase 7, in progress. Deferred processing and export. Dense matching of selected
+  frames, meshing, hole filling, decimation, alignment to datums, PLY, OBJ and STL
+  export, the residual report. Acceptance: a decimated mesh imports into CAD and its
+  datum points land within 1 mm of their measured positions over a metre. Surface nets
+  mesh a TSDF volume and export PLY, OBJ and STL (D57).
 - Phase 8, open. The rig. Stiff bar, camera mounts, the pattern light, trigger wiring,
   handle or tripod adapter, a case for the board and markers, drawings in CAD.
   Acceptance: a calibration before and after carrying the rig to a site agrees within
