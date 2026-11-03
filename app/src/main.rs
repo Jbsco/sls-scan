@@ -140,11 +140,11 @@ fn headless_depth(args: &[String]) -> ExitCode {
     let mut surface_out: Option<PathBuf> = None;
     let mut volume_out: Option<PathBuf> = None;
     let mut mesh_out: Option<PathBuf> = None;
-    let mut tool = "python3 -m slscan.cli".to_owned();
+    let mut faces = 0usize;
     for pair in args.chunks(2) {
         let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
             eprintln!(
-                "arguments come in pairs: --node, --params, --frames, --wait, --out, --mode, --surface, --volume, --mesh, --tool"
+                "arguments come in pairs: --node, --params, --frames, --wait, --out, --mode, --surface, --volume, --mesh, --faces"
             );
             return ExitCode::FAILURE;
         };
@@ -156,7 +156,13 @@ fn headless_depth(args: &[String]) -> ExitCode {
             "--surface" => surface_out = Some(PathBuf::from(value)),
             "--volume" => volume_out = Some(PathBuf::from(value)),
             "--mesh" => mesh_out = Some(PathBuf::from(value)),
-            "--tool" => tool.clone_from(value),
+            "--faces" => match value.parse() {
+                Ok(v) => faces = v,
+                Err(_) => {
+                    eprintln!("--faces takes a number");
+                    return ExitCode::FAILURE;
+                }
+            },
             "--frames" => match value.parse() {
                 Ok(v) => frames = v,
                 Err(_) => {
@@ -371,15 +377,19 @@ fn headless_depth(args: &[String]) -> ExitCode {
         }
     }
     if let Some(path) = &mesh_out {
-        let dir = PathBuf::from(format!("{}.volume", path.display()));
-        let meshed = volume.save(&dir).and_then(|()| {
-            let tool = calibration::Tool::parse(&tool).ok_or("no tool command")?;
-            calibration::mesh_volume(&tool, &dir, path, 10.0, 0).map_err(|e| e.to_string())
+        let start = Instant::now();
+        let meshed = volume.mesh(0.01, faces).and_then(|m| {
+            slscan_app::mesh::write_mesh(path, &m)
+                .map(|()| m)
+                .map_err(|e| format!("{}: {e}", path.display()))
         });
         match meshed {
             Ok(m) => println!(
-                "mesh of {} triangles and {} vertices written to {}, {} holes filled",
-                m.triangles, m.vertices, m.out, m.holes
+                "mesh of {} triangles and {} vertices written to {} in {:.1} ms",
+                m.faces.len(),
+                m.vertices.len(),
+                path.display(),
+                start.elapsed().as_secs_f64() * 1000.0
             ),
             Err(e) => {
                 eprintln!("mesh: {e}");
@@ -1413,6 +1423,105 @@ fn depth_check(args: &[String]) -> ExitCode {
 }
 
 #[derive(serde::Deserialize)]
+struct VolumeMeta {
+    lower: [f64; 3],
+    shape: [u32; 3],
+    voxel: f64,
+    truncation: f64,
+}
+
+/// Mesh a saved TSDF volume, as `slscan mesh-volume` does, without Python.
+fn mesh_volume(args: &[String]) -> ExitCode {
+    let Some(dir) = args.first().map(PathBuf::from) else {
+        eprintln!(
+            "usage: sls-scan mesh-volume <volume directory> --out <mesh> [--fill-mm N] [--faces N]"
+        );
+        return ExitCode::FAILURE;
+    };
+    let (mut out, mut fill_mm, mut faces) = (None, 0.0f64, 0usize);
+    for pair in args[1..].chunks(2) {
+        let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
+            eprintln!("arguments come in pairs: --out, --fill-mm, --faces");
+            return ExitCode::FAILURE;
+        };
+        let parsed = match key.as_str() {
+            "--out" => {
+                out = Some(PathBuf::from(value));
+                Ok(())
+            }
+            "--fill-mm" => value.parse().map(|v| fill_mm = v).map_err(|_| ()),
+            "--faces" => value.parse().map(|v| faces = v).map_err(|_| ()),
+            _ => Err(()),
+        };
+        if parsed.is_err() {
+            eprintln!("bad argument {key} {value}");
+            return ExitCode::FAILURE;
+        }
+    }
+    let Some(out) = out else {
+        eprintln!("--out is required");
+        return ExitCode::FAILURE;
+    };
+    let read = |name: &str| std::fs::read(dir.join(name));
+    let (meta, distances, weights) = match (read("meta.json"), read("tsdf.bin"), read("weight.bin"))
+    {
+        (Ok(m), Ok(t), Ok(w)) => (m, floats(&t), floats(&w)),
+        _ => {
+            eprintln!("volume files missing in {}", dir.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let meta: VolumeMeta = match serde_json::from_slice(&meta) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("meta.json: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let spec = tsdf::VolumeSpec {
+        lower: meta.lower,
+        voxel: meta.voxel,
+        truncation: meta.truncation,
+        shape: meta.shape,
+    };
+    if distances.len() != spec.voxels() || weights.len() != spec.voxels() {
+        eprintln!("volume files do not match meta.json");
+        return ExitCode::FAILURE;
+    }
+    let mut clock = Instant::now();
+    let mut lap = || {
+        let ms = clock.elapsed().as_secs_f64() * 1000.0;
+        clock = Instant::now();
+        ms
+    };
+    let mut mesh = slscan_app::mesh::surface_nets(&spec, &distances, &weights);
+    let nets = (mesh.faces.len(), lap());
+    let holes = slscan_app::mesh::fill_holes(&mut mesh, fill_mm / 1000.0);
+    let filled = lap();
+    if faces > 0 {
+        mesh = slscan_app::mesh::decimate(&mesh, faces, 1000.0);
+    }
+    let decimated = lap();
+    if mesh.faces.is_empty() {
+        eprintln!("{}: the volume has no surface", dir.display());
+        return ExitCode::FAILURE;
+    }
+    if let Err(e) = slscan_app::mesh::write_mesh(&out, &mesh) {
+        eprintln!("{}: {e}", out.display());
+        return ExitCode::FAILURE;
+    }
+    println!(
+        "{} triangles in {:.1} ms, {holes} holes filled in {filled:.1} ms, decimated in {decimated:.1} ms; {} vertices and {} triangles written to {}",
+        nets.0,
+        nets.1,
+        mesh.vertices.len(),
+        mesh.faces.len(),
+        out.display()
+    );
+    ExitCode::SUCCESS
+}
+
+#[derive(serde::Deserialize)]
 struct TsdfMeta {
     counts: Vec<usize>,
     step: u32,
@@ -1433,7 +1542,7 @@ fn tsdf_check(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     };
     let read = |name: &str| std::fs::read(dir.join(name));
-    let (meta, frames, poses, tsdf, weight, surface, keys) = match (
+    let (meta, frames, poses, tsdf, weight, surface, keys, mesh_files) = match (
         read("meta.json"),
         read("frames.bin"),
         read("poses.bin"),
@@ -1441,8 +1550,9 @@ fn tsdf_check(args: &[String]) -> ExitCode {
         read("weight.bin"),
         read("surface.bin"),
         read("surface-keys.bin"),
+        read("mesh-vertices.bin").and_then(|v| read("mesh-faces.bin").map(|f| (v, f))),
     ) {
-        (Ok(m), Ok(f), Ok(p), Ok(t), Ok(w), Ok(s), Ok(k)) => (
+        (Ok(m), Ok(f), Ok(p), Ok(t), Ok(w), Ok(s), Ok(k), Ok(mf)) => (
             m,
             doubles(&f),
             doubles(&p),
@@ -1452,6 +1562,7 @@ fn tsdf_check(args: &[String]) -> ExitCode {
             k.chunks_exact(4)
                 .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
                 .collect::<Vec<u32>>(),
+            mf,
         ),
         _ => {
             eprintln!("TSDF vectors missing in {}", dir.display());
@@ -1596,7 +1707,42 @@ fn tsdf_check(args: &[String]) -> ExitCode {
     let surface_ok = (missing + extra) as f64 <= 0.005 * reference
         && surface_p99 <= 1.0
         && beyond as f64 <= 0.005 * reference;
-    if volume_ok && surface_ok {
+    let reference_vertices = doubles(&mesh_files.0);
+    let reference_faces: Vec<u32> = mesh_files
+        .1
+        .chunks_exact(4)
+        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        .collect();
+    let start = Instant::now();
+    let mesh = slscan_app::mesh::surface_nets(&spec, &tsdf, &weight);
+    let mesh_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let same_faces = mesh
+        .faces
+        .iter()
+        .flatten()
+        .copied()
+        .eq(reference_faces.iter().copied());
+    let largest = if mesh.vertices.len() * 3 == reference_vertices.len() {
+        mesh.vertices
+            .iter()
+            .flatten()
+            .zip(&reference_vertices)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0, f64::max)
+    } else {
+        f64::INFINITY
+    };
+    println!(
+        "mesh of the NumPy volume in {mesh_ms:.1} ms: {} vertices against {}, {} triangles against {}, triangles {}, vertex difference largest {:.6} µm",
+        mesh.vertices.len(),
+        reference_vertices.len() / 3,
+        mesh.faces.len(),
+        reference_faces.len() / 3,
+        if same_faces { "equal" } else { "differ" },
+        largest * 1e6
+    );
+    let mesh_ok = same_faces && largest <= 1e-9;
+    if volume_ok && surface_ok && mesh_ok {
         println!("TSDF check: GPU matches the NumPy reference");
         ExitCode::SUCCESS
     } else {
@@ -1726,6 +1872,7 @@ fn main() -> ExitCode {
         Some("depth-check") => return depth_check(&args[2..]),
         Some("fusion-check") => return fusion_check(&args[2..]),
         Some("tsdf-check") => return tsdf_check(&args[2..]),
+        Some("mesh-volume") => return mesh_volume(&args[2..]),
         Some("replay") => return replay(&args[2..]),
         _ => {}
     }

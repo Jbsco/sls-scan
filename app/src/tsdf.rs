@@ -423,6 +423,26 @@ impl Live {
             .map_err(|e| format!("{}: {e}", dir.display()))
     }
 
+    /// Mesh the volume by surface nets, close holes up to `fill_m` around, and decimate
+    /// to `faces` triangles when it is not 0.
+    pub fn mesh(&self, fill_m: f64, faces: usize) -> Result<crate::mesh::Mesh, String> {
+        let Some(integrator) = &self.integrator else {
+            return Err("no volume yet".into());
+        };
+        let (distances, weights) = integrator.read()?;
+        let mut mesh = crate::mesh::surface_nets(integrator.spec(), &distances, &weights);
+        if fill_m > 0.0 {
+            crate::mesh::fill_holes(&mut mesh, fill_m);
+        }
+        if faces > 0 {
+            mesh = crate::mesh::decimate(&mesh, faces, 1000.0);
+        }
+        if mesh.faces.is_empty() {
+            return Err("the volume has no surface".into());
+        }
+        Ok(mesh)
+    }
+
     /// Start again with no volume.
     pub fn reset(&mut self) {
         self.integrator = None;

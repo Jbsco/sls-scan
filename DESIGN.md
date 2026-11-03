@@ -1169,3 +1169,21 @@ thread runs `slscan mesh-volume --json` through the tool command calibration use
 the window never waits on meshing. `sls-scan depth --mesh` runs these steps headless,
 closing holes up to 10 mm, and the application gate exports a mesh that way. Four
 frames of a stand-in sweep export as 30,128 triangles.
+
+## D66. Meshing in Rust (2026-11-03)
+
+`app/src/mesh.rs` ports surface nets, hole filling and quadric decimation, so the
+application meshes without Python. Surface nets follow `mesh.surface_nets` step for step.
+`sls-scan tsdf-check` meshes the NumPy volume that `slscan tsdf-vectors` writes and
+compares it with NumPy's mesh: all 9,501 vertices match exactly, and all 18,228
+triangles are equal, in 19.4 ms.
+
+Decimation keeps NumPy's quadrics, boundary planes and flip check, but its heap order and
+3 × 3 solve differ, so results are compared, not steps. On the 25-frame sweep's volume at
+0.5 mm, 123,752 triangles decimate to 12,000 in 685 ms, where NumPy takes 27.5 s. Both
+meshes lie 10.8 µm off the full mesh at the 99th percentile, at most 27.8 µm in Rust and
+34.5 µm in NumPy.
+
+The Export mesh button and `sls-scan depth --mesh` now mesh the live volume in the depth
+worker and write the file from a thread. `sls-scan mesh-volume` meshes a saved volume as
+`slscan mesh-volume` does, and the Python mesher stays as the reference.

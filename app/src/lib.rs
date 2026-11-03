@@ -7,6 +7,7 @@ pub mod coarse;
 pub mod depth;
 pub mod fuse;
 pub mod gpu;
+pub mod mesh;
 pub mod protocol;
 pub mod rectify;
 pub mod refine;
