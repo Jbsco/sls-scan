@@ -16,6 +16,7 @@ on a stiff bar, a pattern light between them, and a Raspberry Pi 5 as the captur
 | Bar | Steel or carbon fibre, cameras 0.2 m apart for 0.5 m, 0.35 m apart for a metre, toed in | $40 | Aluminium shifts depth scale about 0.01 mm per kelvin at near range |
 | Calibration board | ChArUco: A2 printed on foam board for a metre, 11 × 8 squares of 12 mm, 132 × 96 mm, on glass or ceramic for near range (D44) | $15 or vendor | The measured square size sets the scale |
 | Markers, optional | Printed ArUco markers on a mat around the part, 20 to 40 | $5 | Bench work where the part's shape gives tracking little to hold, never on the part (D63) |
+| Reference dots, optional | Removable paper or vinyl dots of 6 to 10 mm, one every 100 to 150 mm along the path | $5 | Long smooth panels only, peeled off afterwards (D64) |
 | Polarizers, optional | Linear polarizing film over the light, one polarizing filter per lens, crossed | $20 to $40 | May replace matte spray on glossy surfaces, untried |
 | Scale bars and artifacts | Two bars at a caliper-measured spacing, with spheres of 50 mm or more at their ends for a metre (D45); for near range a 25 mm sphere, a ball bar and a flat, each calibrated | $10 or vendor | Acceptance tests of `docs/accuracy.md` |
 | Spray | Matte scanning spray | $15 to $25 | Only for glossy, black or transparent surfaces |
@@ -97,6 +98,9 @@ on a stiff bar, a pattern light between them, and a Raspberry Pi 5 as the captur
   which suppress mirror reflections of the dots. This is untried.
 - Markers are optional (D63). When used, they go on the mat or table around the part, not
   on the part.
+- Long smooth panels give tracking nothing to hold along their surface. Removable dots on
+  their featureless spans, one every 100 to 150 mm, fix that and peel off afterwards
+  (D64). Shapes with relief need nothing.
 
 ## Phase-shift option
 
