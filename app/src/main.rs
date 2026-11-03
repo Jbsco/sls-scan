@@ -1423,6 +1423,105 @@ fn depth_check(args: &[String]) -> ExitCode {
 }
 
 #[derive(serde::Deserialize)]
+struct VolumeMeta {
+    lower: [f64; 3],
+    shape: [u32; 3],
+    voxel: f64,
+    truncation: f64,
+}
+
+/// Mesh a saved TSDF volume, as `slscan mesh-volume` does, without Python.
+fn mesh_volume(args: &[String]) -> ExitCode {
+    let Some(dir) = args.first().map(PathBuf::from) else {
+        eprintln!(
+            "usage: sls-scan mesh-volume <volume directory> --out <mesh> [--fill-mm N] [--faces N]"
+        );
+        return ExitCode::FAILURE;
+    };
+    let (mut out, mut fill_mm, mut faces) = (None, 0.0f64, 0usize);
+    for pair in args[1..].chunks(2) {
+        let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
+            eprintln!("arguments come in pairs: --out, --fill-mm, --faces");
+            return ExitCode::FAILURE;
+        };
+        let parsed = match key.as_str() {
+            "--out" => {
+                out = Some(PathBuf::from(value));
+                Ok(())
+            }
+            "--fill-mm" => value.parse().map(|v| fill_mm = v).map_err(|_| ()),
+            "--faces" => value.parse().map(|v| faces = v).map_err(|_| ()),
+            _ => Err(()),
+        };
+        if parsed.is_err() {
+            eprintln!("bad argument {key} {value}");
+            return ExitCode::FAILURE;
+        }
+    }
+    let Some(out) = out else {
+        eprintln!("--out is required");
+        return ExitCode::FAILURE;
+    };
+    let read = |name: &str| std::fs::read(dir.join(name));
+    let (meta, distances, weights) = match (read("meta.json"), read("tsdf.bin"), read("weight.bin"))
+    {
+        (Ok(m), Ok(t), Ok(w)) => (m, floats(&t), floats(&w)),
+        _ => {
+            eprintln!("volume files missing in {}", dir.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let meta: VolumeMeta = match serde_json::from_slice(&meta) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("meta.json: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let spec = tsdf::VolumeSpec {
+        lower: meta.lower,
+        voxel: meta.voxel,
+        truncation: meta.truncation,
+        shape: meta.shape,
+    };
+    if distances.len() != spec.voxels() || weights.len() != spec.voxels() {
+        eprintln!("volume files do not match meta.json");
+        return ExitCode::FAILURE;
+    }
+    let mut clock = Instant::now();
+    let mut lap = || {
+        let ms = clock.elapsed().as_secs_f64() * 1000.0;
+        clock = Instant::now();
+        ms
+    };
+    let mut mesh = slscan_app::mesh::surface_nets(&spec, &distances, &weights);
+    let nets = (mesh.faces.len(), lap());
+    let holes = slscan_app::mesh::fill_holes(&mut mesh, fill_mm / 1000.0);
+    let filled = lap();
+    if faces > 0 {
+        mesh = slscan_app::mesh::decimate(&mesh, faces, 1000.0);
+    }
+    let decimated = lap();
+    if mesh.faces.is_empty() {
+        eprintln!("{}: the volume has no surface", dir.display());
+        return ExitCode::FAILURE;
+    }
+    if let Err(e) = slscan_app::mesh::write_mesh(&out, &mesh) {
+        eprintln!("{}: {e}", out.display());
+        return ExitCode::FAILURE;
+    }
+    println!(
+        "{} triangles in {:.1} ms, {holes} holes filled in {filled:.1} ms, decimated in {decimated:.1} ms; {} vertices and {} triangles written to {}",
+        nets.0,
+        nets.1,
+        mesh.vertices.len(),
+        mesh.faces.len(),
+        out.display()
+    );
+    ExitCode::SUCCESS
+}
+
+#[derive(serde::Deserialize)]
 struct TsdfMeta {
     counts: Vec<usize>,
     step: u32,
@@ -1773,6 +1872,7 @@ fn main() -> ExitCode {
         Some("depth-check") => return depth_check(&args[2..]),
         Some("fusion-check") => return fusion_check(&args[2..]),
         Some("tsdf-check") => return tsdf_check(&args[2..]),
+        Some("mesh-volume") => return mesh_volume(&args[2..]),
         Some("replay") => return replay(&args[2..]),
         _ => {}
     }
