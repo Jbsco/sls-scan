@@ -1,5 +1,6 @@
 //! Truncated signed distance fusion on the GPU: one WGSL invocation per voxel and depth
-//! frame, following `depth_grid` and `integrate` in `slscan/tsdf.py`.
+//! frame, and one per voxel for the surface, following `depth_grid`, `integrate` and
+//! `surface` in `slscan/tsdf.py`.
 
 use crate::gpu::{download, Gpu};
 use eframe::wgpu;
@@ -78,6 +79,7 @@ pub struct Integrator {
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
+    surface: wgpu::ComputePipeline,
     spec: VolumeSpec,
     tsdf: wgpu::Buffer,
     weight: wgpu::Buffer,
@@ -97,14 +99,18 @@ impl Integrator {
             label: Some("tsdf"),
             source: wgpu::ShaderSource::Wgsl(include_str!("tsdf.wgsl").into()),
         });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("tsdf"),
-            layout: None,
-            module: &module,
-            entry_point: Some("integrate"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
+        let entry = |name: &str| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(name),
+                layout: None,
+                module: &module,
+                entry_point: Some(name),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                cache: None,
+            })
+        };
+        let pipeline = entry("integrate");
+        let surface = entry("surface");
         let filled = |label: &str, value: f32| {
             let bytes: Vec<u8> = std::iter::repeat_n(value.to_le_bytes(), spec.voxels())
                 .flatten()
@@ -120,6 +126,7 @@ impl Integrator {
         Self {
             queue: gpu.queue.clone(),
             pipeline,
+            surface,
             spec,
             tsdf,
             weight,
@@ -147,13 +154,7 @@ impl Integrator {
         });
         let b: [f64; 3] =
             std::array::from_fn(|i| -(0..3).map(|j| m[i * 3 + j] * translation[j]).sum::<f64>());
-        let voxels = self.spec.voxels();
-        let groups =
-            u32::try_from(voxels.div_ceil(WORKGROUP as usize)).map_err(|e| e.to_string())?;
-        let (x, y) = (
-            groups.clamp(1, MAX_GROUPS),
-            groups.div_ceil(MAX_GROUPS).max(1),
-        );
+        let (x, y) = self.groups()?;
         let [nx, ny, nz] = self.spec.shape;
         let mut uniform = Vec::with_capacity(128);
         for v in [nx, ny, nz, x * WORKGROUP, grid.width, grid.height] {
@@ -235,6 +236,117 @@ impl Integrator {
         }
         self.queue.submit([encoder.finish()]);
         Ok(())
+    }
+
+    /// Workgroups along x and y for one invocation per voxel.
+    fn groups(&self) -> Result<(u32, u32), String> {
+        let voxels = self.spec.voxels();
+        let groups =
+            u32::try_from(voxels.div_ceil(WORKGROUP as usize)).map_err(|e| e.to_string())?;
+        Ok((
+            groups.clamp(1, MAX_GROUPS),
+            groups.div_ceil(MAX_GROUPS).max(1),
+        ))
+    }
+
+    /// Zero crossings between observed neighbours along each axis, as `tsdf.surface` finds
+    /// them, with their keys, in no fixed order. Fails when there are more than `capacity`.
+    pub fn surface(&self, capacity: u32) -> Result<(Vec<[f32; 3]>, Vec<u32>), String> {
+        let (x, y) = self.groups()?;
+        let [nx, ny, nz] = self.spec.shape;
+        let mut uniform = Vec::with_capacity(128);
+        for v in [nx, ny, nz, x * WORKGROUP, 0, 0] {
+            uniform.extend_from_slice(&v.to_le_bytes());
+        }
+        let s = &self.spec;
+        let head = [
+            0.0,
+            0.0,
+            s.lower[0],
+            s.lower[1],
+            s.lower[2],
+            s.voxel,
+            s.truncation,
+        ];
+        for v in head.into_iter().chain([0.0; 4]) {
+            uniform.extend_from_slice(&(v as f32).to_le_bytes());
+        }
+        uniform.extend_from_slice(&capacity.to_le_bytes());
+        uniform.extend_from_slice(&[0u8; 14 * 4]);
+        let init = |label: &str, contents: &[u8]| {
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                })
+        };
+        let params = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("params"),
+                contents: &uniform,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+        let count = init("count", &[0u8; 4]);
+        let slots = capacity.max(1) as usize;
+        let points = init("points", &vec![0u8; slots * 12]);
+        let keys = init("keys", &vec![0u8; slots * 4]);
+        let entries: Vec<wgpu::BindGroupEntry> = [
+            (0, &params),
+            (2, &self.tsdf),
+            (3, &self.weight),
+            (4, &count),
+            (5, &points),
+            (6, &keys),
+        ]
+        .into_iter()
+        .map(|(binding, buffer)| wgpu::BindGroupEntry {
+            binding,
+            resource: buffer.as_entire_binding(),
+        })
+        .collect();
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("surface"),
+            layout: &self.surface.get_bind_group_layout(0),
+            entries: &entries,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("surface"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("surface"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.surface);
+            pass.set_bind_group(0, &bind_group, &[]);
+            pass.dispatch_workgroups(x, y, 1);
+        }
+        self.queue.submit([encoder.finish()]);
+        let found = download(&self.device, &self.queue, &count, 4)?;
+        let found = u32::from_le_bytes([found[0], found[1], found[2], found[3]]);
+        if found > capacity {
+            return Err(format!("{found} surface points, more than {capacity}"));
+        }
+        if found == 0 {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let n = u64::from(found);
+        let coords = download(&self.device, &self.queue, &points, n * 12)?;
+        let keys = download(&self.device, &self.queue, &keys, n * 4)?;
+        let floats: Vec<f32> = coords
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect();
+        Ok((
+            floats.chunks_exact(3).map(|p| [p[0], p[1], p[2]]).collect(),
+            keys.chunks_exact(4)
+                .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                .collect(),
+        ))
     }
 
     /// The volume's distances and weights.
