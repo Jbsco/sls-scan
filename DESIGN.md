@@ -1135,3 +1135,28 @@ markers optional, so it no longer waits on hardware. Large smooth panels at a me
 the weak case, and a virtual bench test of a curved panel with one crease comes next.
 Glossy surfaces reflect the dots away from the cameras. Crossed polarizers on the light
 and both lenses may replace matte spray there, which only the rig can show.
+
+## D64. Removable dots on long smooth panels (2026-11-03)
+
+A point-frame study tracked a camera sliding 1.1 m along a panel 2 m long at a metre, in
+40 frames of about 33,000 points with 30 µm of noise, from geometry alone:
+
+| Panel | Pose drift |
+|---|---|
+| Cylinder of 1.5 m radius | 1,149 mm |
+| Same, with a 4° crease along the slide | 1,165 mm |
+| Same, with the crease across the slide | 440 mm |
+| Curved both ways, radii of 1.5 m and 3 m | 21 mm |
+
+ICP cannot see motion along a smooth panel, and a crease fixes only motion across it,
+only while it is in view. A stationary projector casting texture on the panel was set
+aside, since the scanner and its operator shadow it. An inertial sensor drifts by
+centimetres within seconds. A third camera tracking the room would add hardware and
+software for a precision nobody has measured.
+
+We chose removable dots for long smooth panels, as the least preparation that keeps pose
+there. Paper or vinyl dots of 6 to 10 mm go about every 100 to 150 mm along the path, on
+featureless spans only, and peel off afterwards. The light-off frames of D63 see them
+under room light. Complex shapes such as cavities, mechanical parts and sculptures stay
+geometry-only with no preparation. Detecting, triangulating and matching dots between
+frames comes next.
