@@ -446,6 +446,30 @@ def triangulate(rect: Rectification, left_pts: np.ndarray, right_pts: np.ndarray
     return x[depth_ok] @ rect.left_rotation
 
 
+def preview_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
+                    near_m: float, far_m: float, scale: int = 8, min_level: float = 6.0,
+                    block: int = 7, min_correlation: float = 0.6, margin: float = 0.05,
+                    fill: int = 2):
+    """Match every reduced pixel that block_disparity_small matches at 1/scale resolution
+    and whose block of the rectified left image averages min_level or more, with no
+    refinement, for a preview. Each match stands at the centre of its scale x scale block.
+    Returns the rectification, the left points (N, 2) and the right points (N, 2)."""
+    rect = rectify(cal)
+    rl = cv2.remap(left, *rect.left_maps, cv2.INTER_LINEAR)
+    rr = cv2.remap(right, *rect.right_maps, cv2.INTER_LINEAR)
+    small, _, _ = block_disparity_small(rl, rr, disparity_at(rect, far_m),
+                                        disparity_at(rect, near_m), scale, block,
+                                        min_correlation, margin, fill)
+    h, w = small.shape
+    sums = rl[:h * scale, :w * scale].reshape(h, scale, w, scale).sum(axis=(1, 3))
+    lit = sums >= min_level * scale * scale
+    ys, xs = np.nonzero(np.isfinite(small) & lit)
+    left_pts = np.column_stack([xs, ys]).astype(np.float64) * scale + (scale - 1) / 2
+    right_pts = left_pts.copy()
+    right_pts[:, 0] -= small[ys, xs].astype(np.float64) * scale
+    return rect, left_pts, right_pts
+
+
 def depth_points(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
                  near_m: float, far_m: float, step: int = 8, window: int = 21,
                  min_level: float = 6.0, order: int = 1) -> tuple[np.ndarray, Rectification]:
