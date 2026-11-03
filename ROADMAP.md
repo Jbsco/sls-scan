@@ -36,8 +36,8 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   15 depth frames per second at 1.6 MP on either machine's GPU, 3 or more on the CPU
   fallback, and kernel outputs within tolerance of the Phase 2 reference on recorded
   frames. Its kernels (D29, D31, D35) and CPU triangulation (D48) give a 61 ms plate
-  frame on a desktop GPU (D38), live in the application (D40). Recorded stand-in pairs
-  match NumPy (D47). An unrefined preview reaches 7 per second on llvmpipe (D49).
+  frame on a desktop GPU (D38), live (D40). Recorded pairs (D47) and a TSDF kernel (D52)
+  match NumPy. Unrefined previews reach 7 per second on llvmpipe (D49).
 - Phase 5, in progress. Continuous scanning. Pose tracking from geometry and from markers
   on the mat around the part, TSDF fusion of the depth stream, loop closure on revisited
   areas. Acceptance: a sweep around a part fuses to a model whose ball bar is within 0.05
