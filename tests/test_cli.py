@@ -154,13 +154,16 @@ def test_depth_params_command_matches_block_matching_search(tmp_path):
     assert cli.main(["depth-params", "--head", "stereo", "--out", str(out)]) == 0
     params = json.loads(out.read_text())
     assert set(params) == {"width", "height", "window", "iterations", "max_move",
-                           "min_correlation", "coarse", "depth", "cameras"}
+                           "min_correlation", "coarse", "depth", "cameras", "preview"}
     assert set(params["cameras"]) == {"left", "right"}
     head = synthetic.stereo_head()
     cal = synthetic.true_stereo_calibration(head, synthetic.SMALL_BOARD)
     rect = stereo.rectify(cal)
     lo, count = stereo.search_range(stereo.disparity_at(rect, 0.6), stereo.disparity_at(rect, 0.4))
     assert (params["coarse"]["lo"], params["coarse"]["count"]) == (lo, count)
+    lo, count = stereo.search_range(stereo.disparity_at(rect, 0.6), stereo.disparity_at(rect, 0.4),
+                                    8)
+    assert params["preview"] == {"scale": 8, "lo": lo, "count": count}
     assert (params["width"], params["height"]) == (cal.left.width, cal.left.height)
     assert cli.main(["depth-params", "--head", "stereo", "--out", str(out), "--json"]) == 0
 

@@ -81,18 +81,22 @@ def depth_parameters(cal: StereoCalibration, near_m: float, far_m: float, step: 
                      window: int = 25, iterations: int = 20, min_level: float = 6.0,
                      max_move: float = 3.0, min_correlation: float = 0.95, scale: int = 4,
                      block: int = 7, coarse_correlation: float = 0.6, margin: float = 0.05,
-                     fill: int = 2) -> dict:
+                     fill: int = 2, preview_scale: int = 8) -> dict:
     """Return everything the application's depth frame takes for one calibration: image
     size, matching settings, the block matching search and settings, the depth bounds
-    and sampling, and both cameras' rectification."""
+    and sampling, both cameras' rectification, and the preview's block matching scale and
+    search."""
     rect = rectify(cal)
-    lo, count = search_range(disparity_at(rect, far_m), disparity_at(rect, near_m), scale)
+    d_min, d_max = disparity_at(rect, far_m), disparity_at(rect, near_m)
+    lo, count = search_range(d_min, d_max, scale)
+    preview_lo, preview_count = search_range(d_min, d_max, preview_scale)
     return {"width": cal.left.width, "height": cal.left.height, "window": window,
             "iterations": iterations, "max_move": max_move, "min_correlation": min_correlation,
             "coarse": {"scale": scale, "block": block, "lo": lo, "count": count,
                        "min_correlation": coarse_correlation, "margin": margin, "fill": fill},
             "depth": {"near": near_m, "far": far_m, "step": step, "min_level": min_level},
-            "cameras": rectification_params(cal, rect)}
+            "cameras": rectification_params(cal, rect),
+            "preview": {"scale": preview_scale, "lo": preview_lo, "count": preview_count}}
 
 
 def coarse_disparity(left: np.ndarray, right: np.ndarray, d_min: float, d_max: float,
