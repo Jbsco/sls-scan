@@ -1113,3 +1113,25 @@ Eight frames of a stand-in sweep gave a 1 mm volume of 21 MB of distances and as
 of weights. It meshes to 15,308 vertices and 29,474 triangles in about 2 s. Against
 truth the mesh reads the ball bar 0.9 µm long and its spheres 46.0 and 48.1 µm small,
 the coarse voxel bias of D51.
+
+## D63. Switchable pattern light, markers optional (2026-11-03)
+
+Pose comes from the part's geometry by default, with no markers and no preparation. ICP
+tracking from geometry closes loops on the virtual bench (D55), and parts with shape in
+every direction constrain it fully. Flat, smooth or turned parts constrain it weakly: on
+the mat of D55 the weakest direction had about 1e-5 of the strongest's weight. Markers on
+a mat around a part stay an option for bench work, never a requirement, and they are
+printed, never projected.
+
+The pattern light becomes switchable. One GPIO line on the Pi drives a MOSFET in the
+light's supply, so the node can drop the light for chosen frames between exposures. A
+frame without the light sees the scene under room light. That serves colour texture
+(Phase 11), tracking from texture a part or mat already has where geometry is weak, and
+printed markers if a job uses them. We chose this over a ring light at each camera,
+since a ring light only helps with retroreflective targets, which are preparation.
+
+Phase 6 registers static views from geometry, a coarse match followed by ICP, with
+markers optional, so it no longer waits on hardware. Large smooth panels at a metre are
+the weak case, and a virtual bench test of a curved panel with one crease comes next.
+Glossy surfaces reflect the dots away from the cameras. Crossed polarizers on the light
+and both lenses may replace matte spray there, which only the rig can show.
