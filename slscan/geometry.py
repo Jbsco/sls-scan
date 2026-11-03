@@ -30,6 +30,16 @@ def fit_sphere(points: np.ndarray) -> tuple[np.ndarray, float, float]:
     return centre, radius, float(np.sqrt(np.mean(residual ** 2)))
 
 
+def rigid_fit(source: np.ndarray, target: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Return the rotation and translation that take source points (N, 3) onto matching
+    target points with least squared distance, by the SVD method of Kabsch."""
+    cs, ct = source.mean(axis=0), target.mean(axis=0)
+    u, _, vt = np.linalg.svd((source - cs).T @ (target - ct))
+    d = np.sign(np.linalg.det(vt.T @ u.T))
+    rotation = vt.T @ np.diag([1.0, 1.0, d]) @ u.T
+    return rotation, ct - rotation @ cs
+
+
 def split_two(points: np.ndarray) -> np.ndarray:
     """Return a 0 or 1 label per point for two clusters along the main axis of the cloud."""
     centred = points - points.mean(axis=0)
