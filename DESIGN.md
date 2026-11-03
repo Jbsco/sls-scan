@@ -1187,3 +1187,25 @@ meshes lie 10.8 µm off the full mesh at the 99th percentile, at most 27.8 µm i
 The Export mesh button and `sls-scan depth --mesh` now mesh the live volume in the depth
 worker and write the file from a thread. `sls-scan mesh-volume` meshes a saved volume as
 `slscan mesh-volume` does, and the Python mesher stays as the reference.
+
+## D67. Tracking from reference dots (2026-11-03)
+
+`track.icp` takes matched dot pairs as point-to-point terms in the same least squares as
+its point-to-plane terms. In `track.fuse`, each frame's dots, given as positions in its
+camera frame, pair with a map of the dots seen so far. A dot pairs with the nearest map
+dot within 30 mm after moving by the previous pose. Paired dots refine their map dot by
+averaging, and unpaired dots join the map. Dots must lie more than twice that radius
+apart, and the scanner must move less than it between frames.
+
+The point-frame study of D64, rerun at 160 frames over the 1.1 m slide, is about 7 mm per
+frame, a hand sweep at 30 fps. With dots every 120 mm and 50 µm of noise on each dot:
+
+| Panel | Dots | Pose drift, largest | Last frame |
+|---|---|---|---|
+| Cylinder of 1.5 m radius | none | 1,091 mm | 1,091 mm |
+| Cylinder of 1.5 m radius | every 120 mm | 0.05 mm | 0.03 mm |
+| Same, crease along the slide | every 120 mm | 0.08 mm | 0.06 mm |
+
+A test slides 0.24 m along such a panel in 24 frames, where tracking drifts 219 mm
+without dots and 0.03 mm with them. Dots enter here as positions. Finding them in
+light-off frames, triangulating them, and the Rust port come next.
