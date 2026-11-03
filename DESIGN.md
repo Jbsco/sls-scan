@@ -1098,3 +1098,18 @@ stay open. `slscan sweep-bench --mesh --fill-mm` sets the limit. At 10 mm the sw
 two holes close, and the ball bar moves from -10.7 to -10.9 µm. A test opens a 1.5 mm
 cap and a 6 mm cap in a meshed sphere and checks that a 20 mm limit closes the first,
 facing out, and leaves the second open.
+
+## D62. Meshes from the live volume (2026-11-03)
+
+`sls-scan depth --volume DIR` reads the live TSDF of D54 back from the device after a run
+and writes it as meta.json, tsdf.bin and weight.bin, the layout `slscan tsdf-vectors`
+writes. `slscan mesh-volume` meshes such a directory with the reference mesher of D57,
+fills holes with `--fill-mm` and decimates with `--faces`. We kept meshing in Python
+rather than porting it to Rust, since an export runs once per scan and the NumPy code is
+already the reference. The application gate saves the volume of its two depth frames and
+meshes it.
+
+Eight frames of a stand-in sweep gave a 1 mm volume of 21 MB of distances and as much
+of weights. It meshes to 15,308 vertices and 29,474 triangles in about 2 s. Against
+truth the mesh reads the ball bar 0.9 µm long and its spheres 46.0 and 48.1 µm small,
+the coarse voxel bias of D51.

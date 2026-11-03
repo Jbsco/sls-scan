@@ -85,3 +85,10 @@ def test_surface_keys_name_each_crossing():
     points, keys = tsdf.surface(volume, return_keys=True)
     assert len(points) == 9 and np.allclose(points[:, 2], 0.0015)
     assert sorted(keys) == sorted((i * 9 + j * 3 + 1) * 3 + 2 for i in range(3) for j in range(3))
+
+
+def test_volume_from_shape_keeps_its_shape():
+    volume = tsdf.Volume.from_shape((0.1, 0.2, 0.3), (7, 11, 13), 0.0007, 0.001)
+    assert volume.shape == (7, 11, 13) and volume.tsdf.shape == (7, 11, 13)
+    assert np.allclose(volume.slab(12)[6, 10], [0.1 + 6 * 0.0007, 0.2 + 10 * 0.0007,
+                                                0.3 + 12 * 0.0007])

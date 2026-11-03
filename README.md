@@ -40,10 +40,14 @@ D41).
 Phase 4 has GPU kernels for the phase-shift decode (D22), stereo rectification (D31),
 block disparity (D35) and second-order stereo refinement (D29). They chain into a depth
 frame from a raw pair at 15 frames per second on a desktop GPU (D36, D38). The
-application runs that path live on stereo captures and draws each frame's points (D40).
-Phase 5 has ICP tracking and point fusion, verified on a synthetic sweep (D26) and run
-live in the application (D42). Phase 9 has second-order matching windows, which follow
-curved surfaces (D28).
+application runs that path live on stereo captures (D40), falls back to a preview from
+block disparity on a CPU adapter (D49, D50), and folds each frame into a TSDF on the GPU
+(D52, D54).
+
+Phase 5 has ICP tracking, point fusion and a TSDF, verified on synthetic sweeps and
+closed loops (D26, D51, D55). Phase 7 has meshes by surface nets, decimation, small-hole
+filling and a datum residual report, with PLY, OBJ and STL export (D57 to D61). Phase 9
+has second-order matching windows, which follow curved surfaces (D28).
 
 Bench acceptance of each phase waits on the hardware in `docs/hardware.md`.
 

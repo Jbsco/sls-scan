@@ -18,6 +18,15 @@ class Volume:
         self.tsdf = np.ones(self.shape, np.float32)
         self.weight = np.zeros(self.shape, np.float32)
 
+    @classmethod
+    def from_shape(cls, lower, shape, voxel: float, truncation: float) -> "Volume":
+        """Return an empty volume of the given shape whose first voxel centre is lower."""
+        volume = cls(lower, lower, voxel, truncation)
+        volume.shape = tuple(int(n) for n in shape)
+        volume.tsdf = np.ones(volume.shape, np.float32)
+        volume.weight = np.zeros(volume.shape, np.float32)
+        return volume
+
     def slab(self, k: int) -> np.ndarray:
         """Centres (nx, ny, 3) in the world of the voxels in layer k along z."""
         xs = self.lower[0] + self.voxel * np.arange(self.shape[0])

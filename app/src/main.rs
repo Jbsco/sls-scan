@@ -138,10 +138,11 @@ fn headless_depth(args: &[String]) -> ExitCode {
     let mut out: Option<PathBuf> = None;
     let mut mode = "auto".to_owned();
     let mut surface_out: Option<PathBuf> = None;
+    let mut volume_out: Option<PathBuf> = None;
     for pair in args.chunks(2) {
         let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
             eprintln!(
-                "arguments come in pairs: --node, --params, --frames, --wait, --out, --mode, --surface"
+                "arguments come in pairs: --node, --params, --frames, --wait, --out, --mode, --surface, --volume"
             );
             return ExitCode::FAILURE;
         };
@@ -151,6 +152,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
             "--out" => out = Some(PathBuf::from(value)),
             "--mode" => mode.clone_from(value),
             "--surface" => surface_out = Some(PathBuf::from(value)),
+            "--volume" => volume_out = Some(PathBuf::from(value)),
             "--frames" => match value.parse() {
                 Ok(v) => frames = v,
                 Err(_) => {
@@ -351,6 +353,15 @@ fn headless_depth(args: &[String]) -> ExitCode {
             ),
             Err(e) => {
                 eprintln!("{}: {e}", path.display());
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    if let Some(dir) = &volume_out {
+        match volume.save(dir) {
+            Ok(()) => println!("TSDF volume written to {}", dir.display()),
+            Err(e) => {
+                eprintln!("volume: {e}");
                 return ExitCode::FAILURE;
             }
         }
