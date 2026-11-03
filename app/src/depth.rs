@@ -258,6 +258,28 @@ pub fn triangulate(
         .collect()
 }
 
+/// Triangulate matches into a result with the left pixel of each point in range.
+fn depth_result(
+    cameras: (&RectifyParams, &RectifyParams),
+    matches: &[([f32; 2], [f32; 2])],
+    near_m: f64,
+    far_m: f64,
+) -> DepthResult {
+    let points = triangulate(cameras.0, cameras.1, matches, near_m, far_m);
+    let mut out = DepthResult {
+        samples: Vec::new(),
+        points: Vec::new(),
+        timings: Vec::new(),
+    };
+    for ((s, _), p) in matches.iter().zip(points) {
+        if let Some(p) = p {
+            out.samples.push(*s);
+            out.points.push(p);
+        }
+    }
+    out
+}
+
 impl DepthFrame {
     /// Open one device on the first adapter wgpu offers, or on a software one when
     /// `fallback` is set, and build every kernel on it.
@@ -336,18 +358,7 @@ impl DepthFrame {
             .filter(|(_, k)| **k)
             .map(|((s, r), _)| (*s, *r))
             .collect();
-        let points = triangulate(cameras.0, cameras.1, &matches, params.near_m, params.far_m);
-        let mut out = DepthResult {
-            samples: Vec::new(),
-            points: Vec::new(),
-            timings: Vec::new(),
-        };
-        for ((s, _), p) in matches.iter().zip(points) {
-            if let Some(p) = p {
-                out.samples.push(*s);
-                out.points.push(p);
-            }
-        }
+        let mut out = depth_result(cameras, &matches, params.near_m, params.far_m);
         lap("triangulate", &mut timings);
         out.timings = timings;
         Ok(out)
