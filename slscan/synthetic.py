@@ -473,6 +473,19 @@ def stereo_capture(rig: StereoRig, scene: list, pattern: np.ndarray, rng: np.ran
             "right": render(rig.right, rig.right_rotation, rig.right_translation)}
 
 
+def stereo_room_view(rig: StereoRig, scene: list, rng: np.random.Generator, room: float = 120.0,
+                     noise: float = 1.0) -> dict:
+    """Render the scene in both cameras under room light alone, with the pattern light
+    off."""
+    def render(camera, r_cam, t_cam):
+        shapes = transform_scene(scene, r_cam, t_cam)
+        sv = scene_view(Rig(camera, rig.light, r_cam.T, -r_cam.T @ t_cam), shapes)
+        image = sv.albedo * room + noise * rng.standard_normal(sv.albedo.shape)
+        return np.clip(np.rint(image), 0, 255).astype(np.uint8).reshape(sv.shape)
+    return {"left": render(rig.left, rig.left_rotation, rig.left_translation),
+            "right": render(rig.right, rig.right_rotation, rig.right_translation)}
+
+
 def stereo_board_view(rig: StereoRig, spec: calibrate.BoardSpec, r: np.ndarray, t: np.ndarray,
                       rng: np.random.Generator) -> dict:
     """Render one board pose (board to world) in both cameras under room light."""
