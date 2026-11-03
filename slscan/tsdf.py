@@ -85,10 +85,12 @@ def integrate(volume: Volume, grid: np.ndarray, rect, rotation: np.ndarray,
         weight[keep] += 1.0
 
 
-def surface(volume: Volume) -> np.ndarray:
+def surface(volume: Volume, return_keys: bool = False):
     """Zero crossings of the distance between neighbouring observed voxels along each
-    axis, both inside the truncation band, as points in the world."""
-    points = []
+    axis, both inside the truncation band, as points in the world. With return_keys, also
+    return each crossing's key: three times the flat index of its lower voxel plus its
+    axis."""
+    points, keys = [], []
     observed = (volume.weight > 0) & (np.abs(volume.tsdf) < 1.0)
     for axis in range(3):
         a = [slice(None)] * 3
@@ -101,6 +103,9 @@ def surface(volume: Volume) -> np.ndarray:
         pos = volume.lower + volume.voxel * idx.astype(np.float64)
         pos[:, axis] += volume.voxel * t
         points.append(pos)
+        keys.append(np.ravel_multi_index(idx.T, volume.shape) * 3 + axis)
+    if return_keys:
+        return np.vstack(points), np.concatenate(keys)
     return np.vstack(points)
 
 
