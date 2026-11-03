@@ -123,15 +123,21 @@ def ransac(source: np.ndarray, target: np.ndarray, pairs: np.ndarray, inlier: fl
     return r, tr, float(max(overlap))
 
 
+def describe(points: np.ndarray, voxel: float) -> tuple[np.ndarray, np.ndarray]:
+    """Return a view's points (in its camera frame) thinned to voxel spacing, and their
+    FPFH over 5 voxels."""
+    thin = track.voxel_average(points, voxel)
+    return thin, fpfh(thin, facing_normals(thin), 5.0 * voxel)
+
+
 def register(source: np.ndarray, target: np.ndarray, voxel: float,
-             rng: np.random.Generator | None = None) -> tuple[np.ndarray, np.ndarray, dict]:
+             rng: np.random.Generator | None = None,
+             described=None) -> tuple[np.ndarray, np.ndarray, dict]:
     """Return the rotation and translation that take one view's points (each in its own
     camera frame) onto another's, by a coarse match at voxel spacing and ICP, and a record
-    of the match."""
+    of the match. Described, when given, is describe of source and of target."""
     rng = np.random.default_rng(0) if rng is None else rng
-    s, t = track.voxel_average(source, voxel), track.voxel_average(target, voxel)
-    ns, nt = facing_normals(s), facing_normals(t)
-    fs, ft = fpfh(s, ns, 5.0 * voxel), fpfh(t, nt, 5.0 * voxel)
+    (s, fs), (t, ft) = described or (describe(source, voxel), describe(target, voxel))
     pairs = feature_pairs(fs, ft)
     r, tr, overlap = ransac(s, t, pairs, 1.5 * voxel, rng)
     fine = track.voxel_average(target, voxel / 4.0)
