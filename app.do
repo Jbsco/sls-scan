@@ -29,6 +29,7 @@ $RUN depth --node "127.0.0.1:$PORT" --params "$SESSION/stereo/depth.json" --fram
     --mode depth --surface "$SESSION/surface.ply" --volume "$SESSION/volume" \
     --mesh "$SESSION/scan.stl"
 python3 -m slscan.cli mesh-volume "$SESSION/volume" --out "$SESSION/volume.stl"
+$RUN mesh-volume "$SESSION/volume" --out "$SESSION/volume-rust.stl" --fill-mm 10 --faces 5000
 $RUN depth --node "127.0.0.1:$PORT" --params "$SESSION/stereo/depth.json" --frames 4 --wait 30 \
     --mode preview
 $RUN capture --node "127.0.0.1:$PORT" --set stereo --frames 2 --wait 30 --out "$SESSION/recorded"
