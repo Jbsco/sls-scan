@@ -10,4 +10,5 @@ pub mod gpu;
 pub mod protocol;
 pub mod rectify;
 pub mod refine;
+pub mod tsdf;
 pub mod ui;
