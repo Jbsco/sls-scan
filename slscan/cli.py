@@ -583,7 +583,10 @@ def cmd_sweep_bench(args: argparse.Namespace) -> int:
     rng = np.random.default_rng(args.seed)
     pattern = synthetic.random_dots(rig.light.width, rig.light.height, 3.0, 1.0, rng)
     scene = synthetic.sweep_scene()
-    poses = synthetic.sweep_poses(args.frames, args.yaw, args.pitch)
+    if args.loop:
+        poses = synthetic.loop_poses(args.frames, args.yaw, args.pitch)
+    else:
+        poses = synthetic.sweep_poses(args.frames, args.yaw, args.pitch)
     window = 25 if args.order == 2 else 21
     frames, rect = [], None
     for im in synthetic.sweep_captures(rig, scene, poses, pattern, args.seed):
@@ -603,7 +606,9 @@ def cmd_sweep_bench(args: argparse.Namespace) -> int:
           f"{'recovered' if args.recovered else 'true'} calibration, order {args.order} windows, "
           f"{result['points']} {'TSDF surface' if args.tsdf else 'fused'} points")
     print(f"pose error: translation up to {1e6 * result['max_translation_error_m']:.1f} µm, "
-          f"rotation up to {result['max_rotation_error_deg']:.4f}°")
+          f"rotation up to {result['max_rotation_error_deg']:.4f}°; last frame "
+          f"{1e6 * result['last_translation_error_m']:.1f} µm, "
+          f"{result['last_rotation_error_deg']:.4f}°")
     print(f"ball bar spacing error {1e6 * result['ball_bar_error_m']:+.1f} µm, sphere radius errors "
           + ", ".join(f"{1e6 * e:+.1f} µm" for e in result["ball_radius_errors_m"]))
     print(f"mat flatness {1e6 * result['mat_flatness_m']:.1f} µm RMS")
@@ -838,6 +843,8 @@ def main(argv=None) -> int:
     p.add_argument("--order", type=int, choices=(1, 2), default=1,
                    help="1 for affine windows, 2 for second-order windows that follow curvature")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--loop", action="store_true",
+                   help="sweep a closed loop that ends at the first pose")
     p.add_argument("--voxel-mm", type=float, default=0.5, help="fusion voxel size")
     p.add_argument("--tsdf", action="store_true",
                    help="measure a TSDF surface in place of the fused points")
