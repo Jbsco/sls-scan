@@ -938,3 +938,20 @@ side only, and 60 beyond 5 µm.
 
 On a Radeon RX 7900 GRE extraction takes 0.8 ms for 624,870 voxels and 3.4 ms for 17.9
 million, with readback of the points.
+
+## D54. Live TSDF in the application (2026-11-02)
+
+Each depth frame of a stereo run now folds into a coarse TSDF at its tracked pose, and
+the scene panel draws that volume's surface in place of fused points. Point fusion stays
+underneath, since ICP aligns each frame to its points. A volume opens on a run's first
+frame, 40 mm around its points, with 1 mm voxels and 2 mm truncation, and drops surfaces
+outside that box. `sls-scan depth --surface` writes its last surface as PLY.
+
+Eight frames of a stand-in sweep, run headless, gave 14,587 to 15,892 surface points. On
+a Radeon RX 7900 GRE, opening the volume, integrating and reading a surface back took
+20.2 ms for frame one and 1.8 to 2.2 ms for each later frame. Surface lists of two
+million points are allocated on the device, which wgpu fills with zeros. Uploading zeros
+from the host took each later frame to 4.7 to 7.3 ms.
+
+Against truth, this surface reads the ball bar 0.9 µm long and its spheres 34.8 and
+38.5 µm small, a voxel bias D51 shows, with a mat flatness of 4.8 µm RMS.
