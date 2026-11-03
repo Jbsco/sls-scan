@@ -59,6 +59,11 @@ checked against them by `sls-scan fusion-check` (D42). `slscan fuse` and `slscan
 match with affine windows of 21 pixels by default, for speed, and take `--order 2` for
 second-order windows.
 
+`tsdf.fuse` folds tracked frames into a truncated signed distance volume (D51). Each
+frame becomes a depth image at its sample grid, and every voxel averages its distance to
+each frame's surface along the camera axis. `slscan sweep-bench --tsdf` measures the
+volume's surface in place of the fused points, with `--voxel-mm` and `--truncation-mm`.
+
 ## Patterns
 
 Gray code columns: for a projector of width W, ceil(log2 W) bit planes, each shown
