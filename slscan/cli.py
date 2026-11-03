@@ -701,6 +701,31 @@ def cmd_sweep_bench(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_register(args: argparse.Namespace) -> int:
+    import json
+
+    from . import register, track
+
+    views = [geometry.read_ply(path) for path in args.views]
+    poses, records = register.register_views(views, args.voxel_mm / 1000.0, args.rounds)
+    merged = np.vstack([v @ r.T + t for v, (r, t) in zip(views, poses)])
+    if args.merge_voxel_mm > 0:
+        merged = track.voxel_average(merged, args.merge_voxel_mm / 1000.0)
+    geometry.write_ply(args.out, merged)
+    overlaps = [None] + [record["overlap"] for record in records]
+    with open(args.poses, "w", encoding="utf-8") as f:
+        json.dump({"frame": args.views[0],
+                   "views": [{"file": path, "rotation": r.tolist(), "translation": t.tolist(),
+                              "overlap_with_previous": overlap}
+                             for path, (r, t), overlap in zip(args.views, poses, overlaps)]},
+                  f, indent=1)
+    for path, overlap in zip(args.views[1:], overlaps[1:]):
+        print(f"{path}: overlap with the view before {overlap:.2f}")
+    print(f"{len(merged)} points written to {args.out}, poses in the frame of {args.views[0]} "
+          f"written to {args.poses}")
+    return 0
+
+
 def cmd_view_bench(args: argparse.Namespace) -> int:
     import time
 
@@ -969,6 +994,18 @@ def main(argv=None) -> int:
     p.add_argument("--faces", type=int, default=0,
                    help="with --mesh, decimate the mesh to at most this many triangles")
     p.set_defaults(func=cmd_sweep_bench)
+
+    p = sub.add_parser("register", help="register view clouds from geometry and merge them")
+    p.add_argument("views", nargs="+", help="view clouds (PLY) in order around the object, "
+                                          "each in its own camera frame")
+    p.add_argument("--voxel-mm", type=float, default=10.0,
+                   help="coarse match voxel size, about 1 to 2%% of the object's size")
+    p.add_argument("--rounds", type=int, default=1, help="ICP rounds against all other views")
+    p.add_argument("--merge-voxel-mm", type=float, default=0.5,
+                   help="average the merged cloud over voxels of this size, 0 to keep all points")
+    p.add_argument("--out", default="data/merged.ply")
+    p.add_argument("--poses", default="data/poses.json")
+    p.set_defaults(func=cmd_register)
 
     p = sub.add_parser("view-bench", help="register synthetic static views of a metre object")
     p.add_argument("--views", type=int, default=10, help="views evenly spaced around the object")

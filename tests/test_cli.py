@@ -261,3 +261,23 @@ def test_replay_reference_writes_points_per_recorded_pair(tmp_path):
     preview = np.fromfile(frame / "preview.bin", "<f8").reshape(-1, 5)
     assert len(preview) > 50 and np.all((preview[:, 4] > 0.4) & (preview[:, 4] < 0.6))
     assert np.all(preview[:, :2] % 8 == 3.5)
+
+
+def test_register_command_places_views_of_an_object(tmp_path):
+    scene = synthetic.static_object()
+    poses = synthetic.orbit_poses([0.0, 60.0, 120.0])
+    rng = np.random.default_rng(3)
+    paths = []
+    for k, (r, t) in enumerate(poses):
+        paths.append(str(tmp_path / f"view_{k}.ply"))
+        geometry.write_ply(paths[-1], synthetic.point_view(scene, r, t, rng))
+    out, pose_file = str(tmp_path / "merged.ply"), str(tmp_path / "poses.json")
+    assert cli.main(["register", *paths, "--voxel-mm", "5", "--out", out, "--poses", pose_file]) == 0
+    with open(pose_file, encoding="utf-8") as f:
+        found = json.load(f)["views"]
+    r0, t0 = poses[0]
+    for view, (rk, tk) in zip(found, poses):
+        true_r = r0 @ rk.T
+        assert np.allclose(view["rotation"], true_r, atol=1e-4)
+        assert np.linalg.norm(np.array(view["translation"]) - (t0 - true_r @ tk)) < 0.0001
+    assert len(geometry.read_ply(out)) > 10000
