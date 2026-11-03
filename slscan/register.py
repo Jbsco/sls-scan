@@ -46,13 +46,13 @@ def fpfh(points: np.ndarray, normals: np.ndarray, radius: float, bins: int = 11)
              2 * bins + np.clip(((theta + np.pi) / (2.0 * np.pi) * bins).astype(int), 0, bins - 1)]
     spfh = np.zeros((n, 3 * bins))
     for k in index:
-        np.add.at(spfh, (i, k), 1.0)
+        spfh += np.bincount(i * 3 * bins + k, minlength=n * 3 * bins).reshape(n, 3 * bins)
     counts = np.maximum(np.bincount(i, minlength=n), 1)[:, np.newaxis]
     spfh /= counts
-    spread = np.zeros_like(spfh)
-    np.add.at(spread, i, spfh[j] / distance[:, np.newaxis])
-    weights = np.zeros(n)
-    np.add.at(weights, i, 1.0 / distance)
+    inverse = 1.0 / distance
+    spread = np.column_stack([np.bincount(i, weights=spfh[j, c] * inverse, minlength=n)
+                              for c in range(3 * bins)])
+    weights = np.bincount(i, weights=inverse, minlength=n)
     result = spfh + spread / np.maximum(weights, 1e-12)[:, np.newaxis]
     for k in range(3):
         part = result[:, k * bins:(k + 1) * bins]
