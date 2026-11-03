@@ -1,6 +1,6 @@
 import numpy as np
 
-from slscan import stereo, synthetic, track
+from slscan import stereo, synthetic, track, tsdf
 
 
 def test_rodrigues_matches_axis_angle():
@@ -49,3 +49,23 @@ def test_short_sweep_keeps_ball_bar_spacing():
     assert abs(result["ball_bar_error_m"]) < 0.00002
     assert result["max_translation_error_m"] < 0.0005
     assert result["max_rotation_error_deg"] < 0.2
+
+
+def test_short_sweep_tsdf_keeps_ball_bar_spacing():
+    rig = synthetic.stereo_head()
+    cal = synthetic.true_stereo_calibration(rig, synthetic.SMALL_BOARD)
+    pattern = synthetic.random_dots(rig.light.width, rig.light.height, 3.0, 1.0,
+                                    np.random.default_rng(0))
+    scene = synthetic.sweep_scene()
+    poses = synthetic.sweep_poses(5, yaw_deg=5.0, pitch_deg=2.0)
+    frames, rect = [], None
+    for im in synthetic.sweep_captures(rig, scene, poses, pattern):
+        points, rect = stereo.depth_points(cal, im["left"], im["right"], 0.4, 0.6, step=8)
+        frames.append(points)
+
+    def surface(tracked):
+        return tsdf.fuse(frames, tracked, rect, 8, 21, 0.0005, 0.001)[1]
+
+    result = track.sweep_bench(rig, cal, scene, poses, frames, surface=surface)
+    assert abs(result["ball_bar_error_m"]) < 0.00003
+    assert result["mat_flatness_m"] < 0.00001

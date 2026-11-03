@@ -99,14 +99,19 @@ def left_camera_pose(rig, head_rotation: np.ndarray, head_translation: np.ndarra
     return rig.left_rotation @ head_rotation, rig.left_rotation @ head_translation + rig.left_translation
 
 
-def sweep_bench(rig, cal, scene: dict, poses: list, frames: list, voxel: float = 0.0005) -> dict:
+def sweep_bench(rig, cal, scene: dict, poses: list, frames: list, voxel: float = 0.0005,
+                surface=None) -> dict:
     """Track and fuse sweep frames and compare poses and artifacts with the truth.
 
     The tracked world is the first frame's left camera frame, so the truth is moved there.
+    With surface, the model measured is what surface returns for the tracked poses in place
+    of the fused points.
     """
     from . import geometry
 
     tracked, model = fuse(frames, voxel)
+    if surface is not None:
+        model = surface(tracked)
     r0, t0 = left_camera_pose(rig, *poses[0])
     pose_errors = []
     for (r, t), head in zip(tracked, poses):
