@@ -165,8 +165,9 @@ a sphere or a ball bar to a PLY file. Real captures use the same commands.
 sign, joined in quads across each crossing edge (`DESIGN.md` D57). `mesh.write_mesh`
 writes it as PLY, OBJ or STL, and `slscan sweep-bench --tsdf --mesh` meshes a sweep.
 `mesh.decimate` collapses edges by least quadric error to a face count CAD accepts, and
-`--faces` sets it (D58). Hole filling, a rigid alignment to datum points measured on the
-object, and a report of scale bar lengths and datum residuals follow.
+`--faces` sets it (D58). `slscan report` fits datum spheres in a cloud or mesh, aligns
+them to their centres measured on the object, and reports datum residuals and scale bar
+errors (D60). Hole filling follows.
 
 ## Preview path
 
