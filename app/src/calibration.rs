@@ -246,6 +246,37 @@ pub fn solve_stereo(tool: &Tool, session: &Path, board: &Board) -> io::Result<St
 }
 
 /// Write the depth frame parameters of a stereo calibration.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct MeshResult {
+    pub out: String,
+    pub vertices: u64,
+    pub triangles: u64,
+    pub holes: u64,
+}
+
+/// Mesh a saved TSDF volume through the tool, closing holes up to `fill_mm` around and
+/// decimating to `faces` triangles when it is not 0.
+pub fn mesh_volume(
+    tool: &Tool,
+    volume: &Path,
+    out: &Path,
+    fill_mm: f64,
+    faces: u32,
+) -> io::Result<MeshResult> {
+    let extra = vec![
+        "mesh-volume".into(),
+        volume.to_string_lossy().into_owned(),
+        "--out".into(),
+        out.to_string_lossy().into_owned(),
+        "--fill-mm".into(),
+        fill_mm.to_string(),
+        "--faces".into(),
+        faces.to_string(),
+        "--json".into(),
+    ];
+    tool.json(&extra)
+}
+
 pub fn depth_params(tool: &Tool, calibration: &Path, out: &Path) -> io::Result<DepthParamsResult> {
     let extra = vec![
         "depth-params".into(),
