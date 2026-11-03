@@ -5,6 +5,7 @@ use crate::client::{self, Event, Stats};
 use crate::depth::{DepthFrame, DepthResult, DepthSetup};
 use crate::fuse::{Fusion, Vec3};
 use crate::protocol::{FrameHeader, Hello, Projector, SequenceRequest};
+use crate::tsdf;
 use eframe::egui;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
@@ -40,7 +41,8 @@ enum DepthJob {
 
 struct LiveFrame {
     depth: Result<DepthResult, String>,
-    model: Vec<Vec3>,
+    /// The TSDF surface, or the fused points when the TSDF failed.
+    model: Result<Vec<Vec3>, (String, Vec<Vec3>)>,
     fuse_ms: f64,
     rms: Option<f64>,
 }
@@ -139,23 +141,44 @@ impl ScanApp {
         let repaint = ctx.clone();
         thread::spawn(move || {
             let mut fusion = Fusion::new(FUSION_VOXEL_M);
+            let mut volume = tsdf::Live::coarse();
+            let camera = tsdf::LeftCamera {
+                rotation: setup.cameras.left.rotation,
+                projection: setup.cameras.left.projection,
+            };
+            let size = (params.coarse.width, params.coarse.height);
             for job in jobs_rx {
                 let (left, right) = match job {
                     DepthJob::Pair(left, right) => (left, right),
                     DepthJob::Reset => {
                         fusion = Fusion::new(FUSION_VOXEL_M);
+                        volume.reset();
                         continue;
                     }
                 };
                 let cameras = (&setup.cameras.left, &setup.cameras.right);
                 let depth = frame.measure(&params, preview.as_ref(), cameras, &left, &right);
                 let start = std::time::Instant::now();
+                let mut surface = Ok(Vec::new());
                 if let (Ok(d), None) = (&depth, &preview) {
                     fusion.add(&d.points);
+                    if let Some(pose) = fusion.poses.last() {
+                        let grid =
+                            tsdf::depth_grid(&d.points, &camera, params.step, params.window, size);
+                        let rotation: [f64; 9] =
+                            std::array::from_fn(|k| pose.rotation[k / 3][k % 3]);
+                        surface = volume.add(
+                            frame.gpu(),
+                            &grid,
+                            &d.points,
+                            &camera,
+                            (&rotation, &pose.translation),
+                        );
+                    }
                 }
                 let live = LiveFrame {
                     depth,
-                    model: fusion.model().to_vec(),
+                    model: surface.map_err(|e| (e, fusion.model().to_vec())),
                     fuse_ms: start.elapsed().as_secs_f64() * 1000.0,
                     rms: fusion.last_rms,
                 };
@@ -527,12 +550,16 @@ impl ScanApp {
             let rms = live
                 .rms
                 .map_or_else(String::new, |r| format!(", ICP residual {:.1} µm", r * 1e6));
+            let (model, kind) = match live.model {
+                Ok(surface) => (surface, "TSDF surface".to_owned()),
+                Err((e, fused)) => (fused, format!("fused points (TSDF failed: {e})")),
+            };
             self.fusion_status = format!(
-                "model {} points, fused in {:.0} ms{rms}",
-                live.model.len(),
+                "model: {} {kind}, fused in {:.0} ms{rms}",
+                model.len(),
                 live.fuse_ms
             );
-            self.cloud = live.model;
+            self.cloud = model;
             match live.depth {
                 Ok(d) => {
                     let total: f64 = d.timings.iter().map(|(_, ms)| ms).sum();

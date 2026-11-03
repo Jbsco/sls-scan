@@ -289,9 +289,17 @@ impl Integrator {
                 usage: wgpu::BufferUsages::UNIFORM,
             });
         let count = init("count", &[0u8; 4]);
-        let slots = capacity.max(1) as usize;
-        let points = init("points", &vec![0u8; slots * 12]);
-        let keys = init("keys", &vec![0u8; slots * 4]);
+        let list = |label: &str, bytes: u64| {
+            self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: bytes,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            })
+        };
+        let slots = u64::from(capacity.max(1));
+        let points = list("points", slots * 12);
+        let keys = list("keys", slots * 4);
         let entries: Vec<wgpu::BindGroupEntry> = [
             (0, &params),
             (2, &self.tsdf),
@@ -359,6 +367,86 @@ impl Integrator {
                 .collect())
         };
         Ok((floats(&self.tsdf)?, floats(&self.weight)?))
+    }
+}
+
+/// A volume over a tracked depth stream. It opens on the first frame, `margin` metres
+/// around that frame's points in the world, and takes each frame at its tracked pose.
+pub struct Live {
+    voxel: f64,
+    truncation: f64,
+    margin: f64,
+    capacity: u32,
+    integrator: Option<Integrator>,
+}
+
+impl Live {
+    pub fn new(voxel: f64, truncation: f64, margin: f64, capacity: u32) -> Self {
+        Self {
+            voxel,
+            truncation,
+            margin,
+            capacity,
+            integrator: None,
+        }
+    }
+
+    /// The live view's coarse volume: 1 mm voxels, 2 mm truncation, 40 mm around the first
+    /// frame, and up to two million surface points.
+    pub fn coarse() -> Self {
+        Self::new(0.001, 0.002, 0.04, 2_000_000)
+    }
+
+    /// Start again with no volume.
+    pub fn reset(&mut self) {
+        self.integrator = None;
+    }
+
+    /// Fold one frame's points, in its left camera frame, in at its pose (`rotation` 3 x 3
+    /// row-major and `translation` into the world), and return the volume's surface.
+    pub fn add(
+        &mut self,
+        gpu: &Gpu,
+        grid: &DepthGrid,
+        points: &[[f64; 3]],
+        camera: &LeftCamera,
+        pose: (&[f64; 9], &[f64; 3]),
+    ) -> Result<Vec<[f64; 3]>, String> {
+        let (rotation, translation) = pose;
+        if self.integrator.is_none() {
+            if points.is_empty() {
+                return Ok(Vec::new());
+            }
+            let world = points.iter().map(|p| {
+                std::array::from_fn::<f64, 3, _>(|i| {
+                    (0..3).map(|j| rotation[i * 3 + j] * p[j]).sum::<f64>() + translation[i]
+                })
+            });
+            let (mut low, mut high) = ([f64::MAX; 3], [f64::MIN; 3]);
+            for w in world {
+                for i in 0..3 {
+                    low[i] = low[i].min(w[i]);
+                    high[i] = high[i].max(w[i]);
+                }
+            }
+            let lower = low.map(|v| v - self.margin);
+            let shape = std::array::from_fn(|i| {
+                ((high[i] + self.margin - lower[i]) / self.voxel).ceil() as u32 + 1
+            });
+            let spec = VolumeSpec {
+                lower,
+                voxel: self.voxel,
+                truncation: self.truncation,
+                shape,
+            };
+            self.integrator = Some(Integrator::with(gpu, spec));
+        }
+        let Some(integrator) = &self.integrator else {
+            return Ok(Vec::new());
+        };
+        integrator.integrate(grid, camera, rotation, translation)?;
+        let (surface, _) = integrator.surface(self.capacity)?;
+        Ok(surface.iter().map(|p| p.map(f64::from)).collect())
     }
 }
 
