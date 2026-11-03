@@ -1054,3 +1054,12 @@ with second-order windows, at 0.5 mm voxels and 1 mm truncation:
 Deviation is measured from points sampled on decimated triangles, along the full mesh's
 vertex normals. NumPy with a Python heap sets a reference pace, not a working one.
 `slscan sweep-bench --mesh --faces` decimates before writing.
+
+## D59. Live frames filtered (2026-11-02)
+
+The application now drops isolated points, as D56 does, from each depth frame before
+fusion and the TSDF. `fuse::drop_isolated` ports `stereo.drop_isolated` on the hash grid
+that fusion already uses for neighbour searches. A depth frame itself stays unfiltered,
+so `sls-scan depth-check` and `sls-scan replay` still compare it with direct matching.
+Eight frames of a stand-in sweep, run headless, lost 0 or 1 points each out of 15,492 to
+16,249.

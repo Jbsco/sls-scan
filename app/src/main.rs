@@ -259,15 +259,22 @@ fn headless_depth(args: &[String]) -> ExitCode {
                 let fused = if preview.is_some() {
                     String::new()
                 } else {
+                    let points = fuse::drop_isolated(
+                        &d.points,
+                        f64::from(depth_params.step),
+                        camera.projection[0],
+                        fuse::ISOLATED_SPACINGS,
+                    );
+                    let dropped = d.points.len() - points.len();
                     let start = Instant::now();
-                    fusion.add(&d.points);
+                    fusion.add(&points);
                     let ms = start.elapsed().as_secs_f64() * 1000.0;
                     let rms = fusion
                         .last_rms
                         .map_or_else(String::new, |r| format!(", ICP residual {:.1} µm", r * 1e6));
                     let start = Instant::now();
                     let grid = tsdf::depth_grid(
-                        &d.points,
+                        &points,
                         &camera,
                         depth_params.step,
                         depth_params.window,
@@ -280,7 +287,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
                             volume.add(
                                 frame.gpu(),
                                 &grid,
-                                &d.points,
+                                &points,
                                 &camera,
                                 (&rotation, &pose.translation),
                             )
@@ -299,7 +306,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
                         }
                     };
                     format!(
-                        ", fused in {ms:.1} ms into {} points{rms}{tsdf}",
+                        ", {dropped} isolated dropped, fused in {ms:.1} ms into {} points{rms}{tsdf}",
                         fusion.model().len()
                     )
                 };

@@ -3,7 +3,7 @@
 use crate::calibration::{self, Board, Detection, Solve, StereoSolve, Tool};
 use crate::client::{self, Event, Stats};
 use crate::depth::{DepthFrame, DepthResult, DepthSetup};
-use crate::fuse::{Fusion, Vec3};
+use crate::fuse::{self, Fusion, Vec3};
 use crate::protocol::{FrameHeader, Hello, Projector, SequenceRequest};
 use crate::tsdf;
 use eframe::egui;
@@ -161,16 +161,22 @@ impl ScanApp {
                 let start = std::time::Instant::now();
                 let mut surface = Ok(Vec::new());
                 if let (Ok(d), None) = (&depth, &preview) {
-                    fusion.add(&d.points);
+                    let points = fuse::drop_isolated(
+                        &d.points,
+                        f64::from(params.step),
+                        camera.projection[0],
+                        fuse::ISOLATED_SPACINGS,
+                    );
+                    fusion.add(&points);
                     if let Some(pose) = fusion.poses.last() {
                         let grid =
-                            tsdf::depth_grid(&d.points, &camera, params.step, params.window, size);
+                            tsdf::depth_grid(&points, &camera, params.step, params.window, size);
                         let rotation: [f64; 9] =
                             std::array::from_fn(|k| pose.rotation[k / 3][k % 3]);
                         surface = volume.add(
                             frame.gpu(),
                             &grid,
-                            &d.points,
+                            &points,
                             &camera,
                             (&rotation, &pose.translation),
                         );

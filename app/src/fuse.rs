@@ -459,9 +459,52 @@ impl Fusion {
     }
 }
 
+/// Sample spacings within which a point needs a neighbour, as `stereo.depth_points` uses.
+pub const ISOLATED_SPACINGS: f64 = 3.0;
+
+/// The points that have another point within `spacings` sample spacings, where one
+/// spacing at depth z is `step` times z over `focal`, as `drop_isolated` in
+/// `slscan/stereo.py` keeps them.
+pub fn drop_isolated(points: &[Vec3], step: f64, focal: f64, spacings: f64) -> Vec<Vec3> {
+    let radius = |p: &Vec3| spacings * step * p[2] / focal;
+    let cell = points.iter().map(radius).fold(0.0, f64::max);
+    if points.len() < 2 || cell <= 0.0 {
+        return Vec::new();
+    }
+    let grid = Grid::new(points, cell);
+    points
+        .iter()
+        .enumerate()
+        .filter(|&(i, p)| {
+            let r = radius(p);
+            let centre = Grid::key_of(p, cell);
+            let mut found = false;
+            for shell in 0..=1 {
+                grid.shell(centre, shell, |j| {
+                    let d = sub(&points[j as usize], p);
+                    found |= j as usize != i && dot(&d, &d) <= r * r;
+                });
+            }
+            found
+        })
+        .map(|(_, p)| *p)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drop_isolated_keeps_a_surface_and_drops_strays() {
+        let mut points: Vec<Vec3> = (0..400)
+            .map(|k| [f64::from(k % 20) * 0.001, f64::from(k / 20) * 0.001, 0.5])
+            .collect();
+        let surface = points.clone();
+        points.push([0.01, 0.01, 0.45]);
+        points.push([0.05, 0.0, 0.5]);
+        assert_eq!(drop_isolated(&points, 8.0, 4000.0, 3.0), surface);
+    }
 
     fn surface(pose: &Pose) -> Vec<Vec3> {
         let inverse = Pose {
