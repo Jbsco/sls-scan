@@ -39,3 +39,14 @@ def test_views_far_apart_register_from_geometry():
     r_true = ra @ rb.T
     assert angle_deg(r.T @ r_true) < 0.01
     assert np.linalg.norm(t - (ta - r_true @ tb)) < 0.0001
+
+
+def test_ten_views_of_a_metre_object_measure_its_scale_bars():
+    scene = synthetic.metre_object()
+    shapes = scene["part"] + [ball for bar in scene["scale-bars"] for ball in bar]
+    poses = synthetic.orbit_poses(np.arange(10) * 36.0, 1.2, 0.9, (0.0, 0.0, 0.1))
+    rng = np.random.default_rng(1)
+    views = [synthetic.point_view(shapes, r, t, rng, 0.42, 440, 40e-6) for r, t in poses]
+    result = register.view_bench(scene, poses, views, 0.02)
+    assert result["max_translation_error_m"] < 0.0005
+    assert max(abs(e) for e in result["scale_bar_errors_m"]) < 0.0001

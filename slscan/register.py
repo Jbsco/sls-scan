@@ -144,3 +144,59 @@ def register(source: np.ndarray, target: np.ndarray, voxel: float,
     r, tr, rms = track.icp(track.voxel_average(source, voxel / 4.0), fine, track.normals(fine),
                            r, tr, max_distances=(3.0 * voxel, voxel, voxel / 2.0, voxel / 4.0))
     return r, tr, {"pairs": len(pairs), "overlap": overlap, "rms": rms}
+
+
+def register_views(views: list, voxel: float, rounds: int = 1) -> tuple[list, list]:
+    """Return a pose (rotation, translation into the first view's frame) for each of views
+    taken in order around an object, and the record of each view's match to the one
+    before. Each view registers to the one before, then each round refines every view but
+    the first by ICP against all the others."""
+    described = [describe(v, voxel) for v in views]
+    poses, records = [(np.eye(3), np.zeros(3))], []
+    for k in range(1, len(views)):
+        r, t, record = register(views[k], views[k - 1], voxel,
+                                described=(described[k], described[k - 1]))
+        records.append(record)
+        rp, tp = poses[-1]
+        poses.append((rp @ r, rp @ t + tp))
+    thinned = [track.voxel_average(v, voxel / 4.0) for v in views]
+    normals = [track.normals(v) for v in thinned]
+    for _ in range(rounds):
+        for k in range(1, len(views)):
+            others = [j for j in range(len(views)) if j != k]
+            target = np.vstack([thinned[j] @ poses[j][0].T + poses[j][1] for j in others])
+            target_normals = np.vstack([normals[j] @ poses[j][0].T for j in others])
+            poses[k] = track.icp(thinned[k], target, target_normals, *poses[k],
+                                 max_distances=(voxel, voxel / 2.0, voxel / 4.0,
+                                                voxel / 8.0))[:2]
+    return poses, records
+
+
+def view_bench(scene: dict, poses: list, views: list, voxel: float, rounds: int = 1) -> dict:
+    """Register views of a scene like metre_object's, taken at known poses (world to
+    camera), and compare the poses found and the scale bars measured in the merged views
+    with the truth. The merged frame is the first view's camera frame."""
+    from . import geometry
+
+    found, records = register_views(views, voxel, rounds)
+    r0, t0 = poses[0]
+    rotation_errors, translation_errors = [], []
+    for (r, t), (rk, tk) in zip(found, poses):
+        true_r = r0 @ rk.T
+        cosine = (np.trace(r @ true_r.T) - 1.0) / 2.0
+        rotation_errors.append(float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0)))))
+        translation_errors.append(float(np.linalg.norm(t - (t0 - true_r @ tk))))
+    merged = np.vstack([v @ r.T + t for v, (r, t) in zip(views, found)])
+    bar_errors = []
+    for bar in scene["scale-bars"]:
+        centres = []
+        for ball in bar:
+            c = r0 @ ball.centre + t0
+            near = merged[np.linalg.norm(merged - c, axis=1) < ball.radius + 0.003]
+            centres.append(geometry.fit_sphere(near)[0])
+        truth = np.linalg.norm(bar[0].centre - bar[1].centre)
+        bar_errors.append(float(np.linalg.norm(centres[0] - centres[1]) - truth))
+    return {"views": len(views), "points": len(merged),
+            "max_rotation_error_deg": max(rotation_errors),
+            "max_translation_error_m": max(translation_errors),
+            "scale_bar_errors_m": bar_errors, "overlaps": [r["overlap"] for r in records]}
