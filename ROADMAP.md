@@ -43,7 +43,8 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   areas. Acceptance: a sweep around a part fuses to a model whose ball bar is within 0.05
   mm and shows no doubling at revisited surfaces. ICP tracking with point fusion (D26)
   and a TSDF (D51) keep a synthetic sweep's ball bar within 0.03 mm. The application
-  ports both (D42, D52) and draws a live coarse TSDF (D54).
+  ports both (D42, D52) and draws a live coarse TSDF (D54). A closed loop returns within
+  15 µm with no doubling (D55).
 - Phase 6, open. Many static views. Marker detection, view poses from the markers, ICP
   refinement, keyed markers defining the object's frame, a merged cloud. Acceptance: two
   scale bars in different orientations measure within 0.5 mm after a 10-view scan of an
