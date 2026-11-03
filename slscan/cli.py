@@ -81,6 +81,27 @@ def cmd_scan(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_report(args: argparse.Namespace) -> int:
+    """Fit datum spheres in a PLY cloud or mesh, align them to their measured centres and
+    report residuals and scale bar errors."""
+    import json
+
+    from . import report
+
+    result = report.measure(geometry.read_ply(args.cloud), report.load_datums(args.datums))
+    for name, datum in result["datums"].items():
+        print(f"datum {name}: residual {1e6 * datum['residual_m']:.1f} µm, "
+              f"radius {1e6 * datum['radius_error_m']:+.1f} µm")
+    for name, error in result["scale_bars_m"].items():
+        print(f"scale bar {name}: {1e6 * error:+.1f} µm")
+    if args.out:
+        with open(args.out, "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=1)
+        print(f"report written to {args.out}")
+    worst = max(d["residual_m"] for d in result["datums"].values())
+    return 0 if worst <= args.limit_mm / 1000.0 else 1
+
+
 def cmd_measure(args: argparse.Namespace) -> int:
     points = geometry.read_ply(args.cloud)
     if args.shape == "plane":
@@ -862,6 +883,14 @@ def main(argv=None) -> int:
     p.add_argument("--faces", type=int, default=0,
                    help="with --mesh, decimate the mesh to at most this many triangles")
     p.set_defaults(func=cmd_sweep_bench)
+
+    p = sub.add_parser("report", help="align datum spheres in a cloud or mesh to their "
+                                      "measured centres and report residuals")
+    p.add_argument("cloud", help="PLY points or mesh")
+    p.add_argument("--datums", required=True, help="datum file of spheres and scale bars")
+    p.add_argument("--out", help="write the report as JSON")
+    p.add_argument("--limit-mm", type=float, default=1.0, help="largest datum residual allowed")
+    p.set_defaults(func=cmd_report)
 
     p = sub.add_parser("measure", help="fit an acceptance artifact to a point cloud")
     p.add_argument("cloud")
