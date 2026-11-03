@@ -205,6 +205,8 @@ def test_tsdf_vectors_command_writes_consistent_files(tmp_path):
     assert (out / "weight.bin").stat().st_size == 4 * voxels
     assert (out / "surface.bin").stat().st_size == 24 * meta["surface"]
     assert (out / "surface-keys.bin").stat().st_size == 4 * meta["surface"]
+    assert (out / "mesh-vertices.bin").stat().st_size == 24 * meta["mesh_vertices"]
+    assert (out / "mesh-faces.bin").stat().st_size == 12 * meta["mesh_faces"]
 
 
 def test_mesh_volume_command_meshes_tsdf_vectors(tmp_path, capsys):

@@ -454,7 +454,7 @@ def cmd_tsdf_vectors(args: argparse.Namespace) -> int:
     camera's rectification and the NumPy TSDF volume they fuse into, for the application."""
     import json
 
-    from . import track, tsdf
+    from . import mesh, track, tsdf
 
     rig = synthetic.stereo_head()
     cal = synthetic.true_stereo_calibration(rig, synthetic.SMALL_BOARD)
@@ -479,12 +479,16 @@ def cmd_tsdf_vectors(args: argparse.Namespace) -> int:
     surface, keys = tsdf.surface(volume, return_keys=True)
     surface.astype("<f8").tofile(os.path.join(args.out, "surface.bin"))
     keys.astype("<u4").tofile(os.path.join(args.out, "surface-keys.bin"))
+    vertices, faces = mesh.surface_nets(volume)
+    vertices.astype("<f8").tofile(os.path.join(args.out, "mesh-vertices.bin"))
+    faces.astype("<u4").tofile(os.path.join(args.out, "mesh-faces.bin"))
     meta = {"counts": [int(len(f)) for f in frames], "step": args.step, "window": window,
             "width": rect.size[0], "height": rect.size[1],
             "rotation": rect.left_rotation.ravel().tolist(),
             "projection": rect.left_projection.ravel().tolist(),
             "lower": volume.lower.tolist(), "shape": list(volume.shape),
-            "voxel": volume.voxel, "truncation": volume.truncation, "surface": int(len(surface))}
+            "voxel": volume.voxel, "truncation": volume.truncation, "surface": int(len(surface)),
+            "mesh_vertices": int(len(vertices)), "mesh_faces": int(len(faces))}
     with open(os.path.join(args.out, "meta.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f)
     print(f"TSDF vectors written to {args.out}: {len(frames)} frames into "
