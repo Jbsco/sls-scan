@@ -208,3 +208,21 @@ def test_stereo_bench_meets_the_phase_2_limits(capsys):
     assert cli.main(["stereo-bench", "--plate-step", "24"]) == 0
     out = capsys.readouterr().out
     assert "plate" in out and "scale bar" in out
+
+
+def test_replay_reference_writes_points_per_recorded_pair(tmp_path):
+    head = synthetic.stereo_head()
+    pattern = synthetic.random_dots(head.light.width, head.light.height, 3.0, 1.0,
+                                    np.random.default_rng(0))
+    images = synthetic.stereo_capture(head, synthetic.stereo_scenes()["sphere"], pattern,
+                                      np.random.default_rng(1))
+    frame = tmp_path / "recorded" / "frame_000"
+    frame.mkdir(parents=True)
+    for side in ("left", "right"):
+        cv2.imwrite(str(frame / f"{side}.png"), images[side])
+    params = tmp_path / "depth.json"
+    assert cli.main(["depth-params", "--head", "stereo", "--step", "16", "--out", str(params)]) == 0
+    assert cli.main(["replay-reference", str(tmp_path / "recorded"), "--params", str(params),
+                     "--head", "stereo"]) == 0
+    rows = np.fromfile(frame / "reference.bin", "<f8").reshape(-1, 5)
+    assert len(rows) > 50 and np.all((rows[:, 4] > 0.4) & (rows[:, 4] < 0.6))

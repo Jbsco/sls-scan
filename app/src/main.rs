@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 fn headless_capture(args: &[String]) -> ExitCode {
     let mut node = "127.0.0.1:5600".to_owned();
     let mut wait = Duration::ZERO;
+    let mut out: Option<PathBuf> = None;
     let mut request = SequenceRequest {
         set: "scan".to_owned(),
         pitch: 32,
@@ -25,7 +26,7 @@ fn headless_capture(args: &[String]) -> ExitCode {
     for pair in args.chunks(2) {
         let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
             eprintln!(
-                "arguments come in pairs: --node, --set, --pitch, --steps, --frames, --rate, --wait"
+                "arguments come in pairs: --node, --set, --pitch, --steps, --frames, --rate, --wait, --out"
             );
             return ExitCode::FAILURE;
         };
@@ -42,6 +43,10 @@ fn headless_capture(args: &[String]) -> ExitCode {
             "--steps" => value.parse().map(|v| request.steps = v),
             "--frames" => value.parse().map(|v| request.frames = v),
             "--rate" => value.parse().map(|v| request.rate_hz = v),
+            "--out" => {
+                out = Some(PathBuf::from(value));
+                Ok(())
+            }
             "--wait" => match value.parse::<f64>() {
                 Ok(seconds) if seconds >= 0.0 => {
                     wait = Duration::from_secs_f64(seconds);
@@ -62,11 +67,35 @@ fn headless_capture(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     }
-    let result = client::capture(&node, &request, wait, |event| {
-        if let Event::Connected(hello) = event {
-            println!("connected to {} at {node}", hello.node);
+    let mut written = Ok(());
+    let result = client::capture(&node, &request, wait, |event| match event {
+        Event::Connected(hello) => println!("connected to {} at {node}", hello.node),
+        Event::Frame {
+            header,
+            name,
+            pixels,
+        } => {
+            if let (Some(dir), Ok(())) = (&out, &written) {
+                let path = dir.join(format!("{name}.png"));
+                written = path
+                    .parent()
+                    .map_or(Ok(()), std::fs::create_dir_all)
+                    .and_then(|()| {
+                        calibration::write_png(
+                            &path,
+                            header.width.into(),
+                            header.height.into(),
+                            &pixels,
+                        )
+                    });
+            }
         }
+        _ => {}
     });
+    if let Err(e) = written {
+        eprintln!("recording failed: {e}");
+        return ExitCode::FAILURE;
+    }
     match result {
         Ok(stats) => {
             let interval = stats
@@ -922,6 +951,194 @@ fn coarse_check(args: &[String]) -> ExitCode {
     }
 }
 
+/// How depth frame points compare with reference points.
+struct Comparison {
+    missing: usize,
+    extra: usize,
+    count: usize,
+    median: f64,
+    p99: f64,
+    largest: f64,
+    /// Points more than 5 µm from their reference.
+    beyond: usize,
+}
+
+impl Comparison {
+    /// At most 0.5 % missing or extra, 99th percentile within 1 µm, 0.1 % beyond 5 µm.
+    fn matches(&self) -> bool {
+        let count = self.count.max(1) as f64;
+        (self.missing + self.extra) as f64 / count <= 0.005
+            && self.p99 <= 1e-6
+            && self.beyond as f64 / count <= 0.001
+    }
+
+    fn summary(&self) -> String {
+        format!(
+            "against {} reference points: {} missing, {} extra, distance median {:.3} µm, 99th percentile {:.3} µm, largest {:.3} µm, {} beyond 5 µm",
+            self.count,
+            self.missing,
+            self.extra,
+            self.median * 1e6,
+            self.p99 * 1e6,
+            self.largest * 1e6,
+            self.beyond
+        )
+    }
+}
+
+/// Match depth frame points with reference rows (left x, left y, then the point) by their
+/// left pixel.
+fn compare_points(samples: &[[f32; 2]], points: &[[f64; 3]], reference: &[u8]) -> Comparison {
+    let mut expected = std::collections::HashMap::new();
+    for row in reference.chunks_exact(40) {
+        let v = doubles(row);
+        expected.insert((v[0] as i64, v[1] as i64), [v[2], v[3], v[4]]);
+    }
+    let mut extra = 0usize;
+    let mut distances = Vec::new();
+    for (s, p) in samples.iter().zip(points) {
+        match expected.get(&(s[0] as i64, s[1] as i64)) {
+            Some(r) => {
+                let squares = (0..3).map(|i| (p[i] - r[i]).powi(2)).sum::<f64>();
+                distances.push(squares.sqrt());
+            }
+            None => extra += 1,
+        }
+    }
+    let missing = expected.len() - distances.len();
+    distances.sort_by(f64::total_cmp);
+    let at = |q: usize| distances.get(q).copied().unwrap_or(0.0);
+    Comparison {
+        missing,
+        extra,
+        count: expected.len(),
+        median: at(distances.len() / 2),
+        p99: at(distances.len() * 99 / 100),
+        largest: distances.last().copied().unwrap_or(0.0),
+        beyond: distances.iter().filter(|&&d| d > 5e-6).count(),
+    }
+}
+
+fn replay(args: &[String]) -> ExitCode {
+    let mut frames_dir: Option<PathBuf> = None;
+    let mut params = PathBuf::from("data/depth.json");
+    for pair in args.chunks(2) {
+        let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
+            eprintln!("arguments come in pairs: --frames, --params");
+            return ExitCode::FAILURE;
+        };
+        match key.as_str() {
+            "--frames" => frames_dir = Some(PathBuf::from(value)),
+            "--params" => params = PathBuf::from(value),
+            _ => {
+                eprintln!("unknown argument {key}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let Some(frames_dir) = frames_dir else {
+        eprintln!("usage: sls-scan replay --frames <directory> [--params depth.json]");
+        return ExitCode::FAILURE;
+    };
+    let setup = match depth::DepthSetup::load(&params) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("depth parameters: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut pairs: Vec<PathBuf> = match std::fs::read_dir(&frames_dir) {
+        Ok(entries) => entries
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .is_some_and(|n| n.to_string_lossy().starts_with("frame_"))
+            })
+            .collect(),
+        Err(e) => {
+            eprintln!("{}: {e}", frames_dir.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    pairs.sort();
+    if pairs.is_empty() {
+        eprintln!("no frame_* directories in {}", frames_dir.display());
+        return ExitCode::FAILURE;
+    }
+    let frame = match depth::DepthFrame::new(false) {
+        Ok(f) => f,
+        Err(e) if std::env::var_os("SLS_REQUIRE_GPU").is_none() => {
+            println!("no GPU adapter, replay skipped: {e}");
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            eprintln!("no GPU adapter: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    println!("adapter {}", frame.adapter);
+    let depth_params = setup.params();
+    let mut ok = true;
+    for pair in &pairs {
+        let name = pair
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let images = (
+            calibration::read_png(&pair.join("left.png")),
+            calibration::read_png(&pair.join("right.png")),
+        );
+        let ((lw, lh, left), (rw, rh, right)) = match images {
+            (Ok(l), Ok(r)) => (l, r),
+            (Err(e), _) | (_, Err(e)) => {
+                println!("{name}: {e}");
+                ok = false;
+                continue;
+            }
+        };
+        if (lw, lh) != (setup.width, setup.height) || (rw, rh) != (setup.width, setup.height) {
+            println!("{name}: images are not {} × {}", setup.width, setup.height);
+            ok = false;
+            continue;
+        }
+        let cameras = (&setup.cameras.left, &setup.cameras.right);
+        let result = match frame.depth(&depth_params, cameras, &left, &right) {
+            Ok(r) => r,
+            Err(e) => {
+                println!("{name}: depth failed: {e}");
+                ok = false;
+                continue;
+            }
+        };
+        let total: f64 = result.timings.iter().map(|(_, ms)| ms).sum();
+        match std::fs::read(pair.join("reference.bin")) {
+            Ok(reference) => {
+                let comparison = compare_points(&result.samples, &result.points, &reference);
+                let matched = comparison.matches();
+                ok &= matched;
+                println!(
+                    "{name}: {} points in {total:.1} ms; {}, {}",
+                    result.points.len(),
+                    comparison.summary(),
+                    if matched { "matches" } else { "differs" }
+                );
+            }
+            Err(_) => println!("{name}: {} points in {total:.1} ms", result.points.len()),
+        }
+    }
+    println!(
+        "replay: {} pairs, {}",
+        pairs.len(),
+        if ok { "all match" } else { "some differ" }
+    );
+    if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
 fn depth_check(args: &[String]) -> ExitCode {
     let Some(dir) = args.first().map(PathBuf::from) else {
         eprintln!("usage: sls-scan depth-check <vector directory> [--fallback]");
@@ -1006,33 +1223,7 @@ fn depth_check(args: &[String]) -> ExitCode {
     let Some((total, result)) = best else {
         return ExitCode::FAILURE;
     };
-    let mut expected = std::collections::HashMap::new();
-    for row in reference.chunks_exact(40) {
-        let v: Vec<f64> = row
-            .chunks_exact(8)
-            .map(|b| f64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
-            .collect();
-        expected.insert((v[0] as i64, v[1] as i64), [v[2], v[3], v[4]]);
-    }
-    let mut extra = 0usize;
-    let mut distances = Vec::new();
-    for (s, p) in result.samples.iter().zip(&result.points) {
-        match expected.get(&(s[0] as i64, s[1] as i64)) {
-            Some(r) => {
-                let squares = (0..3).map(|i| (p[i] - r[i]).powi(2)).sum::<f64>();
-                distances.push(squares.sqrt());
-            }
-            None => extra += 1,
-        }
-    }
-    let missing = expected.len() - distances.len();
-    distances.sort_by(f64::total_cmp);
-    let median = distances.get(distances.len() / 2).copied().unwrap_or(0.0);
-    let p99 = distances
-        .get(distances.len() * 99 / 100)
-        .copied()
-        .unwrap_or(0.0);
-    let largest = distances.last().copied().unwrap_or(0.0);
+    let comparison = compare_points(&result.samples, &result.points, &reference);
     let stages: Vec<String> = result
         .timings
         .iter()
@@ -1046,15 +1237,8 @@ fn depth_check(args: &[String]) -> ExitCode {
         meta.height,
         stages.join(", ")
     );
-    println!(
-        "against {} reference points: {missing} missing, {extra} extra, distance median {:.3} µm, 99th percentile {:.3} µm, largest {:.3} µm",
-        expected.len(),
-        median * 1e6,
-        p99 * 1e6,
-        largest * 1e6
-    );
-    let differing = (missing + extra) as f64 / expected.len().max(1) as f64;
-    if differing <= 0.005 && p99 <= 1e-6 && largest <= 5e-6 {
+    println!("{}", comparison.summary());
+    if comparison.matches() {
         println!("depth check: GPU matches the NumPy reference");
         ExitCode::SUCCESS
     } else {
@@ -1183,6 +1367,7 @@ fn main() -> ExitCode {
         Some("coarse-check") => return coarse_check(&args[2..]),
         Some("depth-check") => return depth_check(&args[2..]),
         Some("fusion-check") => return fusion_check(&args[2..]),
+        Some("replay") => return replay(&args[2..]),
         _ => {}
     }
     let options = eframe::NativeOptions::default();
