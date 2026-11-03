@@ -1119,6 +1119,7 @@ fn replay(args: &[String]) -> ExitCode {
     };
     println!("adapter {}", frame.adapter);
     let depth_params = setup.params();
+    let preview = setup.preview_params();
     let mut ok = true;
     for pair in &pairs {
         let name = pair
@@ -1149,6 +1150,14 @@ fn replay(args: &[String]) -> ExitCode {
             &pair.join("reference.bin"),
             1e-6,
         );
+        if let Some(coarse) = &preview {
+            ok &= replay_frame(
+                &format!("{name} preview"),
+                frame.preview(&depth_params, coarse, cameras, &left, &right),
+                &pair.join("preview.bin"),
+                1e-6 * f64::from(coarse.scale),
+            );
+        }
     }
     println!(
         "replay: {} pairs, {}",
