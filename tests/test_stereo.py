@@ -1,5 +1,6 @@
 import math
 
+import cv2
 import numpy as np
 import pytest
 
@@ -193,3 +194,13 @@ def test_drop_isolated_keeps_a_surface_and_drops_strays():
     strays = np.array([[0.01, 0.01, 0.45], [0.05, 0.0, 0.5]])
     kept = stereo.drop_isolated(np.vstack([surface, strays]), 8, 4000.0)
     assert len(kept) == len(surface) and np.allclose(kept, surface)
+
+
+def test_dot_centres_drop_dots_cut_by_an_edge():
+    image = np.full((200, 300), 120, np.uint8)
+    for centre in ((150, 100), (4, 60), (250, 150)):
+        cv2.circle(image, centre, 10, 10, -1)
+    valid = np.ones(image.shape, dtype=bool)
+    valid[:, 240:] = False
+    centres = stereo.dot_centres(image, valid=valid)
+    assert np.allclose(centres, [[150, 100]], atol=0.01)

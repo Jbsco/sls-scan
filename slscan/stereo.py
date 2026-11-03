@@ -474,6 +474,40 @@ def preview_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
     return rect, left_pts, right_pts
 
 
+def dot_centres(image: np.ndarray, contrast: float = 0.4, min_area: int = 6,
+                max_area: int = 20000, valid: np.ndarray | None = None) -> np.ndarray:
+    """Return the centres (N, 2) of dark dots in an image under room light: connected
+    regions darker than a local background by contrast of it, centred by their darkness.
+    A region touching the image border, or a pixel outside valid when given, is dropped,
+    since part of its dot may be missing."""
+    background = cv2.blur(image, (61, 61)).astype(np.float64)
+    depth = background - image.astype(np.float64)
+    dark = (depth > contrast * background).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(dark, connectivity=8)
+    edge = np.zeros(image.shape, dtype=bool)
+    edge[0, :] = edge[-1, :] = edge[:, 0] = edge[:, -1] = True
+    if valid is not None:
+        edge |= ~valid
+    cut = np.bincount(labels[edge], minlength=count) > 0
+    centres = []
+    for k in range(1, count):
+        x, y, w, h, area = stats[k]
+        if cut[k] or not min_area <= area <= max_area:
+            continue
+        window = (labels[y:y + h, x:x + w] == k) * depth[y:y + h, x:x + w]
+        ys, xs = np.mgrid[y:y + h, x:x + w]
+        total = window.sum()
+        centres.append([(window * xs).sum() / total, (window * ys).sum() / total])
+    return np.array(centres).reshape(-1, 2)
+
+
+def rectified_valid(maps: tuple, size: tuple, margin: int = 3) -> np.ndarray:
+    """Return which rectified pixels map inside the source image, shrunk by margin pixels."""
+    inside = cv2.remap(np.full((size[1], size[0]), 255, np.uint8), *maps, cv2.INTER_NEAREST,
+                       borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    return cv2.erode(inside, np.ones((2 * margin + 1, 2 * margin + 1), np.uint8)) > 0
+
+
 def drop_isolated(points: np.ndarray, step: int, focal: float,
                   spacings: float = 3.0) -> np.ndarray:
     """Return the points that have another point within spacings sample spacings, where
