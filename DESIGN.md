@@ -955,3 +955,31 @@ from the host took each later frame to 4.7 to 7.3 ms.
 
 Against truth, this surface reads the ball bar 0.9 µm long and its spheres 34.8 and
 38.5 µm small, a voxel bias D51 shows, with a mat flatness of 4.8 µm RMS.
+## D55. Tracking from the previous pose (2026-11-02)
+
+`slscan sweep-bench --loop` sweeps a closed loop: yaw follows -25° cos and pitch 8° sin
+of one turn about the target, and a last frame repeats the first. Tracking that started
+each frame from the last pose advanced by the last motion (D26) diverged on it, at frame
+38 of a 48-frame loop and frame 39 of a 96-frame one. Pose error grew from about 0.2 mm
+to 9 mm over four frames as the ICP residual rose from 21 to 35 µm.
+
+Started from true poses, ICP moved frames 8 to 38 of the 96-frame loop by 62 µm at most.
+In every view the weakest direction of the point-to-plane system has about 1e-5 of the
+strongest direction's weight, because the mat fills most of it. It seems likely that the
+motion term carried each frame's error along that direction into the next start, where
+ICP barely corrects it. We now start each frame from the previous pose, in `track.fuse`
+and its Rust port. Two 25-frame sweeps of D51 reach the same largest and last pose
+errors either way.
+
+With affine windows and a sample every 12 px:
+
+| Loop | Pose error, largest | Last frame | Ball bar | Mat | Mat, second half against first |
+|---|---|---|---|---|---|
+| 48 frames | 118 µm, 0.051° | 13.0 µm | -12.9 µm | 22.2 µm RMS | -0.2 µm mean, 18.5 µm RMS |
+| 96 frames | 85 µm, 0.041° | 14.9 µm | -4.1 µm | 27.9 µm RMS | -0.2 µm mean, 23.1 µm RMS |
+
+Mat surfaces met again on the way back land on those of the way out, with no doubling,
+and the loop closes within 15 µm. Sphere centres fitted to each half alone differ by 12
+to 56 µm, perhaps because affine window bias changes with the view. A pose graph for
+loop closure waits for scans where drift outgrows this. A test tracks a 48-frame loop of
+point frames in seconds, where the old start diverged at frame 37.
