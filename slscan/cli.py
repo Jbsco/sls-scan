@@ -392,6 +392,46 @@ def cmd_fusion_vectors(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tsdf_vectors(args: argparse.Namespace) -> int:
+    """Write the depth frames of a short synthetic sweep, their tracked poses, the left
+    camera's rectification and the NumPy TSDF volume they fuse into, for the application."""
+    import json
+
+    from . import track, tsdf
+
+    rig = synthetic.stereo_head()
+    cal = synthetic.true_stereo_calibration(rig, synthetic.SMALL_BOARD)
+    pattern = synthetic.random_dots(rig.light.width, rig.light.height, 3.0, 1.0,
+                                    np.random.default_rng(args.seed))
+    poses = synthetic.sweep_poses(args.frames, args.yaw, args.pitch)
+    window = 21
+    frames, rect = [], None
+    for im in synthetic.sweep_captures(rig, synthetic.sweep_scene(), poses, pattern, args.seed):
+        points, rect = stereo.depth_points(cal, im["left"], im["right"], 0.4, 0.6, args.step,
+                                           window)
+        frames.append(points)
+    tracked, _ = track.fuse(frames)
+    volume, surface = tsdf.fuse(frames, tracked, rect, args.step, window,
+                                args.voxel_mm / 1000.0, args.truncation_mm / 1000.0)
+    os.makedirs(args.out, exist_ok=True)
+    np.concatenate(frames).astype("<f8").tofile(os.path.join(args.out, "frames.bin"))
+    np.array([np.concatenate([r.ravel(), t]) for r, t in tracked]).astype("<f8").tofile(
+        os.path.join(args.out, "poses.bin"))
+    volume.tsdf.astype("<f4").tofile(os.path.join(args.out, "tsdf.bin"))
+    volume.weight.astype("<f4").tofile(os.path.join(args.out, "weight.bin"))
+    meta = {"counts": [int(len(f)) for f in frames], "step": args.step, "window": window,
+            "width": rect.size[0], "height": rect.size[1],
+            "rotation": rect.left_rotation.ravel().tolist(),
+            "projection": rect.left_projection.ravel().tolist(),
+            "lower": volume.lower.tolist(), "shape": list(volume.shape),
+            "voxel": volume.voxel, "truncation": volume.truncation, "surface": int(len(surface))}
+    with open(os.path.join(args.out, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+    print(f"TSDF vectors written to {args.out}: {len(frames)} frames into "
+          f"{' x '.join(str(n) for n in volume.shape)} voxels, {len(surface)} surface points")
+    return 0
+
+
 def cmd_stereo_bench(args: argparse.Namespace) -> int:
     """Calibrate the synthetic metre head from board views, scan its Phase 2 artifacts in one
     view each by direct matching, and check them against the Phase 2 limits."""
@@ -880,6 +920,19 @@ def main(argv=None) -> int:
     p.add_argument("--focal-limit", type=float, default=0.001, help="relative focal length change")
     p.add_argument("--baseline-limit-mm", type=float, default=0.2)
     p.set_defaults(func=cmd_calibration_repeat)
+
+    p = sub.add_parser("tsdf-vectors",
+                       help="write the depth frames of a short synthetic sweep, their poses "
+                            "and the reference TSDF volume")
+    p.add_argument("--out", default="data/tsdf-vectors")
+    p.add_argument("--frames", type=int, default=4)
+    p.add_argument("--yaw", type=float, default=4.0, help="yaw amplitude in degrees")
+    p.add_argument("--pitch", type=float, default=2.0, help="pitch amplitude in degrees")
+    p.add_argument("--step", type=int, default=8, help="sample spacing in pixels")
+    p.add_argument("--voxel-mm", type=float, default=1.0)
+    p.add_argument("--truncation-mm", type=float, default=2.0)
+    p.add_argument("--seed", type=int, default=0)
+    p.set_defaults(func=cmd_tsdf_vectors)
 
     p = sub.add_parser("fusion-vectors",
                        help="write the depth frames of a short synthetic sweep and their "
