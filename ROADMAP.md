@@ -55,7 +55,8 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   export, the residual report. Acceptance: a decimated mesh imports into CAD and its
   datum points land within 1 mm of their measured positions over a metre. Surface nets
   mesh a TSDF volume and export PLY, OBJ and STL (D57), and quadric decimation keeps the
-  sweep's surface within 34 µm at a tenth of its triangles (D58).
+  sweep's surface within 34 µm at a tenth of its triangles (D58). A datum report aligns
+  fitted spheres and lists their residuals (D60).
 - Phase 8, open. The rig. Stiff bar, camera mounts, the pattern light, trigger wiring,
   handle or tripod adapter, a case for the board and markers, drawings in CAD.
   Acceptance: a calibration before and after carrying the rig to a site agrees within
