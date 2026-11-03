@@ -69,3 +69,25 @@ def test_short_sweep_tsdf_keeps_ball_bar_spacing():
     result = track.sweep_bench(rig, cal, scene, poses, frames, surface=surface)
     assert abs(result["ball_bar_error_m"]) < 0.00003
     assert result["mat_flatness_m"] < 0.00001
+
+
+def test_tracking_closes_a_loop_of_point_frames():
+    rng = np.random.default_rng(0)
+    u, v = rng.uniform(-0.07, 0.07, (2, 20000))
+    parts = [np.column_stack([u, v, np.full_like(u, 0.52)])]
+    for centre, radius in (((-0.04, 0.005, 0.5), 0.0125), ((0.04, -0.005, 0.502), 0.0125),
+                           ((0.0, -0.04, 0.508), 0.008)):
+        d = rng.normal(size=(1500, 3))
+        d[:, 2] = -np.abs(d[:, 2])
+        parts.append(np.array(centre) + radius * d / np.linalg.norm(d, axis=1)[:, None])
+    world = np.vstack(parts)
+    poses = synthetic.loop_poses(48)
+    frames = []
+    for r, t in poses:
+        seen = world[rng.choice(len(world), 4000, replace=False)] @ r.T + t
+        frames.append(seen + rng.normal(scale=1e-5, size=seen.shape))
+    tracked, _ = track.fuse(frames)
+    r0, t0 = poses[0]
+    for (r, t), (rk, tk) in zip(tracked, poses):
+        true_r = r0 @ rk.T
+        assert np.linalg.norm(t - (t0 - true_r @ tk)) < 0.0001
