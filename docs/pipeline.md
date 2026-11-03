@@ -163,7 +163,8 @@ registers to the one before, then rounds of ICP refine every view against all ot
 (D70). `slscan register` runs it on view clouds saved as PLY files. It writes the merged
 cloud, averaged over 0.5 mm voxels, and a JSON file of each view's pose and overlap.
 `slscan view-bench` runs this on synthetic views of a part a metre across and reports
-pose and scale bar errors against the truth.
+pose and scale bar errors against the truth. With `--stereo` its views are matched from
+pairs rendered for the metre head (D71).
 
 ## Virtual bench
 

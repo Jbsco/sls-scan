@@ -198,3 +198,12 @@ level and 401 mm long, one rising and 388 mm long. Command: `slscan view-bench`,
 
 Ray-cast points have no matching errors and no holes, so these figures measure
 registration alone.
+
+With `--stereo`, each view is a pattern-lit pair for the metre head, matched directly at
+an 8 px step from 0.8 m out and 1.0 m up (D71). Pose errors with a recovered calibration
+seem likely to include an offset between recovered and true camera frames.
+
+| Calibration | Pose error, largest | Scale bar errors | Phase 6 limit | Time |
+|---|---|---|---|---|
+| True | 0.204 mm, 0.0109° | +0.078 and -0.091 mm | 0.5 mm | 262 s |
+| Recovered (`--recovered`) | 1.665 mm, 0.0946° | -0.126 and +0.008 mm | 0.5 mm | 250 s |
