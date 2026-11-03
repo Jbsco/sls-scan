@@ -573,3 +573,59 @@ def sweep_captures(rig: StereoRig, scene: dict, poses: list, pattern: np.ndarray
     shapes = [scene["mat"], *scene["ball-bar"], scene["sphere"]]
     for r, t in poses:
         yield stereo_capture(rig, transform_scene(shapes, r, t), pattern, rng)
+
+
+def look_at(eye: np.ndarray, target: np.ndarray, up=(0.0, 0.0, 1.0)) -> tuple[np.ndarray, np.ndarray]:
+    """Return the pose (world to camera) of a camera at eye looking at target, with its y
+    axis pointing down, away from up."""
+    z = (target - eye) / np.linalg.norm(target - eye)
+    x = np.cross(z, np.asarray(up, dtype=float))
+    x /= np.linalg.norm(x)
+    r = np.vstack([x, np.cross(z, x), z])
+    return r, -r @ eye
+
+
+def orbit_poses(azimuths_deg, distance_m: float = 0.5, height_m: float = 0.4,
+                target=(0.0, 0.0, 0.03)) -> list:
+    """Return camera poses (world to camera) on a circle about the vertical axis, each at
+    distance_m out and height_m up, looking at target."""
+    target = np.asarray(target, dtype=float)
+    poses = []
+    for a in np.radians(np.asarray(azimuths_deg, dtype=float)):
+        eye = np.array([distance_m * math.sin(a), -distance_m * math.cos(a), height_m])
+        poses.append(look_at(eye, target))
+    return poses
+
+
+def point_view(scene: list, r: np.ndarray, t: np.ndarray, rng: np.random.Generator,
+               half_field: float = 0.3, rays: int = 320, noise_m: float = 30e-6) -> np.ndarray:
+    """Return the points (N, 3) a camera at pose (world to camera) sees of the scene, in its
+    frame: the nearest hits of a rays x 3/4 rays grid over tangents to half_field, with
+    noise_m of noise on each coordinate."""
+    shapes = transform_scene(scene, r, t)
+    gx, gy = np.meshgrid(np.linspace(-half_field, half_field, rays),
+                         np.linspace(-0.75 * half_field, 0.75 * half_field, rays * 3 // 4))
+    directions = np.column_stack([gx.ravel(), gy.ravel(), np.ones(gx.size)])
+    directions /= np.linalg.norm(directions, axis=1)[:, np.newaxis]
+    hit, _ = nearest_hit(shapes, np.zeros(3), directions)
+    ok = np.isfinite(hit)
+    points = directions[ok] * hit[ok, np.newaxis]
+    return points + noise_m * rng.standard_normal(points.shape)
+
+
+def static_object() -> list:
+    """A part about 0.3 m across for registration tests: a base plate, two walls and four
+    balls of different sizes, standing on the world's xy plane."""
+    def plate(centre, normal, u, half_u, half_v):
+        n = np.asarray(normal, dtype=float) / np.linalg.norm(normal)
+        u = np.asarray(u, dtype=float) - (np.asarray(u, dtype=float) @ n) * n
+        u /= np.linalg.norm(u)
+        return Plate(np.asarray(centre, dtype=float), np.column_stack([u, np.cross(n, u), n]),
+                     half_u, half_v)
+    return [plate([0.0, 0.0, 0.0], [0, 0, 1], [1, 0, 0], 0.15, 0.10),
+            plate([0.0, 0.10, 0.06], [0, -1, 0], [1, 0, 0], 0.15, 0.06),
+            plate([-0.15, 0.0, 0.04], [1, 0, 0.3], [0, 1, 0], 0.10, 0.04),
+            Ball(np.array([0.05, 0.03, 0.04]), 0.04),
+            Ball(np.array([-0.08, -0.04, 0.025]), 0.025),
+            Ball(np.array([0.09, -0.06, 0.015]), 0.015),
+            Ball(np.array([-0.05, 0.05, 0.03]), 0.03)]

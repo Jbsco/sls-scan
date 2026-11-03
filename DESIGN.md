@@ -1242,3 +1242,37 @@ NumPy reference depth matches coarsely by semi-global matching, which leaves a s
 wide as its disparity search unmatched: about 730 px of 1,456 for 0.4 to 0.6 m on the
 near head. Dots in that strip have no lit depth and are dropped, so the test and the
 slide use 0.45 to 0.55 m. Block matching, the GPU path's coarse stage, covers the width.
+
+## D69. Registration of static views from geometry (2026-11-03)
+
+`register.register` finds the motion that takes one view's points onto another's, each
+in its own camera frame, with no markers. Both views are thinned to 5 mm voxels and given
+normals turned toward their camera. Each point gets a fast point feature histogram (FPFH)
+of angles between its normal and those of its neighbours within 25 mm. Points pair when
+their histograms are each other's nearest. RANSAC fits a rigid motion to three pairs at a
+time, from 20,000 draws whose edge lengths agree within 10%.
+
+We score candidate motions in two stages, because pair counts alone picked wrong motions.
+On views 60 degrees apart about 9% of pairs were true, and a wrong motion brought 122
+pairs within 7.5 mm against 109 for the true one. The 100 motions with most such pairs
+are scored by the share of all thinned points that land within 7.5 mm of the other view.
+The best is refit on its pairs, and point-to-plane ICP on all points refines it, with
+match distances from 15 mm down to 1.25 mm.
+
+A test object about 0.3 m across, a base plate with two walls and four balls, was
+ray-cast from cameras 0.5 m out and 0.4 m up, with 30 µm of noise per coordinate. Each
+angle ran five seeds:
+
+| Views apart | Rotation error, largest | Translation error, largest | Failures |
+|---|---|---|---|
+| 30 degrees | 0.0010 degrees | 6 µm | 0 of 5 |
+| 60 degrees | 0.0010 degrees | 9 µm | 0 of 5 |
+| 90 degrees | 0.0013 degrees | 13 µm | 0 of 5 |
+| 120 degrees | 0.0011 degrees | 9 µm | 0 of 5 |
+| 150 degrees | none within 1 degree | none within 1 mm | 5 of 5 |
+| 180 degrees, 3 that succeeded | 0.0020 degrees | 19 µm | 2 of 5 |
+
+Each registration took about 1.3 s. At 150 degrees the views mostly see opposite faces of
+walls that have no thickness in the test object: 56% of points have normals opposite to
+the other view's, so their histograms differ. Ten views around an object are 36 degrees
+apart. Merging many views and the scale bar acceptance of Phase 6 come next.

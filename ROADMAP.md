@@ -46,10 +46,11 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   tracking with point fusion (D26) and a TSDF (D51) keep a synthetic sweep's ball bar
   within 0.03 mm, live in the application (D42, D54). Closed loops return within 15 µm
   (D55). Dots from light-off frames keep smooth panels within 0.08 mm (D67, D68).
-- Phase 6, open. Many static views. View poses from geometry by a coarse match and ICP
-  refinement, optional markers, datums defining the object's frame, a merged cloud (D63).
-  Acceptance: two scale bars in different orientations measure within 0.5 mm after a
-  10-view scan of an object a metre across.
+- Phase 6, in progress. Many static views. View poses from geometry by a coarse match
+  and ICP refinement, optional markers, datums defining the object's frame, a merged
+  cloud (D63). Acceptance: two scale bars in different orientations measure within 0.5 mm
+  after a 10-view scan of an object a metre across. Two synthetic views up to 120 degrees
+  apart register within 0.002 degrees and 13 µm (D69).
 - Phase 7, in progress. Deferred processing and export. Dense matching of selected
   frames, meshing, hole filling, decimation, alignment to datums, PLY, OBJ and STL
   export, the residual report. Acceptance: a decimated mesh imports into CAD and its
