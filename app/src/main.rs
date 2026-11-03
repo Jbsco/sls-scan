@@ -1028,6 +1028,37 @@ fn compare_points(
     }
 }
 
+/// Print one replayed frame and whether it matches its reference file, when there is one,
+/// with distance limits in multiples of `unit` metres.
+fn replay_frame(
+    label: &str,
+    result: Result<depth::DepthResult, String>,
+    reference: &Path,
+    unit: f64,
+) -> bool {
+    let result = match result {
+        Ok(r) => r,
+        Err(e) => {
+            println!("{label}: failed: {e}");
+            return false;
+        }
+    };
+    let total: f64 = result.timings.iter().map(|(_, ms)| ms).sum();
+    let Ok(reference) = std::fs::read(reference) else {
+        println!("{label}: {} points in {total:.1} ms", result.points.len());
+        return true;
+    };
+    let comparison = compare_points(&result.samples, &result.points, &reference, unit);
+    let matched = comparison.matches();
+    println!(
+        "{label}: {} points in {total:.1} ms; {}, {}",
+        result.points.len(),
+        comparison.summary(),
+        if matched { "matches" } else { "differs" }
+    );
+    matched
+}
+
 fn replay(args: &[String]) -> ExitCode {
     let mut frames_dir: Option<PathBuf> = None;
     let mut params = PathBuf::from("data/depth.json");
@@ -1112,29 +1143,12 @@ fn replay(args: &[String]) -> ExitCode {
             continue;
         }
         let cameras = (&setup.cameras.left, &setup.cameras.right);
-        let result = match frame.depth(&depth_params, cameras, &left, &right) {
-            Ok(r) => r,
-            Err(e) => {
-                println!("{name}: depth failed: {e}");
-                ok = false;
-                continue;
-            }
-        };
-        let total: f64 = result.timings.iter().map(|(_, ms)| ms).sum();
-        match std::fs::read(pair.join("reference.bin")) {
-            Ok(reference) => {
-                let comparison = compare_points(&result.samples, &result.points, &reference, 1e-6);
-                let matched = comparison.matches();
-                ok &= matched;
-                println!(
-                    "{name}: {} points in {total:.1} ms; {}, {}",
-                    result.points.len(),
-                    comparison.summary(),
-                    if matched { "matches" } else { "differs" }
-                );
-            }
-            Err(_) => println!("{name}: {} points in {total:.1} ms", result.points.len()),
-        }
+        ok &= replay_frame(
+            &name,
+            frame.depth(&depth_params, cameras, &left, &right),
+            &pair.join("reference.bin"),
+            1e-6,
+        );
     }
     println!(
         "replay: {} pairs, {}",
