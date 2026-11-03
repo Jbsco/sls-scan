@@ -199,4 +199,5 @@ def view_bench(scene: dict, poses: list, views: list, voxel: float, rounds: int 
     return {"views": len(views), "points": len(merged),
             "max_rotation_error_deg": max(rotation_errors),
             "max_translation_error_m": max(translation_errors),
+            "translation_errors_m": translation_errors,
             "scale_bar_errors_m": bar_errors, "overlaps": [r["overlap"] for r in records]}

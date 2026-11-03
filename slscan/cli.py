@@ -747,9 +747,13 @@ def cmd_view_bench(args: argparse.Namespace) -> int:
           + ", ".join(f"{o:.2f}" for o in result["overlaps"]))
     print(f"pose error: translation up to {1e3 * result['max_translation_error_m']:.3f} mm, "
           f"rotation up to {result['max_rotation_error_deg']:.4f}°")
+    placed = sum(e < 0.01 for e in result["translation_errors_m"])
+    print(f"{placed} of {result['views']} views placed within 10 mm")
     print("scale bar errors "
-          + ", ".join(f"{1e3 * e:+.3f} mm" for e in result["scale_bar_errors_m"]))
-    return 0
+          + ", ".join(f"{1e3 * e:+.3f} mm" for e in result["scale_bar_errors_m"])
+          + " (limit 0.5 mm)")
+    ok = placed == result["views"] and max(abs(e) for e in result["scale_bar_errors_m"]) < 0.0005
+    return 0 if ok else 1
 
 
 def cmd_fuse(args: argparse.Namespace) -> int:
