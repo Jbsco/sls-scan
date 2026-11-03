@@ -158,6 +158,300 @@ pub fn surface_nets(spec: &VolumeSpec, tsdf: &[f32], weight: &[f32]) -> Mesh {
     Mesh { vertices, faces }
 }
 
+/// Close each boundary loop whose perimeter is `max_perimeter` or less with a fan from a
+/// new vertex at its centroid, wound to match the triangles along it, as `fill_holes` in
+/// `slscan/mesh.py` does. Returns the count of loops closed.
+pub fn fill_holes(mesh: &mut Mesh, max_perimeter: f64) -> usize {
+    let mut half_edges = std::collections::HashSet::new();
+    let mut order = Vec::new();
+    for f in &mesh.faces {
+        for k in 0..3 {
+            let edge = (f[k], f[(k + 1) % 3]);
+            if half_edges.insert(edge) {
+                order.push(edge);
+            }
+        }
+    }
+    let mut after = std::collections::HashMap::new();
+    let mut starts = Vec::new();
+    for &(a, b) in &order {
+        if !half_edges.contains(&(b, a)) && after.insert(b, a).is_none() {
+            starts.push(b);
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    let mut closed = 0;
+    for start in starts {
+        if seen.contains(&start) {
+            continue;
+        }
+        let mut ring = Vec::new();
+        let mut k = start;
+        while !seen.contains(&k) {
+            let Some(&next) = after.get(&k) else { break };
+            seen.insert(k);
+            ring.push(k);
+            k = next;
+        }
+        if k != start || ring.len() < 3 {
+            continue;
+        }
+        let point = |v: u32| mesh.vertices[v as usize];
+        let perimeter: f64 = (0..ring.len())
+            .map(|j| distance(&point(ring[j]), &point(ring[(j + 1) % ring.len()])))
+            .sum();
+        if perimeter > max_perimeter {
+            continue;
+        }
+        let n = ring.len() as f64;
+        let centre: [f64; 3] =
+            std::array::from_fn(|d| ring.iter().map(|&v| point(v)[d]).sum::<f64>() / n);
+        let c = mesh.vertices.len() as u32;
+        mesh.vertices.push(centre);
+        for j in 0..ring.len() {
+            mesh.faces.push([ring[j], ring[(j + 1) % ring.len()], c]);
+        }
+        closed += 1;
+    }
+    closed
+}
+
+fn distance(a: &[f64; 3], b: &[f64; 3]) -> f64 {
+    ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
+}
+
+fn cross(u: &[f64; 3], w: &[f64; 3]) -> [f64; 3] {
+    [
+        u[1] * w[2] - u[2] * w[1],
+        u[2] * w[0] - u[0] * w[2],
+        u[0] * w[1] - u[1] * w[0],
+    ]
+}
+
+fn minus(a: &[f64; 3], b: &[f64; 3]) -> [f64; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn dot(a: &[f64; 3], b: &[f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+type Quadric = [[f64; 4]; 4];
+
+fn outer(p: &[f64; 4], scale: f64) -> Quadric {
+    std::array::from_fn(|i| std::array::from_fn(|j| p[i] * p[j] * scale))
+}
+
+fn add_quadric(a: &mut Quadric, b: &Quadric) {
+    for i in 0..4 {
+        for j in 0..4 {
+            a[i][j] += b[i][j];
+        }
+    }
+}
+
+/// Collapse edges by least quadric error until at most `target` triangles remain, as
+/// `decimate` in `slscan/mesh.py` does: plane quadrics weighted by area, boundary planes
+/// weighted by `boundary_weight`, collapses that turn a triangle over skipped.
+pub fn decimate(mesh: &Mesh, target: usize, boundary_weight: f64) -> Mesh {
+    use std::cmp::Reverse;
+    use std::collections::{BinaryHeap, HashMap, HashSet};
+
+    #[derive(PartialEq)]
+    struct Cost(f64);
+    impl Eq for Cost {}
+    impl PartialOrd for Cost {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(other))
+        }
+    }
+    impl Ord for Cost {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            self.0.total_cmp(&other.0)
+        }
+    }
+
+    let mut v = mesh.vertices.clone();
+    let mut f = mesh.faces.clone();
+    let mut q: Vec<Quadric> = vec![[[0.0; 4]; 4]; v.len()];
+    let mut normals = Vec::with_capacity(f.len());
+    for face in &f {
+        let [a, b, c] = face.map(|i| v[i as usize]);
+        let n = cross(&minus(&b, &a), &minus(&c, &a));
+        let area = dot(&n, &n).sqrt();
+        let n = if area > 0.0 { n.map(|x| x / area) } else { n };
+        normals.push(n);
+        let plane = [n[0], n[1], n[2], -dot(&n, &a)];
+        let k = outer(&plane, area / 2.0);
+        for &i in face {
+            add_quadric(&mut q[i as usize], &k);
+        }
+    }
+    let mut owners: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
+    let mut edge_order = Vec::new();
+    for (i, face) in f.iter().enumerate() {
+        for k in 0..3 {
+            let (a, b) = (face[k], face[(k + 1) % 3]);
+            let e = (a.min(b), a.max(b));
+            let list = owners.entry(e).or_default();
+            if list.is_empty() {
+                edge_order.push(e);
+            }
+            list.push(i);
+        }
+    }
+    for &(p0, p1) in &edge_order {
+        let list = &owners[&(p0, p1)];
+        if list.len() != 1 {
+            continue;
+        }
+        let d = minus(&v[p1 as usize], &v[p0 as usize]);
+        let side = cross(&d, &normals[list[0]]);
+        let norm = dot(&side, &side).sqrt();
+        if norm > 0.0 {
+            let side = side.map(|x| x / norm);
+            let plane = [side[0], side[1], side[2], -dot(&side, &v[p0 as usize])];
+            let k = outer(&plane, boundary_weight * dot(&d, &d));
+            add_quadric(&mut q[p0 as usize], &k);
+            add_quadric(&mut q[p1 as usize], &k);
+        }
+    }
+    let mut vertex_faces: Vec<HashSet<usize>> = vec![HashSet::new(); v.len()];
+    for (i, face) in f.iter().enumerate() {
+        for &k in face {
+            vertex_faces[k as usize].insert(i);
+        }
+    }
+    let mut alive = vec![true; f.len()];
+    let mut version = vec![0u64; v.len()];
+    let mut removed = vec![false; v.len()];
+    let place = |q: &[Quadric], v: &[[f64; 3]], p0: u32, p1: u32| -> (f64, [f64; 3]) {
+        let mut m = q[p0 as usize];
+        add_quadric(&mut m, &q[p1 as usize]);
+        let (a, b) = (v[p0 as usize], v[p1 as usize]);
+        let mid = [0, 1, 2].map(|d| (a[d] + b[d]) / 2.0);
+        let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+            - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+            + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        let mut x = mid;
+        if det != 0.0 && det.is_finite() {
+            let rhs = [-m[0][3], -m[1][3], -m[2][3]];
+            let solved: [f64; 3] = std::array::from_fn(|col| {
+                let mut c = [
+                    [m[0][0], m[0][1], m[0][2]],
+                    [m[1][0], m[1][1], m[1][2]],
+                    [m[2][0], m[2][1], m[2][2]],
+                ];
+                for r in 0..3 {
+                    c[r][col] = rhs[r];
+                }
+                (c[0][0] * (c[1][1] * c[2][2] - c[1][2] * c[2][1])
+                    - c[0][1] * (c[1][0] * c[2][2] - c[1][2] * c[2][0])
+                    + c[0][2] * (c[1][0] * c[2][1] - c[1][1] * c[2][0]))
+                    / det
+            });
+            if distance(&solved, &mid) <= 4.0 * distance(&a, &b) {
+                x = solved;
+            }
+        }
+        let h = [x[0], x[1], x[2], 1.0];
+        let cost: f64 = (0..4)
+            .map(|i| (0..4).map(|j| h[i] * m[i][j] * h[j]).sum::<f64>())
+            .sum();
+        (cost, x)
+    };
+    let mut heap = BinaryHeap::new();
+    for &(p0, p1) in &edge_order {
+        heap.push(Reverse((Cost(place(&q, &v, p0, p1).0), p0, p1, 0u64, 0u64)));
+    }
+    let mut count = f.len();
+    while count > target {
+        let Some(Reverse((_, p0, p1, s0, s1))) = heap.pop() else {
+            break;
+        };
+        let (i0, i1) = (p0 as usize, p1 as usize);
+        if removed[i0] || removed[i1] || version[i0] != s0 || version[i1] != s1 {
+            continue;
+        }
+        let (_, x) = place(&q, &v, p0, p1);
+        let shared: HashSet<usize> = vertex_faces[i0]
+            .intersection(&vertex_faces[i1])
+            .copied()
+            .collect();
+        let changed: Vec<usize> = vertex_faces[i0]
+            .union(&vertex_faces[i1])
+            .filter(|i| !shared.contains(i))
+            .copied()
+            .collect();
+        let flips = changed.iter().any(|&i| {
+            let tri = f[i];
+            let old = tri.map(|k| v[k as usize]);
+            let new = tri.map(|k| if k == p0 || k == p1 { x } else { v[k as usize] });
+            let n_old = cross(&minus(&old[1], &old[0]), &minus(&old[2], &old[0]));
+            let n_new = cross(&minus(&new[1], &new[0]), &minus(&new[2], &new[0]));
+            dot(&n_old, &n_new) <= 0.0
+        });
+        if flips {
+            continue;
+        }
+        v[i0] = x;
+        let q1 = q[i1];
+        add_quadric(&mut q[i0], &q1);
+        removed[i1] = true;
+        for &i in &shared {
+            alive[i] = false;
+            count -= 1;
+            for k in f[i] {
+                vertex_faces[k as usize].remove(&i);
+            }
+        }
+        let moved: Vec<usize> = vertex_faces[i1].iter().copied().collect();
+        for i in moved {
+            for k in f[i].iter_mut() {
+                if *k == p1 {
+                    *k = p0;
+                }
+            }
+            vertex_faces[i0].insert(i);
+        }
+        vertex_faces[i1].clear();
+        version[i0] += 1;
+        let neighbours: HashSet<u32> = vertex_faces[i0]
+            .iter()
+            .flat_map(|&i| f[i])
+            .filter(|&k| k != p0)
+            .collect();
+        for k in neighbours {
+            let (lo, hi) = if p0 < k { (p0, k) } else { (k, p0) };
+            let cost = place(&q, &v, p0, k).0;
+            heap.push(Reverse((
+                Cost(cost),
+                lo,
+                hi,
+                version[lo as usize],
+                version[hi as usize],
+            )));
+        }
+    }
+    let kept: Vec<[u32; 3]> = f
+        .iter()
+        .zip(&alive)
+        .filter(|(_, &a)| a)
+        .map(|(t, _)| *t)
+        .collect();
+    let mut used: Vec<u32> = kept.iter().flatten().copied().collect();
+    used.sort_unstable();
+    used.dedup();
+    let mut index = vec![u32::MAX; v.len()];
+    for (n, &u) in used.iter().enumerate() {
+        index[u as usize] = n as u32;
+    }
+    Mesh {
+        vertices: used.iter().map(|&u| v[u as usize]).collect(),
+        faces: kept.iter().map(|t| t.map(|k| index[k as usize])).collect(),
+    }
+}
+
 /// Unit normal of a triangle by its winding, zero for a degenerate one.
 fn normal(mesh: &Mesh, face: &[u32; 3]) -> [f64; 3] {
     let [a, b, c] = face.map(|v| mesh.vertices[v as usize]);
@@ -273,6 +567,36 @@ mod tests {
             }
         }
         uses
+    }
+
+    #[test]
+    fn decimated_sphere_stays_closed_and_round() {
+        let full = sphere();
+        let fewer = decimate(&full, 1000, 1000.0);
+        assert!(fewer.faces.len() <= 1000 && fewer.vertices.len() < full.vertices.len() / 2);
+        assert!(edge_uses(&fewer).values().all(|&n| n == 2));
+        for p in &fewer.vertices {
+            let r = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+            assert!((r - 0.005).abs() < 0.00005);
+        }
+    }
+
+    #[test]
+    fn fill_holes_closes_a_small_hole_only() {
+        let mut mesh = sphere();
+        let top = [0.0, 0.0, 0.005];
+        let bottom = [0.0, 0.0, -0.005];
+        mesh.faces.retain(|f| {
+            let c: [f64; 3] = std::array::from_fn(|d| {
+                f.iter().map(|&v| mesh.vertices[v as usize][d]).sum::<f64>() / 3.0
+            });
+            distance(&c, &top) >= 0.001 && distance(&c, &bottom) >= 0.003
+        });
+        let open = mesh.faces.len();
+        assert_eq!(fill_holes(&mut mesh, 0.01), 1);
+        assert!(mesh.faces.len() > open);
+        let uses = edge_uses(&mesh);
+        assert!(uses.values().all(|&n| n <= 2) && uses.values().any(|&n| n == 1));
     }
 
     #[test]
