@@ -508,6 +508,60 @@ def rectified_valid(maps: tuple, size: tuple, margin: int = 3) -> np.ndarray:
     return cv2.erode(inside, np.ones((2 * margin + 1, 2 * margin + 1), np.uint8)) > 0
 
 
+def surface_disparity(rect: Rectification, surface: np.ndarray, pixels: np.ndarray,
+                      radius_px: float = 60.0, neighbours: int = 12) -> tuple:
+    """Return the disparity and depth a surface (N, 3) in the left camera's frame gives at
+    rectified left pixels (M, 2): the medians over its points that project within radius_px.
+    Pixels with no such point get NaN."""
+    from scipy.spatial import cKDTree
+
+    x = surface @ rect.left_rotation.T
+    z = x[:, 2]
+    pl = rect.left_projection
+    uv = np.column_stack([pl[0, 0] * x[:, 0] / z + pl[0, 2], pl[1, 1] * x[:, 1] / z + pl[1, 2]])
+    d = disparity_at(rect, z)
+    disparity, depth = np.full(len(pixels), np.nan), np.full(len(pixels), np.nan)
+    if len(surface) == 0 or len(pixels) == 0:
+        return disparity, depth
+    distance, idx = cKDTree(uv).query(pixels, k=min(neighbours, len(uv)),
+                                      distance_upper_bound=radius_px)
+    distance, idx = distance.reshape(len(pixels), -1), idx.reshape(len(pixels), -1)
+    for i in range(len(pixels)):
+        near = idx[i][np.isfinite(distance[i])]
+        if len(near):
+            disparity[i], depth[i] = np.median(d[near]), np.median(z[near])
+    return disparity, depth
+
+
+def find_dots(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
+              surface: np.ndarray, near_m: float, far_m: float, row_tolerance: float = 1.5,
+              depth_tolerance_m: float = 0.01) -> np.ndarray:
+    """Return the positions (N, 3) in the left camera's frame of dark dots seen in a pair
+    taken under room light, next to a pattern-lit pair whose points (N, 3) are surface.
+    A rectified left dot pairs with its one right dot on the row whose disparity lies
+    within depth_tolerance_m of the surface there. Dots with no partner or several are
+    dropped."""
+    rect = rectify(cal)
+    rl = cv2.remap(left, *rect.left_maps, cv2.INTER_LINEAR)
+    rr = cv2.remap(right, *rect.right_maps, cv2.INTER_LINEAR)
+    cl = dot_centres(rl, valid=rectified_valid(rect.left_maps, rect.size))
+    cr = dot_centres(rr, valid=rectified_valid(rect.right_maps, rect.size))
+    expected, depth = surface_disparity(rect, surface, cl)
+    tolerance = np.abs(rect.right_projection[0, 3]) / depth ** 2 * depth_tolerance_m
+    left_pts, right_pts = [], []
+    for p, e, tol in zip(cl, expected, tolerance):
+        if not np.isfinite(e):
+            continue
+        partners = np.nonzero((np.abs(cr[:, 1] - p[1]) <= row_tolerance)
+                              & (np.abs(p[0] - cr[:, 0] - e) <= tol))[0]
+        if len(partners) == 1:
+            left_pts.append(p)
+            right_pts.append(cr[partners[0]])
+    if not left_pts:
+        return np.empty((0, 3))
+    return triangulate(rect, np.array(left_pts), np.array(right_pts), near_m, far_m)
+
+
 def drop_isolated(points: np.ndarray, step: int, focal: float,
                   spacings: float = 3.0) -> np.ndarray:
     """Return the points that have another point within spacings sample spacings, where

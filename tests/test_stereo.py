@@ -196,6 +196,23 @@ def test_drop_isolated_keeps_a_surface_and_drops_strays():
     assert len(kept) == len(surface) and np.allclose(kept, surface)
 
 
+def test_dots_are_found_and_placed_under_room_light(head, pattern):
+    truth = synthetic.true_stereo_calibration(head, BOARD)
+    us, vs = np.meshgrid(np.arange(-0.14, 0.141, 0.04), np.arange(-0.09, 0.091, 0.04))
+    dots = tuple(zip(us.ravel(), vs.ravel()))
+    plate = synthetic.Plate(np.array([0.013, 0.007, 0.5]), synthetic.rotation(8.0, 0.0), 0.16,
+                            0.11, 0.8, dots, 0.002)
+    lit = capture(head, [plate], pattern)
+    surface, _ = stereo.depth_points(truth, lit["left"], lit["right"], 0.45, 0.55, step=12)
+    room = synthetic.stereo_room_view(head, [plate], np.random.default_rng(2))
+    found = stereo.find_dots(truth, room["left"], room["right"], surface, 0.45, 0.55)
+    expected = synthetic.to_left(head, np.array([plate.centre + plate.axes[:, :2] @ [u, v]
+                                                 for u, v in dots]))
+    nearest = np.min(np.linalg.norm(found[:, None] - expected[None], axis=2), axis=1)
+    assert len(found) >= 9
+    assert nearest.max() < 0.0001
+
+
 def test_dot_centres_drop_dots_cut_by_an_edge():
     image = np.full((200, 300), 120, np.uint8)
     for centre in ((150, 100), (4, 60), (250, 150)):
