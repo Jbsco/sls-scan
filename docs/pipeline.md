@@ -50,9 +50,11 @@ stage.
 
 `track.fuse` aligns each depth frame to the model by point-to-plane ICP, starting from
 the previous pose, then adds its points to the model as averages over 0.5 mm voxels
-(`DESIGN.md` D26, D55). A captured sweep is a directory of
-`frame_000` onward, each with `left.png` and `right.png` (D27), and `slscan fuse <sweep>`
-matches, tracks and fuses it into one PLY file.
+(`DESIGN.md` D26, D55). Given reference dots per frame, it pairs them with a map of dots
+seen so far and adds point-to-point terms to ICP, which keeps tracking along smooth
+panels (D67). A captured sweep is a directory of `frame_000` onward, each with
+`left.png` and `right.png` (D27), and `slscan fuse <sweep>` matches, tracks and fuses it
+into one PLY file.
 
 `slscan sweep-bench` runs a synthetic sweep through matching, tracking and fusion and
 compares poses and artifacts with the truth, and `--loop` sweeps a closed loop. The application runs a Rust port of both,

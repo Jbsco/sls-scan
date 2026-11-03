@@ -38,11 +38,14 @@ def normals(points: np.ndarray, neighbours: int = 12) -> np.ndarray:
 
 def icp(source: np.ndarray, target: np.ndarray, target_normals: np.ndarray, rotation: np.ndarray,
         translation: np.ndarray, max_distances=(0.004, 0.002, 0.001, 0.0005),
-        iterations: int = 10) -> tuple[np.ndarray, np.ndarray, float]:
+        iterations: int = 10, pairs=None) -> tuple[np.ndarray, np.ndarray, float]:
     """Point-to-plane ICP of source onto target from an initial pose.
 
-    Returns the rotation and translation that take source into the target's frame, and the
-    RMS point-to-plane residual of the last matched pairs.
+    Pairs, when given, are matched points (source (M, 3), target (M, 3)), such as
+    reference dots, each adding a point-to-point term to every step, which fixes the
+    motion a smooth surface leaves free. Returns the rotation and translation that take
+    source into the target's frame, and the RMS point-to-plane residual of the last
+    matched pairs.
     """
     from scipy.spatial import cKDTree
 
@@ -59,7 +62,18 @@ def icp(source: np.ndarray, target: np.ndarray, target_normals: np.ndarray, rota
             p, q, n = moved[ok], target[idx[ok]], target_normals[idx[ok]]
             residual = np.einsum("ij,ij->i", p - q, n)
             a = np.column_stack([np.cross(p, n), n])
-            step, *_ = np.linalg.lstsq(a, -residual, rcond=None)
+            b = -residual
+            if pairs is not None and len(pairs[0]):
+                s = pairs[0] @ r.T + t
+                zeros = np.zeros(len(s))
+                skew = [np.column_stack([zeros, s[:, 2], -s[:, 1]]),
+                        np.column_stack([-s[:, 2], zeros, s[:, 0]]),
+                        np.column_stack([s[:, 1], -s[:, 0], zeros])]
+                rows = [np.column_stack([skew[k], np.tile(np.eye(3)[k], (len(s), 1))])
+                        for k in range(3)]
+                a = np.vstack([a, *rows])
+                b = np.concatenate([b, *[-(s[:, k] - pairs[1][:, k]) for k in range(3)]])
+            step, *_ = np.linalg.lstsq(a, b, rcond=None)
             dr = rodrigues(step[:3])
             r, t = dr @ r, dr @ t + step[3:]
             rms = float(np.sqrt(np.mean(residual ** 2)))
@@ -68,21 +82,53 @@ def icp(source: np.ndarray, target: np.ndarray, target_normals: np.ndarray, rota
     return r, t, rms
 
 
-def fuse(frames, voxel: float = 0.0005) -> tuple[list, np.ndarray]:
+def match_dots(dots: np.ndarray, rotation: np.ndarray, translation: np.ndarray,
+               dot_map: np.ndarray, radius: float = 0.01) -> tuple[np.ndarray, np.ndarray]:
+    """Pair each dot (in its frame) with the nearest dot of the map within radius, after
+    moving it by a pose. Returns the indices of paired dots and of their map dots."""
+    if len(dots) == 0 or len(dot_map) == 0:
+        return np.empty(0, dtype=int), np.empty(0, dtype=int)
+    from scipy.spatial import cKDTree
+
+    distance, idx = cKDTree(dot_map).query(dots @ rotation.T + translation,
+                                           distance_upper_bound=radius)
+    ok = np.isfinite(distance)
+    return np.nonzero(ok)[0], idx[ok]
+
+
+def fuse(frames, voxel: float = 0.0005, dots=None,
+         dot_radius: float = 0.03) -> tuple[list, np.ndarray]:
     """Track and fuse a sequence of point sets (each in its own camera frame).
 
     The world is the first frame's camera frame, and each frame's ICP starts from the
-    previous frame's pose. Returns each frame's pose (rotation, translation into the world)
-    and the fused model as voxel averages.
+    previous frame's pose. With dots, one array of reference dot positions per frame in
+    its camera frame, each frame's dots pair with a map of the dots seen so far and add
+    point-to-point terms to its ICP, and dots without a pair join the map. A dot pairs
+    with a map dot within dot_radius, which must stay under half the dots' spacing.
+    Returns each frame's pose (rotation, translation into the world) and the fused model
+    as voxel averages.
     """
     poses, model, raw = [], None, []
     r, t = np.eye(3), np.zeros(3)
-    for points in frames:
+    dot_map, dot_counts = np.empty((0, 3)), np.empty(0)
+    for k, points in enumerate(frames):
         if len(points) == 0:
             poses.append((r, t))
             continue
+        seen = dots[k] if dots is not None else np.empty((0, 3))
         if model is not None:
-            r, t, _ = icp(points, model, model_normals, r, t)
+            mine, theirs = match_dots(seen, r, t, dot_map, dot_radius)
+            pairs = (seen[mine], dot_map[theirs]) if len(mine) >= 3 else None
+            r, t, _ = icp(points, model, model_normals, r, t, pairs=pairs)
+        if len(seen):
+            mine, theirs = match_dots(seen, r, t, dot_map, dot_radius)
+            placed = seen @ r.T + t
+            for i, j in zip(mine, theirs):
+                dot_map[j] = (dot_map[j] * dot_counts[j] + placed[i]) / (dot_counts[j] + 1)
+                dot_counts[j] += 1
+            fresh = np.setdiff1d(np.arange(len(seen)), mine)
+            dot_map = np.vstack([dot_map, placed[fresh]])
+            dot_counts = np.concatenate([dot_counts, np.ones(len(fresh))])
         poses.append((r, t))
         raw.append(points @ r.T + t)
         model = voxel_average(np.vstack(raw), voxel)
