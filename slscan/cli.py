@@ -625,6 +625,10 @@ def cmd_sweep_bench(args: argparse.Namespace) -> int:
             if not args.mesh:
                 return points
             vertices, faces = mesh.surface_nets(volume)
+            if args.fill_mm:
+                vertices, faces, closed = mesh.fill_holes(vertices, faces,
+                                                          args.fill_mm / 1000.0)
+                print(f"{closed} holes up to {args.fill_mm:g} mm around filled")
             if args.faces:
                 vertices, faces = mesh.decimate(vertices, faces, args.faces)
             mesh.write_mesh(args.mesh, vertices, faces)
@@ -894,6 +898,8 @@ def main(argv=None) -> int:
     p.add_argument("--mesh", help="with --tsdf, write the surface as a mesh (.ply, .obj or .stl) "
                                   "and measure its vertices")
     p.add_argument("--datums", help="write the scene's spheres as a datum file for report")
+    p.add_argument("--fill-mm", type=float, default=0.0,
+                   help="with --mesh, close holes up to this perimeter")
     p.add_argument("--faces", type=int, default=0,
                    help="with --mesh, decimate the mesh to at most this many triangles")
     p.set_defaults(func=cmd_sweep_bench)

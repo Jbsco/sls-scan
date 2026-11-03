@@ -1,8 +1,8 @@
-"""Triangle meshes from a TSDF volume by surface nets, their decimation by quadric error,
-and their export as PLY, OBJ and STL. Each cell between eight observed voxels whose
-distances change sign gets one vertex, the mean of its edges' zero crossings, and each
-crossing edge joins the four cells around it in a quad facing the side where the distance
-is positive, split along the diagonal that leaves the larger smallest triangle."""
+"""Triangle meshes from a TSDF volume by surface nets, small-hole filling, decimation by
+quadric error, and export as PLY, OBJ and STL. Each cell between eight observed voxels
+whose distances change sign gets one vertex, the mean of its edges' zero crossings, and
+each crossing edge joins the four cells around it in a quad facing the side where the
+distance is positive, split along the diagonal that leaves the larger smallest triangle."""
 
 import numpy as np
 
@@ -182,6 +182,47 @@ def decimate(vertices: np.ndarray, faces: np.ndarray, target: int,
     index = np.full(len(v), -1, dtype=np.int64)
     index[used] = np.arange(len(used))
     return v[used], index[kept]
+
+
+def fill_holes(vertices: np.ndarray, faces: np.ndarray,
+               max_perimeter: float) -> tuple[np.ndarray, np.ndarray, int]:
+    """Close each boundary loop whose perimeter is max_perimeter or less with a fan of
+    triangles from a new vertex at the loop's centroid, wound to match the triangles
+    along it. Larger loops, such as a scan's outer edge or a part's unseen underside,
+    stay open. Returns the vertices, triangles and the count of loops closed."""
+    following = {}
+    for tri in faces:
+        for k in range(3):
+            following[(tri[k], tri[(k + 1) % 3])] = True
+    after = {}
+    for (a, b) in following:
+        if (b, a) not in following:
+            after[b] = a
+    added_vertices, added_faces, closed = [], [], 0
+    seen = set()
+    for start in list(after):
+        if start in seen:
+            continue
+        loop, k = [], start
+        while k not in seen and k in after:
+            seen.add(k)
+            loop.append(k)
+            k = after[k]
+        if k != start or len(loop) < 3:
+            continue
+        ring = vertices[loop]
+        perimeter = np.sum(np.linalg.norm(ring - np.roll(ring, -1, axis=0), axis=1))
+        if perimeter > max_perimeter:
+            continue
+        centre = len(vertices) + len(added_vertices)
+        added_vertices.append(ring.mean(axis=0))
+        added_faces += [[loop[j], loop[(j + 1) % len(loop)], centre]
+                        for j in range(len(loop))]
+        closed += 1
+    if not closed:
+        return vertices, faces, 0
+    return (np.vstack([vertices, added_vertices]),
+            np.vstack([faces, np.array(added_faces, dtype=faces.dtype)]), closed)
 
 
 def face_normals(vertices: np.ndarray, faces: np.ndarray) -> np.ndarray:

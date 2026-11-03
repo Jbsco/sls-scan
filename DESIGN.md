@@ -1083,3 +1083,18 @@ sphere as a datum file, seeded at their true positions. On the 25-frame sweep wi
 second-order windows and a sample every 8 px, the mesh of a 0.5 mm TSDF gives datum
 residuals of 5.9, 8.5 and 8.3 µm and a ball bar 10.7 µm short. Seeds from markers or a
 picked point wait on the rig.
+
+## D61. Small holes filled (2026-11-03)
+
+The mesh of the 25-frame sweep, with second-order windows and a 0.5 mm TSDF, has seven
+boundary loops and no edge shared by more than two triangles. Two are holes of 2.0 and
+6.4 mm perimeter. Four of 55 to 90 mm perimeter seem likely to be the unseen undersides
+of the three spheres and the mat they shade, and one of 632 mm is the scan's outer edge.
+A flat patch across a sphere's underside would read as surface that was never measured.
+
+`mesh.fill_holes` closes each loop up to a perimeter limit with a fan of triangles from
+a new vertex at the loop's centroid, wound to match the triangles along it. Larger loops
+stay open. `slscan sweep-bench --mesh --fill-mm` sets the limit. At 10 mm the sweep's
+two holes close, and the ball bar moves from -10.7 to -10.9 µm. A test opens a 1.5 mm
+cap and a 6 mm cap in a meshed sphere and checks that a 20 mm limit closes the first,
+facing out, and leaves the second open.
