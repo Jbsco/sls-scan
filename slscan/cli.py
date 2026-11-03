@@ -729,20 +729,44 @@ def cmd_register(args: argparse.Namespace) -> int:
 def cmd_view_bench(args: argparse.Namespace) -> int:
     import time
 
-    from . import register
+    from . import register, track
 
     scene = synthetic.metre_object()
     shapes = scene["part"] + [ball for bar in scene["scale-bars"] for ball in bar]
-    poses = synthetic.orbit_poses(np.arange(args.views) * 360.0 / args.views, args.distance,
-                                  args.height, (0.0, 0.0, 0.1))
+    distance = args.distance or (0.8 if args.stereo else 1.2)
+    height = args.height or (1.0 if args.stereo else 0.9)
+    poses = synthetic.orbit_poses(np.arange(args.views) * 360.0 / args.views, distance, height,
+                                  (0.0, 0.0, 0.1))
     rng = np.random.default_rng(args.seed)
-    views = [synthetic.point_view(shapes, r, t, rng, 0.42, 440, args.noise_um * 1e-6)
-             for r, t in poses]
+    if args.stereo:
+        head = synthetic.metre_head()
+        spec = synthetic.METRE_BOARD
+        if args.recovered:
+            cal = calibrate.calibrate_stereo(
+                synthetic.stereo_calibration_views(head, spec, args.seed, crossing_m=1.0), spec)
+        else:
+            cal = synthetic.true_stereo_calibration(head, spec)
+        pattern = synthetic.random_dots(head.light.width, head.light.height, 3.0, 1.0, rng)
+        views = []
+        for r, t in poses:
+            images = synthetic.stereo_capture(head, synthetic.transform_scene(shapes, r, t),
+                                              pattern, rng)
+            rect, _, _, points, refined, kept = stereo.direct_matches(
+                cal, images["left"], images["right"], args.near, args.far, args.step, 21)
+            cloud = stereo.triangulate(rect, points[kept], refined[kept], args.near, args.far)
+            views.append(stereo.drop_isolated(cloud, args.step, rect.left_projection[0, 0]))
+        poses = [track.left_camera_pose(head, r, t) for r, t in poses]
+        source = (f"metre head stereo views, step {args.step}, "
+                  f"{'recovered' if args.recovered else 'true'} calibration")
+    else:
+        views = [synthetic.point_view(shapes, r, t, rng, 0.42, 440, args.noise_um * 1e-6)
+                 for r, t in poses]
+        source = f"ray-cast views, {args.noise_um:g} µm noise"
     start = time.time()
     result = register.view_bench(scene, poses, views, args.voxel_mm / 1000.0, args.rounds)
-    print(f"{result['views']} views at {args.distance:g} m out and {args.height:g} m up, "
-          f"{args.noise_um:g} µm noise, {args.voxel_mm:g} mm voxels, {args.rounds} rounds, "
-          f"registered in {time.time() - start:.0f} s")
+    print(f"{result['views']} {source}, {distance:g} m out and {height:g} m up, "
+          f"{np.mean([len(v) for v in views]):.0f} points each, {args.voxel_mm:g} mm voxels, "
+          f"{args.rounds} rounds, registered in {time.time() - start:.0f} s")
     print("overlap with the view before: "
           + ", ".join(f"{o:.2f}" for o in result["overlaps"]))
     print(f"pose error: translation up to {1e3 * result['max_translation_error_m']:.3f} mm, "
@@ -1013,8 +1037,18 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("view-bench", help="register synthetic static views of a metre object")
     p.add_argument("--views", type=int, default=10, help="views evenly spaced around the object")
-    p.add_argument("--distance", type=float, default=1.2, help="camera distance out in metres")
-    p.add_argument("--height", type=float, default=0.9, help="camera height in metres")
+    p.add_argument("--distance", type=float, default=0.0,
+                   help="camera distance out in metres, 1.2 or with --stereo 0.8 by default")
+    p.add_argument("--height", type=float, default=0.0,
+                   help="camera height in metres, 0.9 or with --stereo 1.0 by default")
+    p.add_argument("--stereo", action="store_true",
+                   help="match stereo pairs rendered for the metre head in place of ray-cast "
+                        "points")
+    p.add_argument("--recovered", action="store_true",
+                   help="with --stereo, use a calibration recovered from board views")
+    p.add_argument("--step", type=int, default=8, help="with --stereo, sample spacing in pixels")
+    p.add_argument("--near", type=float, default=0.8, help="with --stereo, nearest depth in metres")
+    p.add_argument("--far", type=float, default=1.8, help="with --stereo, farthest depth in metres")
     p.add_argument("--noise-um", type=float, default=40.0, help="point noise per coordinate")
     p.add_argument("--voxel-mm", type=float, default=10.0, help="coarse match voxel size")
     p.add_argument("--rounds", type=int, default=1, help="ICP rounds against all other views")
