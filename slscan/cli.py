@@ -604,6 +604,8 @@ def cmd_sweep_bench(args: argparse.Namespace) -> int:
             if not args.mesh:
                 return points
             vertices, faces = mesh.surface_nets(volume)
+            if args.faces:
+                vertices, faces = mesh.decimate(vertices, faces, args.faces)
             mesh.write_mesh(args.mesh, vertices, faces)
             print(f"{len(vertices)} vertices and {len(faces)} triangles written to {args.mesh}")
             return vertices
@@ -857,6 +859,8 @@ def main(argv=None) -> int:
     p.add_argument("--truncation-mm", type=float, default=1.0, help="TSDF truncation distance")
     p.add_argument("--mesh", help="with --tsdf, write the surface as a mesh (.ply, .obj or .stl) "
                                   "and measure its vertices")
+    p.add_argument("--faces", type=int, default=0,
+                   help="with --mesh, decimate the mesh to at most this many triangles")
     p.set_defaults(func=cmd_sweep_bench)
 
     p = sub.add_parser("measure", help="fit an acceptance artifact to a point cloud")
