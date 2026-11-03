@@ -596,15 +596,21 @@ def cmd_sweep_bench(args: argparse.Namespace) -> int:
     voxel = args.voxel_mm / 1000.0
     surface = None
     if args.tsdf:
-        from . import tsdf
+        from . import mesh, tsdf
 
         def surface(tracked):
-            return tsdf.fuse(frames, tracked, rect, args.step, window, voxel,
-                             args.truncation_mm / 1000.0)[1]
+            volume, points = tsdf.fuse(frames, tracked, rect, args.step, window, voxel,
+                                       args.truncation_mm / 1000.0)
+            if not args.mesh:
+                return points
+            vertices, faces = mesh.surface_nets(volume)
+            mesh.write_mesh(args.mesh, vertices, faces)
+            print(f"{len(vertices)} vertices and {len(faces)} triangles written to {args.mesh}")
+            return vertices
     result = track.sweep_bench(rig, cal, scene, poses, frames, voxel, surface)
     print(f"{result['frames']} frames, sweep ±{args.yaw:g}° yaw and ±{args.pitch:g}° pitch, "
           f"{'recovered' if args.recovered else 'true'} calibration, order {args.order} windows, "
-          f"{result['points']} {'TSDF surface' if args.tsdf else 'fused'} points")
+          f"{result['points']} {'mesh vertices' if args.tsdf and args.mesh else 'TSDF surface points' if args.tsdf else 'fused points'}")
     print(f"pose error: translation up to {1e6 * result['max_translation_error_m']:.1f} µm, "
           f"rotation up to {result['max_rotation_error_deg']:.4f}°; last frame "
           f"{1e6 * result['last_translation_error_m']:.1f} µm, "
@@ -849,6 +855,8 @@ def main(argv=None) -> int:
     p.add_argument("--tsdf", action="store_true",
                    help="measure a TSDF surface in place of the fused points")
     p.add_argument("--truncation-mm", type=float, default=1.0, help="TSDF truncation distance")
+    p.add_argument("--mesh", help="with --tsdf, write the surface as a mesh (.ply, .obj or .stl) "
+                                  "and measure its vertices")
     p.set_defaults(func=cmd_sweep_bench)
 
     p = sub.add_parser("measure", help="fit an acceptance artifact to a point cloud")
