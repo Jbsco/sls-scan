@@ -357,6 +357,11 @@ impl DepthFrame {
         })
     }
 
+    /// The device the kernels share, for more kernels on it.
+    pub fn gpu(&self) -> &Gpu {
+        &self.gpu
+    }
+
     /// The adapter runs on the CPU, where a full depth frame takes seconds.
     pub fn software(&self) -> bool {
         self.gpu.software
