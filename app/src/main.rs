@@ -959,36 +959,44 @@ struct Comparison {
     median: f64,
     p99: f64,
     largest: f64,
-    /// Points more than 5 µm from their reference.
+    /// Distance limit of the 99th percentile in metres.
+    unit: f64,
+    /// Points more than five units from their reference.
     beyond: usize,
 }
 
 impl Comparison {
-    /// At most 0.5 % missing or extra, 99th percentile within 1 µm, 0.1 % beyond 5 µm.
+    /// At most 0.5 % missing or extra, 99th percentile within one unit, 0.1 % beyond five.
     fn matches(&self) -> bool {
         let count = self.count.max(1) as f64;
         (self.missing + self.extra) as f64 / count <= 0.005
-            && self.p99 <= 1e-6
+            && self.p99 <= self.unit
             && self.beyond as f64 / count <= 0.001
     }
 
     fn summary(&self) -> String {
         format!(
-            "against {} reference points: {} missing, {} extra, distance median {:.3} µm, 99th percentile {:.3} µm, largest {:.3} µm, {} beyond 5 µm",
+            "against {} reference points: {} missing, {} extra, distance median {:.3} µm, 99th percentile {:.3} µm, largest {:.3} µm, {} beyond {:.0} µm",
             self.count,
             self.missing,
             self.extra,
             self.median * 1e6,
             self.p99 * 1e6,
             self.largest * 1e6,
-            self.beyond
+            self.beyond,
+            self.unit * 5e6
         )
     }
 }
 
 /// Match depth frame points with reference rows (left x, left y, then the point) by their
-/// left pixel.
-fn compare_points(samples: &[[f32; 2]], points: &[[f64; 3]], reference: &[u8]) -> Comparison {
+/// left pixel, with distance limits in multiples of `unit` metres.
+fn compare_points(
+    samples: &[[f32; 2]],
+    points: &[[f64; 3]],
+    reference: &[u8],
+    unit: f64,
+) -> Comparison {
     let mut expected = std::collections::HashMap::new();
     for row in reference.chunks_exact(40) {
         let v = doubles(row);
@@ -1015,8 +1023,40 @@ fn compare_points(samples: &[[f32; 2]], points: &[[f64; 3]], reference: &[u8]) -
         median: at(distances.len() / 2),
         p99: at(distances.len() * 99 / 100),
         largest: distances.last().copied().unwrap_or(0.0),
-        beyond: distances.iter().filter(|&&d| d > 5e-6).count(),
+        unit,
+        beyond: distances.iter().filter(|&&d| d > 5.0 * unit).count(),
     }
+}
+
+/// Print one replayed frame and whether it matches its reference file, when there is one,
+/// with distance limits in multiples of `unit` metres.
+fn replay_frame(
+    label: &str,
+    result: Result<depth::DepthResult, String>,
+    reference: &Path,
+    unit: f64,
+) -> bool {
+    let result = match result {
+        Ok(r) => r,
+        Err(e) => {
+            println!("{label}: failed: {e}");
+            return false;
+        }
+    };
+    let total: f64 = result.timings.iter().map(|(_, ms)| ms).sum();
+    let Ok(reference) = std::fs::read(reference) else {
+        println!("{label}: {} points in {total:.1} ms", result.points.len());
+        return true;
+    };
+    let comparison = compare_points(&result.samples, &result.points, &reference, unit);
+    let matched = comparison.matches();
+    println!(
+        "{label}: {} points in {total:.1} ms; {}, {}",
+        result.points.len(),
+        comparison.summary(),
+        if matched { "matches" } else { "differs" }
+    );
+    matched
 }
 
 fn replay(args: &[String]) -> ExitCode {
@@ -1079,6 +1119,7 @@ fn replay(args: &[String]) -> ExitCode {
     };
     println!("adapter {}", frame.adapter);
     let depth_params = setup.params();
+    let preview = setup.preview_params();
     let mut ok = true;
     for pair in &pairs {
         let name = pair
@@ -1103,28 +1144,19 @@ fn replay(args: &[String]) -> ExitCode {
             continue;
         }
         let cameras = (&setup.cameras.left, &setup.cameras.right);
-        let result = match frame.depth(&depth_params, cameras, &left, &right) {
-            Ok(r) => r,
-            Err(e) => {
-                println!("{name}: depth failed: {e}");
-                ok = false;
-                continue;
-            }
-        };
-        let total: f64 = result.timings.iter().map(|(_, ms)| ms).sum();
-        match std::fs::read(pair.join("reference.bin")) {
-            Ok(reference) => {
-                let comparison = compare_points(&result.samples, &result.points, &reference);
-                let matched = comparison.matches();
-                ok &= matched;
-                println!(
-                    "{name}: {} points in {total:.1} ms; {}, {}",
-                    result.points.len(),
-                    comparison.summary(),
-                    if matched { "matches" } else { "differs" }
-                );
-            }
-            Err(_) => println!("{name}: {} points in {total:.1} ms", result.points.len()),
+        ok &= replay_frame(
+            &name,
+            frame.depth(&depth_params, cameras, &left, &right),
+            &pair.join("reference.bin"),
+            1e-6,
+        );
+        if let Some(coarse) = &preview {
+            ok &= replay_frame(
+                &format!("{name} preview"),
+                frame.preview(&depth_params, coarse, cameras, &left, &right),
+                &pair.join("preview.bin"),
+                1e-6 * f64::from(coarse.scale),
+            );
         }
     }
     println!(
@@ -1223,7 +1255,7 @@ fn depth_check(args: &[String]) -> ExitCode {
     let Some((total, result)) = best else {
         return ExitCode::FAILURE;
     };
-    let comparison = compare_points(&result.samples, &result.points, &reference);
+    let comparison = compare_points(&result.samples, &result.points, &reference, 1e-6);
     let stages: Vec<String> = result
         .timings
         .iter()

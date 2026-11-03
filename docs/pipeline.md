@@ -196,6 +196,11 @@ Recorded pairs replay through the same path (D47):
 `slscan replay-reference` writes a NumPy reference beside each pair, and `sls-scan
 replay` compares each GPU depth frame with it.
 
+On the CPU fallback a preview skips refinement (D49). It matches blocks at 1/8
+resolution, keeps lit blocks and triangulates each at its centre. Replay compares
+previews with `preview.bin`, which `slscan replay-reference` writes when the parameters
+have a preview section.
+
 ## Application
 
 The Rust application owns the loop: triggered capture of frame pairs from the capture

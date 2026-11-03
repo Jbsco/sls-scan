@@ -819,3 +819,32 @@ Single precision would also move points. On 16,000 points of the near head betwe
 and 0.6 m, the same least squares in float32 lands a median 0.03 µm, a 99th percentile
 0.16 µm and at most 0.39 µm from true positions, measured in NumPy. In float64 every
 point lands within 0.0001 µm.
+
+## D49. A preview without refinement (2026-11-02)
+
+Phase 4 asks for 3 depth frames per second on the CPU fallback. On llvmpipe on a
+GitHub-hosted runner, a 16,000-point frame spent 20.7 to 24.6 s in refinement and 1.5 to
+1.7 s in block disparity. No sample spacing brings refinement near 333 ms there, so the
+CPU fallback previews from block disparity alone.
+
+A preview matches blocks at 1/8 resolution. It keeps each reduced pixel whose 8 × 8 block
+of the rectified left image averages `min_level` or more, so unlit background drops out,
+and triangulates it at its block's centre. `slscan depth-params` writes the preview's
+scale and search. `stereo.preview_matches` is the NumPy reference, and
+`DepthFrame::preview` runs rectification and block matching on the GPU.
+
+Over three noise seeds, previews of the near head's plate give about 7,100 points 0.16 mm
+RMS from the refined plane, with a 99th percentile of 0.45 mm. On spheres the median
+error is 0.33 to 0.41 mm. Blocks across a sphere's silhouette mix it with background and
+land up to 40 mm off. A preview shows coverage and is not a measurement.
+
+Replay compares previews with `preview.bin` under the depth frame's limits times the
+preview scale, since a reduced pixel spans 8 px: a 99th percentile within 8 µm and at
+most 0.1 % beyond 40 µm. Three stand-in pairs gave 18,483 to 18,624 points each with one
+point missing, a 99th percentile of 0.59 to 0.96 µm and three points beyond 40 µm on one
+pair. On llvmpipe one preview's 99th percentile reached 1.27 µm, past the depth frame's
+1 µm.
+
+A preview took 2.6 to 3.3 ms on a Radeon RX 7900 GRE. On llvmpipe on the hosted
+runner, two previews of about 18,600 points took 137 and 142 ms in a debug build, about 7
+per second, where full depth frames of about 4,000 points took 3.2 to 3.3 s.

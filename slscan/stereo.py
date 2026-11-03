@@ -81,18 +81,22 @@ def depth_parameters(cal: StereoCalibration, near_m: float, far_m: float, step: 
                      window: int = 25, iterations: int = 20, min_level: float = 6.0,
                      max_move: float = 3.0, min_correlation: float = 0.95, scale: int = 4,
                      block: int = 7, coarse_correlation: float = 0.6, margin: float = 0.05,
-                     fill: int = 2) -> dict:
+                     fill: int = 2, preview_scale: int = 8) -> dict:
     """Return everything the application's depth frame takes for one calibration: image
     size, matching settings, the block matching search and settings, the depth bounds
-    and sampling, and both cameras' rectification."""
+    and sampling, both cameras' rectification, and the preview's block matching scale and
+    search."""
     rect = rectify(cal)
-    lo, count = search_range(disparity_at(rect, far_m), disparity_at(rect, near_m), scale)
+    d_min, d_max = disparity_at(rect, far_m), disparity_at(rect, near_m)
+    lo, count = search_range(d_min, d_max, scale)
+    preview_lo, preview_count = search_range(d_min, d_max, preview_scale)
     return {"width": cal.left.width, "height": cal.left.height, "window": window,
             "iterations": iterations, "max_move": max_move, "min_correlation": min_correlation,
             "coarse": {"scale": scale, "block": block, "lo": lo, "count": count,
                        "min_correlation": coarse_correlation, "margin": margin, "fill": fill},
             "depth": {"near": near_m, "far": far_m, "step": step, "min_level": min_level},
-            "cameras": rectification_params(cal, rect)}
+            "cameras": rectification_params(cal, rect),
+            "preview": {"scale": preview_scale, "lo": preview_lo, "count": preview_count}}
 
 
 def coarse_disparity(left: np.ndarray, right: np.ndarray, d_min: float, d_max: float,
@@ -444,6 +448,30 @@ def triangulate(rect: Rectification, left_pts: np.ndarray, right_pts: np.ndarray
     if return_kept:
         return x[depth_ok] @ rect.left_rotation, depth_ok
     return x[depth_ok] @ rect.left_rotation
+
+
+def preview_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
+                    near_m: float, far_m: float, scale: int = 8, min_level: float = 6.0,
+                    block: int = 7, min_correlation: float = 0.6, margin: float = 0.05,
+                    fill: int = 2):
+    """Match every reduced pixel that block_disparity_small matches at 1/scale resolution
+    and whose block of the rectified left image averages min_level or more, with no
+    refinement, for a preview. Each match stands at the centre of its scale x scale block.
+    Returns the rectification, the left points (N, 2) and the right points (N, 2)."""
+    rect = rectify(cal)
+    rl = cv2.remap(left, *rect.left_maps, cv2.INTER_LINEAR)
+    rr = cv2.remap(right, *rect.right_maps, cv2.INTER_LINEAR)
+    small, _, _ = block_disparity_small(rl, rr, disparity_at(rect, far_m),
+                                        disparity_at(rect, near_m), scale, block,
+                                        min_correlation, margin, fill)
+    h, w = small.shape
+    sums = rl[:h * scale, :w * scale].reshape(h, scale, w, scale).sum(axis=(1, 3))
+    lit = sums >= min_level * scale * scale
+    ys, xs = np.nonzero(np.isfinite(small) & lit)
+    left_pts = np.column_stack([xs, ys]).astype(np.float64) * scale + (scale - 1) / 2
+    right_pts = left_pts.copy()
+    right_pts[:, 0] -= small[ys, xs].astype(np.float64) * scale
+    return rect, left_pts, right_pts
 
 
 def depth_points(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,

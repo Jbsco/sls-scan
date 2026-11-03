@@ -175,3 +175,13 @@ def test_block_disparity_starts_within_reach_of_refinement(head, pattern):
     refined, kept = stereo.direct_refine(rl, rr, points, guesses, 25)
     assert len(points) > 1000 and kept.mean() > 0.99
     assert np.percentile(np.abs(refined[kept, 0] - guesses[kept, 0]), 99) < 2.0
+
+
+def test_preview_follows_the_plate(head, pattern):
+    truth = synthetic.true_stereo_calibration(head, BOARD)
+    images = capture(head, synthetic.stereo_scenes()["plate"], pattern)
+    rect, left_pts, right_pts = stereo.preview_matches(truth, images["left"], images["right"],
+                                                       0.4, 0.6)
+    points = stereo.triangulate(rect, left_pts, right_pts, 0.4, 0.6)
+    assert len(points) > 5000
+    assert geometry.fit_plane(points)[2] < 0.0003
