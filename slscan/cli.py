@@ -701,6 +701,32 @@ def cmd_sweep_bench(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_view_bench(args: argparse.Namespace) -> int:
+    import time
+
+    from . import register
+
+    scene = synthetic.metre_object()
+    shapes = scene["part"] + [ball for bar in scene["scale-bars"] for ball in bar]
+    poses = synthetic.orbit_poses(np.arange(args.views) * 360.0 / args.views, args.distance,
+                                  args.height, (0.0, 0.0, 0.1))
+    rng = np.random.default_rng(args.seed)
+    views = [synthetic.point_view(shapes, r, t, rng, 0.42, 440, args.noise_um * 1e-6)
+             for r, t in poses]
+    start = time.time()
+    result = register.view_bench(scene, poses, views, args.voxel_mm / 1000.0, args.rounds)
+    print(f"{result['views']} views at {args.distance:g} m out and {args.height:g} m up, "
+          f"{args.noise_um:g} µm noise, {args.voxel_mm:g} mm voxels, {args.rounds} rounds, "
+          f"registered in {time.time() - start:.0f} s")
+    print("overlap with the view before: "
+          + ", ".join(f"{o:.2f}" for o in result["overlaps"]))
+    print(f"pose error: translation up to {1e3 * result['max_translation_error_m']:.3f} mm, "
+          f"rotation up to {result['max_rotation_error_deg']:.4f}°")
+    print("scale bar errors "
+          + ", ".join(f"{1e3 * e:+.3f} mm" for e in result["scale_bar_errors_m"]))
+    return 0
+
+
 def cmd_fuse(args: argparse.Namespace) -> int:
     import cv2
 
@@ -943,6 +969,16 @@ def main(argv=None) -> int:
     p.add_argument("--faces", type=int, default=0,
                    help="with --mesh, decimate the mesh to at most this many triangles")
     p.set_defaults(func=cmd_sweep_bench)
+
+    p = sub.add_parser("view-bench", help="register synthetic static views of a metre object")
+    p.add_argument("--views", type=int, default=10, help="views evenly spaced around the object")
+    p.add_argument("--distance", type=float, default=1.2, help="camera distance out in metres")
+    p.add_argument("--height", type=float, default=0.9, help="camera height in metres")
+    p.add_argument("--noise-um", type=float, default=40.0, help="point noise per coordinate")
+    p.add_argument("--voxel-mm", type=float, default=10.0, help="coarse match voxel size")
+    p.add_argument("--rounds", type=int, default=1, help="ICP rounds against all other views")
+    p.add_argument("--seed", type=int, default=1)
+    p.set_defaults(func=cmd_view_bench)
 
     p = sub.add_parser("mesh-volume", help="mesh a saved TSDF volume")
     p.add_argument("volume", help="directory with meta.json, tsdf.bin and weight.bin")
