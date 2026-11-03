@@ -38,11 +38,14 @@ def normals(points: np.ndarray, neighbours: int = 12) -> np.ndarray:
 
 def icp(source: np.ndarray, target: np.ndarray, target_normals: np.ndarray, rotation: np.ndarray,
         translation: np.ndarray, max_distances=(0.004, 0.002, 0.001, 0.0005),
-        iterations: int = 10) -> tuple[np.ndarray, np.ndarray, float]:
+        iterations: int = 10, pairs=None) -> tuple[np.ndarray, np.ndarray, float]:
     """Point-to-plane ICP of source onto target from an initial pose.
 
-    Returns the rotation and translation that take source into the target's frame, and the
-    RMS point-to-plane residual of the last matched pairs.
+    Pairs, when given, are matched points (source (M, 3), target (M, 3)), such as
+    reference dots, each adding a point-to-point term to every step, which fixes the
+    motion a smooth surface leaves free. Returns the rotation and translation that take
+    source into the target's frame, and the RMS point-to-plane residual of the last
+    matched pairs.
     """
     from scipy.spatial import cKDTree
 
@@ -59,7 +62,18 @@ def icp(source: np.ndarray, target: np.ndarray, target_normals: np.ndarray, rota
             p, q, n = moved[ok], target[idx[ok]], target_normals[idx[ok]]
             residual = np.einsum("ij,ij->i", p - q, n)
             a = np.column_stack([np.cross(p, n), n])
-            step, *_ = np.linalg.lstsq(a, -residual, rcond=None)
+            b = -residual
+            if pairs is not None and len(pairs[0]):
+                s = pairs[0] @ r.T + t
+                zeros = np.zeros(len(s))
+                skew = [np.column_stack([zeros, s[:, 2], -s[:, 1]]),
+                        np.column_stack([-s[:, 2], zeros, s[:, 0]]),
+                        np.column_stack([s[:, 1], -s[:, 0], zeros])]
+                rows = [np.column_stack([skew[k], np.tile(np.eye(3)[k], (len(s), 1))])
+                        for k in range(3)]
+                a = np.vstack([a, *rows])
+                b = np.concatenate([b, *[-(s[:, k] - pairs[1][:, k]) for k in range(3)]])
+            step, *_ = np.linalg.lstsq(a, b, rcond=None)
             dr = rodrigues(step[:3])
             r, t = dr @ r, dr @ t + step[3:]
             rms = float(np.sqrt(np.mean(residual ** 2)))
