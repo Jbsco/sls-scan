@@ -91,3 +91,32 @@ def test_tracking_closes_a_loop_of_point_frames():
     for (r, t), (rk, tk) in zip(tracked, poses):
         true_r = r0 @ rk.T
         assert np.linalg.norm(t - (t0 - true_r @ tk)) < 0.0001
+
+
+def panel_frames(rng, frames=24, slide=0.24, dot_pitch=0.1):
+    """Point frames and dot frames of a camera sliding along a cylindrical panel 1 m away."""
+    def z(x, y):
+        return 1.0 + 1.5 - np.sqrt(1.5 ** 2 - y ** 2)
+    x, y = rng.uniform(-0.6, 0.6, 15000), rng.uniform(-0.3, 0.3, 15000)
+    world = np.column_stack([x, y, z(x, y)])
+    gx, gy = np.meshgrid(np.arange(-0.6, 0.6001, dot_pitch), np.arange(-0.25, 0.2501, dot_pitch))
+    dots = np.column_stack([gx.ravel(), gy.ravel(), z(gx.ravel(), gy.ravel())])
+    clouds, dot_frames, truth = [], [], []
+    for i in range(frames):
+        t = np.array([slide * (i / (frames - 1) - 0.5), 0.0, 0.0])
+        for points, out, noise in ((world, clouds, 3e-5), (dots, dot_frames, 5e-5)):
+            seen = points - t
+            inside = (np.abs(seen[:, 0]) < 0.4 * seen[:, 2]) & (np.abs(seen[:, 1]) < 0.3 * seen[:, 2])
+            seen = seen[inside]
+            out.append(seen + rng.normal(scale=noise, size=seen.shape))
+        truth.append(t - np.array([slide * -0.5, 0.0, 0.0]))
+    return clouds, dot_frames, truth
+
+
+def test_dots_hold_tracking_along_a_smooth_panel():
+    clouds, dot_frames, truth = panel_frames(np.random.default_rng(0))
+    bare, _ = track.fuse(clouds, 0.006)
+    dotted, _ = track.fuse(clouds, 0.006, dots=dot_frames)
+    drift = [max(np.linalg.norm(t - true_t) for (_, t), true_t in zip(poses, truth))
+             for poses in (bare, dotted)]
+    assert drift[0] > 0.1 and drift[1] < 0.0005
