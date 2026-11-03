@@ -1063,3 +1063,23 @@ that fusion already uses for neighbour searches. A depth frame itself stays unfi
 so `sls-scan depth-check` and `sls-scan replay` still compare it with direct matching.
 Eight frames of a stand-in sweep, run headless, lost 0 or 1 points each out of 15,492 to
 16,249.
+
+## D60. Datum residual report (2026-11-02)
+
+Phase 7 ends in a report of scale bar lengths and datum residuals. `slscan report` reads
+a PLY cloud or mesh and a datum file. The file names spheres on the object, each with
+its measured centre in the object's frame, its radius and a seed near it in the scan's
+frame, and lists scale bars as pairs of spheres.
+
+Each sphere is fitted to the points within its radius and 1.5 mm of its seed.
+`geometry.rigid_fit` aligns the fitted centres to the measured ones by the SVD method of
+Kabsch, and a datum's residual is its distance after that alignment. A scale bar's error
+is its fitted length less its measured length. The report prints both, writes them as
+JSON with `--out`, and fails above `--limit-mm`, 1 mm by default as in the Phase 7
+acceptance.
+
+`slscan sweep-bench --datums` writes the sweep scene's ball bar spheres and third
+sphere as a datum file, seeded at their true positions. On the 25-frame sweep with
+second-order windows and a sample every 8 px, the mesh of a 0.5 mm TSDF gives datum
+residuals of 5.9, 8.5 and 8.3 µm and a ball bar 10.7 µm short. Seeds from markers or a
+picked point wait on the rig.
