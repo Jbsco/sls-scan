@@ -631,6 +631,19 @@ def cmd_sweep_bench(args: argparse.Namespace) -> int:
             print(f"{len(vertices)} vertices and {len(faces)} triangles written to {args.mesh}")
             return vertices
     result = track.sweep_bench(rig, cal, scene, poses, frames, voxel, surface)
+    if args.datums:
+        import json
+
+        r0, t0 = track.left_camera_pose(rig, *poses[0])
+        named = {"ball-a": scene["ball-bar"][0], "ball-b": scene["ball-bar"][1],
+                 "sphere": scene["sphere"]}
+        datums = {"spheres": {name: {"centre": ball.centre.tolist(), "radius": ball.radius,
+                                     "seed": (r0 @ ball.centre + t0).tolist()}
+                              for name, ball in named.items()},
+                  "scale_bars": [["ball-a", "ball-b"]]}
+        with open(args.datums, "w", encoding="utf-8") as f:
+            json.dump(datums, f, indent=1)
+        print(f"datums written to {args.datums}")
     print(f"{result['frames']} frames, sweep ±{args.yaw:g}° yaw and ±{args.pitch:g}° pitch, "
           f"{'recovered' if args.recovered else 'true'} calibration, order {args.order} windows, "
           f"{result['points']} {'mesh vertices' if args.tsdf and args.mesh else 'TSDF surface points' if args.tsdf else 'fused points'}")
@@ -880,6 +893,7 @@ def main(argv=None) -> int:
     p.add_argument("--truncation-mm", type=float, default=1.0, help="TSDF truncation distance")
     p.add_argument("--mesh", help="with --tsdf, write the surface as a mesh (.ply, .obj or .stl) "
                                   "and measure its vertices")
+    p.add_argument("--datums", help="write the scene's spheres as a datum file for report")
     p.add_argument("--faces", type=int, default=0,
                    help="with --mesh, decimate the mesh to at most this many triangles")
     p.set_defaults(func=cmd_sweep_bench)
