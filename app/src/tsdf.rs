@@ -357,6 +357,10 @@ impl Integrator {
         ))
     }
 
+    pub fn spec(&self) -> &VolumeSpec {
+        &self.spec
+    }
+
     /// The volume's distances and weights.
     pub fn read(&self) -> Result<(Vec<f32>, Vec<f32>), String> {
         let floats = |buffer: &wgpu::Buffer| -> Result<Vec<f32>, String> {
@@ -395,6 +399,28 @@ impl Live {
     /// frame, and up to two million surface points.
     pub fn coarse() -> Self {
         Self::new(0.001, 0.002, 0.04, 2_000_000)
+    }
+
+    /// Write the volume as meta.json, tsdf.bin and weight.bin in `dir`, the layout
+    /// `slscan tsdf-vectors` writes and `slscan mesh-volume` reads.
+    pub fn save(&self, dir: &std::path::Path) -> Result<(), String> {
+        let Some(integrator) = &self.integrator else {
+            return Err("no volume yet".into());
+        };
+        let (distances, weights) = integrator.read()?;
+        let spec = integrator.spec();
+        let meta = serde_json::json!({
+            "lower": spec.lower,
+            "shape": spec.shape,
+            "voxel": spec.voxel,
+            "truncation": spec.truncation,
+        });
+        let bytes = |v: &[f32]| v.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>();
+        std::fs::create_dir_all(dir)
+            .and_then(|()| std::fs::write(dir.join("meta.json"), meta.to_string()))
+            .and_then(|()| std::fs::write(dir.join("tsdf.bin"), bytes(&distances)))
+            .and_then(|()| std::fs::write(dir.join("weight.bin"), bytes(&weights)))
+            .map_err(|e| format!("{}: {e}", dir.display()))
     }
 
     /// Start again with no volume.
