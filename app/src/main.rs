@@ -2101,6 +2101,8 @@ fn tsdf_check(args: &[String]) -> ExitCode {
 struct FusionMeta {
     counts: Vec<usize>,
     voxel: f64,
+    #[serde(default)]
+    dot_counts: Vec<usize>,
 }
 
 fn doubles(bytes: &[u8]) -> Vec<f64> {
@@ -2135,23 +2137,42 @@ fn fusion_check(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let dots = if meta.dot_counts.is_empty() {
+        Vec::new()
+    } else {
+        match read("dots.bin") {
+            Ok(d) => doubles(&d),
+            Err(e) => {
+                eprintln!("dots.bin: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    };
     if frames.len() != 3 * meta.counts.iter().sum::<usize>()
         || poses.len() != 12 * meta.counts.len()
+        || dots.len() != 3 * meta.dot_counts.iter().sum::<usize>()
+        || !(meta.dot_counts.is_empty() || meta.dot_counts.len() == meta.counts.len())
     {
         eprintln!("fusion vectors do not match meta.json");
         return ExitCode::FAILURE;
     }
     let mut fusion = fuse::Fusion::new(meta.voxel);
-    let mut offset = 0;
+    let (mut offset, mut dot_offset) = (0, 0);
     let mut times = Vec::new();
-    for &count in &meta.counts {
+    for (k, &count) in meta.counts.iter().enumerate() {
         let points: Vec<fuse::Vec3> = frames[offset..offset + 3 * count]
             .chunks_exact(3)
             .map(|c| [c[0], c[1], c[2]])
             .collect();
         offset += 3 * count;
+        let dot_count = meta.dot_counts.get(k).copied().unwrap_or(0);
+        let seen: Vec<fuse::Vec3> = dots[dot_offset..dot_offset + 3 * dot_count]
+            .chunks_exact(3)
+            .map(|c| [c[0], c[1], c[2]])
+            .collect();
+        dot_offset += 3 * dot_count;
         let start = Instant::now();
-        fusion.add(&points);
+        fusion.add_with_dots(&points, &seen);
         times.push(start.elapsed().as_secs_f64() * 1000.0);
     }
     let (mut translation, mut rotation) = (0.0f64, 0.0f64);
