@@ -246,8 +246,9 @@ OBJ and STL with the report.
 
 A stereo run sends each frame pair through the depth frame on a worker thread, and the
 scene panel draws the latest frame's points (`DESIGN.md` D40). `slscan depth-params`
-writes the parameters it needs for a calibration, and `sls-scan depth` runs the same
-path without the window. The calibration panel captures board pairs, solves the stereo
+writes the parameters it needs for a calibration, a sample every 12 px and a refinement
+exit at 10⁻⁴ px by default (D74), and `sls-scan depth` runs the same path without the
+window. The calibration panel captures board pairs, solves the stereo
 calibration through the Python tool and writes those parameters for the next run (D41).
 
 On a software adapter such as lavapipe, the worker and `sls-scan depth` run previews in
