@@ -121,8 +121,8 @@ def match_dots(dots: np.ndarray, rotation: np.ndarray, translation: np.ndarray,
     return np.nonzero(ok)[0], idx[ok]
 
 
-def fuse(frames, voxel: float = 0.0005, dots=None,
-         dot_radius: float = 0.03) -> tuple[list, np.ndarray]:
+def fuse(frames, voxel: float = 0.0005, dots=None, dot_radius: float = 0.03,
+         hold_below: float = 1e-4) -> tuple[list, np.ndarray]:
     """Track and fuse a sequence of point sets (each in its own camera frame).
 
     The world is the first frame's camera frame, and each frame's ICP starts from the
@@ -130,21 +130,41 @@ def fuse(frames, voxel: float = 0.0005, dots=None,
     its camera frame, each frame's dots pair with a map of the dots seen so far and add
     point-to-point terms to its ICP, and dots without a pair join the map. A dot pairs
     with a map dot within dot_radius, which must stay under half the dots' spacing.
+
+    A frame of None is a pair taken with the pattern light off, which has dots and no
+    points. Its pose is the rigid fit of its dots to their map dots when three or more
+    pair, and otherwise the pose it starts from. Once such pairs have been seen, each lit
+    frame's ICP holds its starting pose along directions with eigenvalues below hold_below
+    times the largest, and once two have been seen, that pose continues the motion between
+    the last two at constant velocity.
     Returns each frame's pose (rotation, translation into the world) and the fused model
     as voxel averages.
     """
-    poses, model, raw = [], None, []
+    from . import geometry
+
+    poses, model, raw, fixes = [], None, [], []
     r, t = np.eye(3), np.zeros(3)
     dot_map, dot_counts = np.empty((0, 3)), np.empty(0)
     for k, points in enumerate(frames):
-        if len(points) == 0:
+        if len(fixes) >= 2:
+            (k0, r0, t0), (k1, r1, t1) = fixes[-2], fixes[-1]
+            ahead = (k - k1) / (k1 - k0)
+            r = rodrigues(ahead * rotation_vector(r1 @ r0.T)) @ r1
+            t = t1 + ahead * (t1 - t0)
+        seen = dots[k] if dots is not None else np.empty((0, 3))
+        if points is None:
+            if len(dot_map):
+                mine, theirs = match_dots(seen, r, t, dot_map, dot_radius)
+                if len(mine) >= 3:
+                    r, t = geometry.rigid_fit(seen[mine], dot_map[theirs])
+        elif len(points) == 0:
             poses.append((r, t))
             continue
-        seen = dots[k] if dots is not None else np.empty((0, 3))
-        if model is not None:
+        elif model is not None:
             mine, theirs = match_dots(seen, r, t, dot_map, dot_radius)
             pairs = (seen[mine], dot_map[theirs]) if len(mine) >= 3 else None
-            r, t, _ = icp(points, model, model_normals, r, t, pairs=pairs)
+            r, t, _ = icp(points, model, model_normals, r, t, pairs=pairs,
+                          hold_below=hold_below if fixes else 0.0)
         if len(seen):
             mine, theirs = match_dots(seen, r, t, dot_map, dot_radius)
             placed = seen @ r.T + t
@@ -155,6 +175,9 @@ def fuse(frames, voxel: float = 0.0005, dots=None,
             dot_map = np.vstack([dot_map, placed[fresh]])
             dot_counts = np.concatenate([dot_counts, np.ones(len(fresh))])
         poses.append((r, t))
+        if points is None:
+            fixes.append((k, r, t))
+            continue
         raw.append(points @ r.T + t)
         model = voxel_average(np.vstack(raw), voxel)
         model_normals = normals(model)

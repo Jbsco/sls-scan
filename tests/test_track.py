@@ -100,3 +100,12 @@ def test_dots_hold_tracking_along_a_smooth_panel():
     drift = [max(np.linalg.norm(t - true_t) for (_, t), true_t in zip(poses, truth))
              for poses in (bare, dotted)]
     assert drift[0] > 0.1 and drift[1] < 0.0005
+
+
+def test_light_off_dots_hold_tracking_along_a_smooth_panel():
+    clouds, dot_frames, truth = synthetic.panel_frames(np.random.default_rng(0), 40, 0.273)
+    frames = [None if k % 4 == 0 else c for k, c in enumerate(clouds)]
+    seen = [d if k % 4 == 0 else np.empty((0, 3)) for k, d in enumerate(dot_frames)]
+    poses, _ = track.fuse(frames, 0.006, dots=seen)
+    errors = [np.linalg.norm(t - true_t) for (_, t), true_t in zip(poses, truth)]
+    assert max(errors[8:]) < 0.0005
