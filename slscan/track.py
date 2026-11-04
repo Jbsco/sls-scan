@@ -17,6 +17,16 @@ def rodrigues(w: np.ndarray) -> np.ndarray:
     return np.eye(3) + np.sin(angle) * kx + (1.0 - np.cos(angle)) * kx @ kx
 
 
+def rotation_vector(rotation: np.ndarray) -> np.ndarray:
+    """Return the rotation vector of a rotation, as rodrigues inverts it."""
+    angle = float(np.arccos(np.clip((np.trace(rotation) - 1.0) / 2.0, -1.0, 1.0)))
+    if angle < 1e-12:
+        return np.zeros(3)
+    w = np.array([rotation[2, 1] - rotation[1, 2], rotation[0, 2] - rotation[2, 0],
+                  rotation[1, 0] - rotation[0, 1]])
+    return w * angle / (2.0 * np.sin(angle))
+
+
 def voxel_average(points: np.ndarray, voxel: float) -> np.ndarray:
     """Return the mean point of every occupied voxel."""
     keys = np.floor(points / voxel).astype(np.int64)
@@ -38,12 +48,16 @@ def normals(points: np.ndarray, neighbours: int = 12) -> np.ndarray:
 
 def icp(source: np.ndarray, target: np.ndarray, target_normals: np.ndarray, rotation: np.ndarray,
         translation: np.ndarray, max_distances=(0.004, 0.002, 0.001, 0.0005),
-        iterations: int = 10, pairs=None) -> tuple[np.ndarray, np.ndarray, float]:
+        iterations: int = 10, pairs=None,
+        hold_below: float = 0.0) -> tuple[np.ndarray, np.ndarray, float]:
     """Point-to-plane ICP of source onto target from an initial pose.
 
     Pairs, when given, are matched points (source (M, 3), target (M, 3)), such as
     reference dots, each adding a point-to-point term to every step, which fixes the
-    motion a smooth surface leaves free. Returns the rotation and translation that take
+    motion a smooth surface leaves free. With hold_below above zero, each step holds the
+    pose at the initial pose along directions of motion whose normal-equation eigenvalue
+    lies below hold_below times the largest, which the surface leaves nearly free, and
+    solves the others from the surface. Returns the rotation and translation that take
     source into the target's frame, and the RMS point-to-plane residual of the last
     matched pairs.
     """
@@ -51,6 +65,7 @@ def icp(source: np.ndarray, target: np.ndarray, target_normals: np.ndarray, rota
 
     tree = cKDTree(target)
     r, t = rotation.copy(), translation.copy()
+    r0, t0 = rotation.copy(), translation.copy()
     rms = float("inf")
     for limit in max_distances:
         for _ in range(iterations):
@@ -73,7 +88,17 @@ def icp(source: np.ndarray, target: np.ndarray, target_normals: np.ndarray, rota
                         for k in range(3)]
                 a = np.vstack([a, *rows])
                 b = np.concatenate([b, *[-(s[:, k] - pairs[1][:, k]) for k in range(3)]])
-            step, *_ = np.linalg.lstsq(a, b, rcond=None)
+            if hold_below > 0:
+                moved_by = r @ r0.T
+                away = np.concatenate([rotation_vector(moved_by), t - moved_by @ t0])
+                values, vectors = np.linalg.eigh(a.T @ a)
+                along = vectors.T @ (a.T @ b)
+                free = values < hold_below * values[-1]
+                along[~free] /= values[~free]
+                along[free] = -(vectors.T @ away)[free]
+                step = vectors @ along
+            else:
+                step, *_ = np.linalg.lstsq(a, b, rcond=None)
             dr = rodrigues(step[:3])
             r, t = dr @ r, dr @ t + step[3:]
             rms = float(np.sqrt(np.mean(residual ** 2)))
