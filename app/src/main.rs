@@ -2106,6 +2106,8 @@ struct FusionMeta {
     voxel: f64,
     #[serde(default)]
     dot_counts: Vec<usize>,
+    #[serde(default)]
+    dark: Vec<bool>,
 }
 
 fn doubles(bytes: &[u8]) -> Vec<f64> {
@@ -2175,7 +2177,11 @@ fn fusion_check(args: &[String]) -> ExitCode {
             .collect();
         dot_offset += 3 * dot_count;
         let start = Instant::now();
-        fusion.add_with_dots(&points, &seen);
+        if meta.dark.get(k).copied().unwrap_or(false) {
+            fusion.add_dark(&seen);
+        } else {
+            fusion.add_with_dots(&points, &seen);
+        }
         times.push(start.elapsed().as_secs_f64() * 1000.0);
     }
     let (mut translation, mut rotation) = (0.0f64, 0.0f64);
