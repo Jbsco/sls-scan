@@ -26,6 +26,12 @@ def test_camera_intrinsics_match_the_rig(rig, result):
     assert result.camera.rms_px < 0.3
 
 
+def test_wide_lenses_fit_k2(result):
+    camera = result.camera
+    assert calibrate.half_field((camera.width, camera.height), camera.matrix) >= calibrate.NARROW_FIELD
+    assert camera.distortion[1] != 0.0
+
+
 def test_projector_intrinsics_match_the_rig(rig, result):
     k, truth = result.projector.matrix, rig.projector.matrix
     assert abs(k[0, 0] / truth[0, 0] - 1) < 0.003

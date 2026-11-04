@@ -6,6 +6,7 @@ decoded projector columns and rows give a local homography, which maps the corne
 the projector image at a fraction of a projector pixel.
 """
 
+import math
 from dataclasses import asdict, dataclass
 
 import cv2
@@ -116,11 +117,24 @@ def projector_corners(corners: np.ndarray, columns: np.ndarray, rows: np.ndarray
     return keep, out
 
 
+NARROW_FIELD = 0.3
+
+
+def half_field(size: tuple[int, int], matrix: np.ndarray) -> float:
+    """Return the tangent of a device's half-diagonal field of view."""
+    return math.hypot(*size) / 2.0 / matrix[0, 0]
+
+
 def calibrate_intrinsics(objects: list, images: list, size: tuple[int, int]) -> Intrinsics:
-    """Calibrate one pinhole device with radial and tangential distortion, k3 fixed."""
+    """Calibrate one pinhole device with radial and tangential distortion, k3 fixed. A
+    device whose half_field is under NARROW_FIELD keeps k2 at 0 as well (D80)."""
+    objects = [o.astype(np.float32) for o in objects]
+    images = [i.astype(np.float32) for i in images]
     rms, matrix, distortion, _, _ = cv2.calibrateCamera(
-        [o.astype(np.float32) for o in objects], [i.astype(np.float32) for i in images],
-        size, None, None, flags=cv2.CALIB_FIX_K3)
+        objects, images, size, None, None, flags=cv2.CALIB_FIX_K3 | cv2.CALIB_FIX_K2)
+    if half_field(size, matrix) >= NARROW_FIELD:
+        rms, matrix, distortion, _, _ = cv2.calibrateCamera(
+            objects, images, size, None, None, flags=cv2.CALIB_FIX_K3)
     return Intrinsics(size[0], size[1], matrix, distortion.reshape(-1), float(rms))
 
 
