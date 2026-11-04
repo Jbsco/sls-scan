@@ -2,6 +2,7 @@ import json
 import socket
 import threading
 
+import cv2
 import numpy as np
 import pytest
 
@@ -128,3 +129,26 @@ def test_paced_stereo_stream_keeps_pairs_in_step(stand_in, tmp_path):
     stamps = result["timestamps_ns"]
     assert all(stamps[2 * k] == stamps[2 * k + 1] for k in range(6))
     assert np.allclose(np.diff(stamps[::2]), 200_000_000, atol=1)
+
+
+def test_stereo_sequence_takes_light_off_pairs(stand_in, tmp_path):
+    host, port = stand_in
+    out = tmp_path / "dark"
+    result = node.capture(host, port, "stereo", str(out), frames=8, dark_every=4)
+    assert not result["missing"]
+    names = node.pattern_names("stereo", 1024, 768, 4, 8, 4)
+    assert names[0:2] == ["dark_000/left", "dark_000/right"]
+    assert names[8:10] == ["dark_004/left", "dark_004/right"]
+    lit = cv2.imread(str(out / "frame_002" / "left.png"), cv2.IMREAD_GRAYSCALE)
+    dark = cv2.imread(str(out / "dark_004" / "left.png"), cv2.IMREAD_GRAYSCALE)
+    assert np.std(dark[dark > 0]) < np.std(lit[lit > 0])
+
+
+def test_paced_stream_takes_light_off_pairs(stand_in, tmp_path):
+    host, port = stand_in
+    out = tmp_path / "paced-dark"
+    result = node.capture(host, port, "stereo", str(out), frames=4, rate_hz=5.0, dark_every=2)
+    assert not result["missing"]
+    dark = cv2.imread(str(out / "dark_002" / "left.png"), cv2.IMREAD_GRAYSCALE)
+    lit = cv2.imread(str(out / "frame_001" / "left.png"), cv2.IMREAD_GRAYSCALE)
+    assert np.std(dark[dark > 0]) < np.std(lit[lit > 0])
