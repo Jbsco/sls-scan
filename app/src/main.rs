@@ -7,6 +7,7 @@ use slscan_app::gpu;
 use slscan_app::protocol::SequenceRequest;
 use slscan_app::rectify;
 use slscan_app::refine;
+use slscan_app::register;
 use slscan_app::tsdf;
 use slscan_app::ui::ScanApp;
 use std::path::{Path, PathBuf};
@@ -1431,6 +1432,217 @@ struct VolumeMeta {
 }
 
 /// Mesh a saved TSDF volume, as `slscan mesh-volume` does, without Python.
+#[derive(serde::Deserialize)]
+struct PoseRecord {
+    rotation: [[f64; 3]; 3],
+    translation: [f64; 3],
+}
+
+#[derive(serde::Deserialize)]
+struct RegisterVectors {
+    voxel: f64,
+    rounds: usize,
+    views: Vec<String>,
+    numpy: Vec<PoseRecord>,
+    truth: Vec<PoseRecord>,
+}
+
+/// Angle in degrees and translation distance in metres between two poses.
+fn pose_difference(pose: &fuse::Pose, other: &PoseRecord) -> (f64, f64) {
+    let r = &pose.rotation;
+    let o = &other.rotation;
+    let trace: f64 = (0..3)
+        .map(|i| (0..3).map(|k| r[i][k] * o[i][k]).sum::<f64>())
+        .sum();
+    let angle = ((trace - 1.0) / 2.0).clamp(-1.0, 1.0).acos().to_degrees();
+    let d: f64 = (0..3)
+        .map(|i| (pose.translation[i] - other.translation[i]).powi(2))
+        .sum();
+    (angle, d.sqrt())
+}
+
+/// Read view clouds, failing with a message naming the file.
+fn read_views(paths: &[PathBuf]) -> Option<Vec<Vec<[f64; 3]>>> {
+    let mut views = Vec::new();
+    for path in paths {
+        match register::read_ply(path) {
+            Ok(v) => views.push(v),
+            Err(e) => {
+                eprintln!("{}: {e}", path.display());
+                return None;
+            }
+        }
+    }
+    Some(views)
+}
+
+/// Register the views `slscan register-vectors` wrote and compare the poses with the NumPy
+/// registration and the truth.
+fn register_check(args: &[String]) -> ExitCode {
+    let Some(dir) = args.first().map(PathBuf::from) else {
+        eprintln!("usage: sls-scan register-check <register vectors directory>");
+        return ExitCode::FAILURE;
+    };
+    let meta: RegisterVectors = match std::fs::read(dir.join("register.json"))
+        .map_err(|e| e.to_string())
+        .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
+    {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("register.json: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let paths: Vec<PathBuf> = meta.views.iter().map(|v| dir.join(v)).collect();
+    let Some(views) = read_views(&paths) else {
+        return ExitCode::FAILURE;
+    };
+    let clock = Instant::now();
+    let (poses, records) = register::register_views(&views, meta.voxel, meta.rounds);
+    println!(
+        "{} views registered in {:.0} ms at {} mm voxels, overlaps {}",
+        views.len(),
+        clock.elapsed().as_secs_f64() * 1000.0,
+        meta.voxel * 1000.0,
+        records
+            .iter()
+            .map(|r| format!("{:.2}", r.overlap))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let (mut worst_numpy, mut worst_truth) = ((0.0f64, 0.0f64), (0.0f64, 0.0f64));
+    for (pose, (numpy, truth)) in poses.iter().zip(meta.numpy.iter().zip(&meta.truth)) {
+        let (a, t) = pose_difference(pose, numpy);
+        worst_numpy = (worst_numpy.0.max(a), worst_numpy.1.max(t));
+        let (a, t) = pose_difference(pose, truth);
+        worst_truth = (worst_truth.0.max(a), worst_truth.1.max(t));
+    }
+    println!(
+        "against NumPy poses: rotation up to {:.6}°, translation up to {:.3} µm; against truth: {:.5}°, {:.2} µm",
+        worst_numpy.0,
+        worst_numpy.1 * 1e6,
+        worst_truth.0,
+        worst_truth.1 * 1e6
+    );
+    if worst_numpy.0 < REGISTER_DEGREES && worst_numpy.1 < REGISTER_METRES {
+        println!("register check: Rust registration matches the NumPy reference");
+        ExitCode::SUCCESS
+    } else {
+        println!(
+            "register check: Rust and NumPy poses differ by more than {REGISTER_DEGREES}° or {} µm",
+            REGISTER_METRES * 1e6
+        );
+        ExitCode::FAILURE
+    }
+}
+
+/// Largest pose difference `register-check` accepts between the Rust and NumPy
+/// registrations, whose RANSAC draws differ.
+const REGISTER_DEGREES: f64 = 0.001;
+const REGISTER_METRES: f64 = 5e-6;
+
+/// Register view clouds in order around an object, merge them and write the poses, as
+/// `slscan register` does.
+fn register_views_command(args: &[String]) -> ExitCode {
+    let split = args
+        .iter()
+        .position(|a| a.starts_with("--"))
+        .unwrap_or(args.len());
+    let paths: Vec<PathBuf> = args[..split].iter().map(PathBuf::from).collect();
+    if paths.is_empty() {
+        eprintln!(
+            "usage: sls-scan register <view.ply>... [--voxel-mm N] [--rounds N] [--merge-voxel-mm N] [--out merged.ply] [--poses poses.json]"
+        );
+        return ExitCode::FAILURE;
+    }
+    let (mut voxel_mm, mut rounds, mut merge_mm) = (10.0f64, 1usize, 0.5f64);
+    let (mut out, mut pose_file) = (
+        PathBuf::from("data/merged.ply"),
+        PathBuf::from("data/poses.json"),
+    );
+    for pair in args[split..].chunks(2) {
+        let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
+            eprintln!(
+                "arguments come in pairs: --voxel-mm, --rounds, --merge-voxel-mm, --out, --poses"
+            );
+            return ExitCode::FAILURE;
+        };
+        let parsed = match key.as_str() {
+            "--voxel-mm" => value.parse().map(|v| voxel_mm = v).map_err(|_| ()),
+            "--rounds" => value.parse().map(|v| rounds = v).map_err(|_| ()),
+            "--merge-voxel-mm" => value.parse().map(|v| merge_mm = v).map_err(|_| ()),
+            "--out" => {
+                out = PathBuf::from(value);
+                Ok(())
+            }
+            "--poses" => {
+                pose_file = PathBuf::from(value);
+                Ok(())
+            }
+            _ => Err(()),
+        };
+        if parsed.is_err() {
+            eprintln!("bad argument {key} {value}");
+            return ExitCode::FAILURE;
+        }
+    }
+    let Some(views) = read_views(&paths) else {
+        return ExitCode::FAILURE;
+    };
+    let (poses, records) = register::register_views(&views, voxel_mm / 1000.0, rounds);
+    let mut merged: Vec<[f64; 3]> = views
+        .iter()
+        .zip(&poses)
+        .flat_map(|(v, pose)| v.iter().map(|p| pose.apply(p)))
+        .collect();
+    if merge_mm > 0.0 {
+        merged = register::voxel_average(&merged, merge_mm / 1000.0);
+    }
+    if let Err(e) = depth::write_ply(&out, &merged) {
+        eprintln!("{}: {e}", out.display());
+        return ExitCode::FAILURE;
+    }
+    let overlaps: Vec<Option<f64>> = std::iter::once(None)
+        .chain(records.iter().map(|r| Some(r.overlap)))
+        .collect();
+    let listed: Vec<serde_json::Value> = paths
+        .iter()
+        .zip(&poses)
+        .zip(&overlaps)
+        .map(|((path, pose), overlap)| {
+            serde_json::json!({
+                "file": path.display().to_string(),
+                "rotation": pose.rotation,
+                "translation": pose.translation,
+                "overlap_with_previous": overlap,
+            })
+        })
+        .collect();
+    let document = serde_json::json!({"frame": paths[0].display().to_string(), "views": listed});
+    let written = serde_json::to_string_pretty(&document)
+        .map_err(std::io::Error::other)
+        .and_then(|text| std::fs::write(&pose_file, text));
+    if let Err(e) = written {
+        eprintln!("{}: {e}", pose_file.display());
+        return ExitCode::FAILURE;
+    }
+    for (path, record) in paths[1..].iter().zip(&records) {
+        println!(
+            "{}: overlap with the view before {:.2}",
+            path.display(),
+            record.overlap
+        );
+    }
+    println!(
+        "{} points written to {}, poses in the frame of {} written to {}",
+        merged.len(),
+        out.display(),
+        paths[0].display(),
+        pose_file.display()
+    );
+    ExitCode::SUCCESS
+}
+
 fn mesh_volume(args: &[String]) -> ExitCode {
     let Some(dir) = args.first().map(PathBuf::from) else {
         eprintln!(
@@ -1873,6 +2085,8 @@ fn main() -> ExitCode {
         Some("fusion-check") => return fusion_check(&args[2..]),
         Some("tsdf-check") => return tsdf_check(&args[2..]),
         Some("mesh-volume") => return mesh_volume(&args[2..]),
+        Some("register") => return register_views_command(&args[2..]),
+        Some("register-check") => return register_check(&args[2..]),
         Some("replay") => return replay(&args[2..]),
         _ => {}
     }

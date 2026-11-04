@@ -449,6 +449,40 @@ def cmd_fusion_vectors(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_register_vectors(args: argparse.Namespace) -> int:
+    """Write ray-cast views of the static test object as PLY files, with the poses the NumPy
+    registration finds and the true poses, for the application's register-check."""
+    import json
+
+    from . import register
+
+    scene = synthetic.static_object()
+    poses = synthetic.orbit_poses(args.azimuths)
+    rng = np.random.default_rng(args.seed)
+    os.makedirs(args.out, exist_ok=True)
+    names, views = [], []
+    for k, (r, t) in enumerate(poses):
+        names.append(f"view_{k}.ply")
+        path = os.path.join(args.out, names[-1])
+        geometry.write_ply(path, synthetic.point_view(scene, r, t, rng))
+        views.append(geometry.read_ply(path))
+    voxel = args.voxel_mm / 1000.0
+    found, records = register.register_views(views, voxel, args.rounds)
+    r0, t0 = poses[0]
+    truth = []
+    for rk, tk in poses:
+        true_r = r0 @ rk.T
+        truth.append({"rotation": true_r.tolist(), "translation": (t0 - true_r @ tk).tolist()})
+    with open(os.path.join(args.out, "register.json"), "w", encoding="utf-8") as f:
+        json.dump({"voxel": voxel, "rounds": args.rounds, "views": names,
+                   "numpy": [{"rotation": r.tolist(), "translation": t.tolist()}
+                             for r, t in found],
+                   "truth": truth, "overlaps": [rec["overlap"] for rec in records]},
+                  f, indent=1)
+    print(f"{len(views)} views written to {args.out}")
+    return 0
+
+
 def cmd_tsdf_vectors(args: argparse.Namespace) -> int:
     """Write the depth frames of a short synthetic sweep, their tracked poses, the left
     camera's rectification and the NumPy TSDF volume they fuse into, for the application."""
@@ -1150,6 +1184,16 @@ def main(argv=None) -> int:
     p.add_argument("--focal-limit", type=float, default=0.001, help="relative focal length change")
     p.add_argument("--baseline-limit-mm", type=float, default=0.2)
     p.set_defaults(func=cmd_calibration_repeat)
+
+    p = sub.add_parser("register-vectors",
+                       help="write views of the static test object with NumPy and true poses")
+    p.add_argument("--out", default="data/register-vectors")
+    p.add_argument("--azimuths", type=float, nargs="+", default=[0.0, 40.0, 80.0, 120.0],
+                   help="camera azimuths in degrees around the object")
+    p.add_argument("--voxel-mm", type=float, default=5.0, help="coarse match voxel size")
+    p.add_argument("--rounds", type=int, default=1, help="ICP rounds against all other views")
+    p.add_argument("--seed", type=int, default=3)
+    p.set_defaults(func=cmd_register_vectors)
 
     p = sub.add_parser("tsdf-vectors",
                        help="write the depth frames of a short synthetic sweep, their poses "

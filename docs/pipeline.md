@@ -166,6 +166,9 @@ cloud, averaged over 0.5 mm voxels, and a JSON file of each view's pose and over
 pose and scale bar errors against the truth. With `--stereo` its views are matched from
 pairs rendered for the metre head (D71).
 
+`sls-scan register` does the same as `slscan register` in the application's Rust port,
+and `sls-scan register-check` compares its poses with NumPy's (D73).
+
 ## Virtual bench
 
 `slscan simulate` writes a synthetic calibration capture and three scenes (`plate`,

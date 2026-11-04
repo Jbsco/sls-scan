@@ -281,3 +281,14 @@ def test_register_command_places_views_of_an_object(tmp_path):
         assert np.allclose(view["rotation"], true_r, atol=1e-4)
         assert np.linalg.norm(np.array(view["translation"]) - (t0 - true_r @ tk)) < 0.0001
     assert len(geometry.read_ply(out)) > 10000
+
+
+def test_register_vectors_command_writes_views_and_poses(tmp_path):
+    out = str(tmp_path / "register")
+    assert cli.main(["register-vectors", "--out", out, "--azimuths", "0", "50"]) == 0
+    with open(os.path.join(out, "register.json"), encoding="utf-8") as f:
+        meta = json.load(f)
+    assert meta["views"] == ["view_0.ply", "view_1.ply"]
+    for found, truth in zip(meta["numpy"], meta["truth"]):
+        assert np.allclose(found["rotation"], truth["rotation"], atol=1e-4)
+        assert np.linalg.norm(np.subtract(found["translation"], truth["translation"])) < 0.0001

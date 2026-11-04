@@ -39,7 +39,10 @@ type CellMap<V> = HashMap<[i64; 3], V, BuildHasherDefault<CellHasher>>;
 
 /// Run `work` on consecutive chunks of `0..n` on scoped threads and return the results in
 /// chunk order.
-fn chunked<T: Send>(n: usize, work: impl Fn(std::ops::Range<usize>) -> T + Sync) -> Vec<T> {
+pub(crate) fn chunked<T: Send>(
+    n: usize,
+    work: impl Fn(std::ops::Range<usize>) -> T + Sync,
+) -> Vec<T> {
     let threads = thread::available_parallelism().map_or(1, |p| p.get());
     let chunks = n.div_ceil(CHUNK).clamp(1, threads);
     let size = n.div_ceil(chunks);
@@ -76,19 +79,19 @@ impl Pose {
     }
 }
 
-fn add(a: &Vec3, b: &Vec3) -> Vec3 {
+pub(crate) fn add(a: &Vec3, b: &Vec3) -> Vec3 {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 
-fn sub(a: &Vec3, b: &Vec3) -> Vec3 {
+pub(crate) fn sub(a: &Vec3, b: &Vec3) -> Vec3 {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
-fn dot(a: &Vec3, b: &Vec3) -> f64 {
+pub(crate) fn dot(a: &Vec3, b: &Vec3) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
-fn cross(a: &Vec3, b: &Vec3) -> Vec3 {
+pub(crate) fn cross(a: &Vec3, b: &Vec3) -> Vec3 {
     [
         a[1] * b[2] - a[2] * b[1],
         a[2] * b[0] - a[0] * b[2],
@@ -96,7 +99,7 @@ fn cross(a: &Vec3, b: &Vec3) -> Vec3 {
     ]
 }
 
-fn mul(a: &Mat3, b: &Mat3) -> Mat3 {
+pub(crate) fn mul(a: &Mat3, b: &Mat3) -> Mat3 {
     let mut out = [[0.0; 3]; 3];
     for (i, row) in out.iter_mut().enumerate() {
         for (j, v) in row.iter_mut().enumerate() {
@@ -106,11 +109,11 @@ fn mul(a: &Mat3, b: &Mat3) -> Mat3 {
     out
 }
 
-fn mul_vec(a: &Mat3, v: &Vec3) -> Vec3 {
+pub(crate) fn mul_vec(a: &Mat3, v: &Vec3) -> Vec3 {
     [dot(&a[0], v), dot(&a[1], v), dot(&a[2], v)]
 }
 
-fn transpose(a: &Mat3) -> Mat3 {
+pub(crate) fn transpose(a: &Mat3) -> Mat3 {
     [
         [a[0][0], a[1][0], a[2][0]],
         [a[0][1], a[1][1], a[2][1]],
@@ -199,7 +202,7 @@ fn solve6(mut a: [[f64; 6]; 6], mut b: [f64; 6]) -> Option<[f64; 6]> {
 }
 
 /// Points bucketed in cubic cells for neighbour searches.
-struct Grid {
+pub(crate) struct Grid {
     cell: f64,
     cells: CellMap<Vec<u32>>,
     lo: [i64; 3],
@@ -207,7 +210,7 @@ struct Grid {
 }
 
 impl Grid {
-    fn new(points: &[Vec3], cell: f64) -> Self {
+    pub(crate) fn new(points: &[Vec3], cell: f64) -> Self {
         let mut cells: CellMap<Vec<u32>> = CellMap::default();
         let (mut lo, mut hi) = ([i64::MAX; 3], [i64::MIN; 3]);
         for (i, p) in points.iter().enumerate() {
@@ -226,12 +229,12 @@ impl Grid {
         }
     }
 
-    fn key_of(p: &Vec3, cell: f64) -> [i64; 3] {
+    pub(crate) fn key_of(p: &Vec3, cell: f64) -> [i64; 3] {
         [0, 1, 2].map(|d| (p[d] / cell).floor() as i64)
     }
 
     /// Visit every point in cells whose largest key offset from `centre` is `shell`.
-    fn shell(&self, centre: [i64; 3], shell: i64, mut visit: impl FnMut(u32)) {
+    pub(crate) fn shell(&self, centre: [i64; 3], shell: i64, mut visit: impl FnMut(u32)) {
         for dx in -shell..=shell {
             for dy in -shell..=shell {
                 for dz in -shell..=shell {
@@ -248,7 +251,7 @@ impl Grid {
     }
 
     /// Nearest point closer than `limit`, which must not exceed the cell size.
-    fn nearest(&self, points: &[Vec3], q: &Vec3, limit: f64) -> Option<usize> {
+    pub(crate) fn nearest(&self, points: &[Vec3], q: &Vec3, limit: f64) -> Option<usize> {
         let centre = Self::key_of(q, self.cell);
         let mut best: Option<(f64, usize)> = None;
         for shell in 0..=1 {
@@ -294,7 +297,7 @@ impl Grid {
 }
 
 /// Unit normal per point from the plane of its nearest neighbours.
-fn normals(points: &[Vec3], cell: f64) -> Vec<Vec3> {
+pub(crate) fn normals(points: &[Vec3], cell: f64) -> Vec<Vec3> {
     let grid = Grid::new(points, cell);
     let parts = chunked(points.len(), |range| {
         points[range]
@@ -329,9 +332,20 @@ fn normal(grid: &Grid, points: &[Vec3], p: &Vec3) -> Vec3 {
 /// Point-to-plane ICP of `source` onto `target` from `start`. Returns the pose and the RMS
 /// point-to-plane residual of the last matched pairs.
 fn icp(source: &[Vec3], target: &[Vec3], target_normals: &[Vec3], start: Pose) -> (Pose, f64) {
+    icp_with(source, target, target_normals, start, &LIMITS)
+}
+
+/// Point-to-plane ICP as `icp`, with match distances `limits`, coarse to fine.
+pub(crate) fn icp_with(
+    source: &[Vec3],
+    target: &[Vec3],
+    target_normals: &[Vec3],
+    start: Pose,
+    limits: &[f64],
+) -> (Pose, f64) {
     let mut pose = start;
     let mut rms = f64::INFINITY;
-    for limit in LIMITS {
+    for &limit in limits {
         let grid = Grid::new(target, limit);
         for _ in 0..ITERATIONS {
             let parts = chunked(source.len(), |range| {
