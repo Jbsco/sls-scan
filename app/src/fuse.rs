@@ -17,6 +17,10 @@ const MIN_PAIRS: usize = 50;
 const DOT_RADIUS: f64 = 0.03;
 /// Fewest dot pairs that join a frame's ICP.
 const MIN_DOT_PAIRS: usize = 3;
+/// Once pairs have been taken with the pattern light off, a lit frame's ICP holds its
+/// starting pose along directions whose normal-equation eigenvalue lies below this share
+/// of the largest, as `track.fuse` takes it.
+const HOLD_BELOW: f64 = 1e-4;
 /// Fewest points a thread takes, so that small frames stay on one thread.
 const CHUNK: usize = 2048;
 
@@ -145,6 +149,18 @@ pub fn rodrigues(w: &Vec3) -> Mat3 {
     out
 }
 
+/// Rotation vector of a rotation, as `rodrigues` inverts it.
+pub fn rotation_vector(m: &Mat3) -> Vec3 {
+    let angle = ((m[0][0] + m[1][1] + m[2][2] - 1.0) / 2.0)
+        .clamp(-1.0, 1.0)
+        .acos();
+    if angle < 1e-12 {
+        return [0.0; 3];
+    }
+    let w = [m[2][1] - m[1][2], m[0][2] - m[2][0], m[1][0] - m[0][1]];
+    w.map(|v| v * angle / (2.0 * angle.sin()))
+}
+
 /// Unit eigenvector of the smallest eigenvalue of a symmetric 3 × 3 matrix, by Jacobi
 /// rotations.
 fn smallest_eigenvector(m: &Mat3) -> Vec3 {
@@ -178,6 +194,76 @@ fn smallest_eigenvector(m: &Mat3) -> Vec3 {
         .min_by(|&i, &j| a[i][i].total_cmp(&a[j][j]))
         .unwrap_or(2);
     [v[0][smallest], v[1][smallest], v[2][smallest]]
+}
+
+/// Eigenvalues and unit eigenvectors (as columns) of a symmetric 6 × 6 matrix, by cyclic
+/// Jacobi rotations.
+fn symmetric_eigen6(m: [[f64; 6]; 6]) -> ([f64; 6], [[f64; 6]; 6]) {
+    let mut a = m;
+    let mut v = [[0.0; 6]; 6];
+    (0..6).for_each(|i| v[i][i] = 1.0);
+    for _ in 0..50 {
+        let off: f64 = (0..6)
+            .flat_map(|i| (i + 1..6).map(move |j| (i, j)))
+            .map(|(i, j)| a[i][j] * a[i][j])
+            .sum();
+        let scale: f64 = (0..6).map(|i| a[i][i] * a[i][i]).sum();
+        if off <= 1e-30 * scale.max(f64::MIN_POSITIVE) {
+            break;
+        }
+        for p in 0..6 {
+            for q in p + 1..6 {
+                if a[p][q] == 0.0 {
+                    continue;
+                }
+                let theta = (a[q][q] - a[p][p]) / (2.0 * a[p][q]);
+                let t = if theta == 0.0 {
+                    1.0
+                } else {
+                    theta.signum() / (theta.abs() + (theta * theta + 1.0).sqrt())
+                };
+                let c = 1.0 / (t * t + 1.0).sqrt();
+                let s = t * c;
+                for row in &mut a {
+                    let (ap, aq) = (row[p], row[q]);
+                    row[p] = c * ap - s * aq;
+                    row[q] = s * ap + c * aq;
+                }
+                let (row_p, row_q) = (a[p], a[q]);
+                for (k, (apk, aqk)) in row_p.iter().zip(&row_q).enumerate() {
+                    a[p][k] = c * apk - s * aqk;
+                    a[q][k] = s * apk + c * aqk;
+                }
+                for row in &mut v {
+                    let (vp, vq) = (row[p], row[q]);
+                    row[p] = c * vp - s * vq;
+                    row[q] = s * vp + c * vq;
+                }
+            }
+        }
+    }
+    (std::array::from_fn(|i| a[i][i]), v)
+}
+
+/// The step that solves `ata · step = atb` along directions whose eigenvalue reaches
+/// `hold_below` times the largest, and that returns the motion `away` from the starting
+/// pose to zero along the others.
+fn held_step(ata: [[f64; 6]; 6], atb: [f64; 6], away: &[f64; 6], hold_below: f64) -> [f64; 6] {
+    let (values, vectors) = symmetric_eigen6(ata);
+    let largest = values.iter().copied().fold(f64::MIN, f64::max);
+    let mut step = [0.0; 6];
+    for (i, &value) in values.iter().enumerate() {
+        let column: [f64; 6] = std::array::from_fn(|r| vectors[r][i]);
+        let along = if value < hold_below * largest {
+            -(0..6).map(|r| column[r] * away[r]).sum::<f64>()
+        } else {
+            (0..6).map(|r| column[r] * atb[r]).sum::<f64>() / value
+        };
+        for r in 0..6 {
+            step[r] += along * column[r];
+        }
+    }
+    step
 }
 
 /// Solve a 6 × 6 linear system by Gaussian elimination with partial pivoting.
@@ -337,8 +423,11 @@ fn normal(grid: &Grid, points: &[Vec3], p: &Vec3) -> Vec3 {
 /// Point-to-plane ICP of `source` onto `target` from `start`, with match distances
 /// `limits`, coarse to fine. Each of `fixed`, a source point and its target such as a
 /// reference dot, adds point-to-point terms to every step, which fixes the motion a
-/// smooth surface leaves free. Returns the pose and the RMS point-to-plane residual of the
-/// last matched pairs.
+/// smooth surface leaves free. With `hold_below` above zero, each step holds the pose at
+/// `start` along directions whose normal-equation eigenvalue lies below `hold_below` times
+/// the largest, which the surface leaves nearly free, and solves the others from the
+/// surface. Returns the pose and the RMS
+/// point-to-plane residual of the last matched pairs.
 pub(crate) fn icp_with(
     source: &[Vec3],
     target: &[Vec3],
@@ -346,6 +435,7 @@ pub(crate) fn icp_with(
     start: Pose,
     limits: &[f64],
     fixed: &[(Vec3, Vec3)],
+    hold_below: f64,
 ) -> (Pose, f64) {
     let mut pose = start;
     let mut rms = f64::INFINITY;
@@ -411,8 +501,17 @@ pub(crate) fn icp_with(
                     }
                 }
             }
-            let Some(step) = solve6(ata, atb) else {
-                break;
+            let step = if hold_below > 0.0 {
+                let moved_by = mul(&pose.rotation, &transpose(&start.rotation));
+                let w = rotation_vector(&moved_by);
+                let shift = sub(&pose.translation, &mul_vec(&moved_by, &start.translation));
+                let away = [w[0], w[1], w[2], shift[0], shift[1], shift[2]];
+                held_step(ata, atb, &away, hold_below)
+            } else {
+                let Some(step) = solve6(ata, atb) else {
+                    break;
+                };
+                step
             };
             let dr = rodrigues(&[step[0], step[1], step[2]]);
             pose = Pose {
@@ -444,6 +543,8 @@ pub struct Fusion {
     pub last_rms: Option<f64>,
     dot_map: Vec<Vec3>,
     dot_counts: Vec<f64>,
+    /// Frame index and pose of each pair taken with the pattern light off.
+    fixes: Vec<(usize, Pose)>,
 }
 
 impl Fusion {
@@ -458,7 +559,59 @@ impl Fusion {
             last_rms: None,
             dot_map: Vec::new(),
             dot_counts: Vec::new(),
+            fixes: Vec::new(),
         }
+    }
+
+    /// Once two light-off pairs have been posed, continue the motion between the last two
+    /// at constant velocity to the next frame's starting pose.
+    fn predict(&mut self) {
+        let [.., (k0, before), (k1, last)] = self.fixes[..] else {
+            return;
+        };
+        let ahead = (self.poses.len() - k1) as f64 / (k1 - k0) as f64;
+        let w = rotation_vector(&mul(&last.rotation, &transpose(&before.rotation)));
+        let rotation = mul(&rodrigues(&w.map(|v| v * ahead)), &last.rotation);
+        let translation = [0, 1, 2]
+            .map(|i| last.translation[i] + ahead * (last.translation[i] - before.translation[i]));
+        self.pose = Pose {
+            rotation,
+            translation,
+        };
+    }
+
+    /// Refine paired map dots by averaging with a frame's dots placed at the current pose,
+    /// and add its unpaired dots to the map.
+    fn place_dots(&mut self, dots: &[Vec3]) {
+        let mut paired = vec![false; dots.len()];
+        for (i, j) in self.match_dots(dots, &self.pose) {
+            let placed = self.pose.apply(&dots[i]);
+            let n = self.dot_counts[j];
+            self.dot_map[j] = [0, 1, 2].map(|k| (self.dot_map[j][k] * n + placed[k]) / (n + 1.0));
+            self.dot_counts[j] = n + 1.0;
+            paired[i] = true;
+        }
+        for (d, _) in dots.iter().zip(&paired).filter(|(_, &p)| !p) {
+            self.dot_map.push(self.pose.apply(d));
+            self.dot_counts.push(1.0);
+        }
+    }
+
+    /// Pose a pair taken with the pattern light off, which has dots and no points, by the
+    /// rigid fit of its dots to their map dots when three or more pair, and add its dots
+    /// to the map. Returns its pose.
+    pub fn add_dark(&mut self, dots: &[Vec3]) -> Pose {
+        self.predict();
+        let matched = self.match_dots(dots, &self.pose);
+        if matched.len() >= MIN_DOT_PAIRS {
+            let source: Vec<Vec3> = matched.iter().map(|&(i, _)| dots[i]).collect();
+            let target: Vec<Vec3> = matched.iter().map(|&(_, j)| self.dot_map[j]).collect();
+            self.pose = crate::register::rigid_fit(&source, &target);
+        }
+        self.place_dots(dots);
+        self.fixes.push((self.poses.len(), self.pose));
+        self.poses.push(self.pose);
+        self.pose
     }
 
     /// Reference dots seen so far, in the model's frame.
@@ -502,6 +655,7 @@ impl Fusion {
     /// pair. Paired dots then refine their map dot by averaging, and unpaired dots join the
     /// map, following `track.fuse`.
     pub fn add_with_dots(&mut self, points: &[Vec3], dots: &[Vec3]) -> Pose {
+        self.predict();
         if points.is_empty() {
             self.poses.push(self.pose);
             return self.pose;
@@ -523,24 +677,17 @@ impl Fusion {
                 self.pose,
                 &LIMITS,
                 &fixed,
+                if self.fixes.is_empty() {
+                    0.0
+                } else {
+                    HOLD_BELOW
+                },
             );
             self.pose = new;
             self.last_rms = Some(rms);
         }
         if !dots.is_empty() {
-            let mut paired = vec![false; dots.len()];
-            for (i, j) in self.match_dots(dots, &self.pose) {
-                let placed = self.pose.apply(&dots[i]);
-                let n = self.dot_counts[j];
-                self.dot_map[j] =
-                    [0, 1, 2].map(|k| (self.dot_map[j][k] * n + placed[k]) / (n + 1.0));
-                self.dot_counts[j] = n + 1.0;
-                paired[i] = true;
-            }
-            for (d, _) in dots.iter().zip(&paired).filter(|(_, &p)| !p) {
-                self.dot_map.push(self.pose.apply(d));
-                self.dot_counts.push(1.0);
-            }
+            self.place_dots(dots);
         }
         self.poses.push(self.pose);
         for p in points {
@@ -634,6 +781,48 @@ mod tests {
         }
         let last = fusion.poses[5].translation;
         assert!((last[0] - 0.05).abs() < 1e-6, "slide tracked to {last:?}");
+    }
+
+    #[test]
+    fn light_off_dots_hold_a_slide_along_a_flat_plate() {
+        let plate: Vec<Vec3> = (0..6000)
+            .map(|k| {
+                [
+                    f64::from(k % 100) * 0.006 - 0.3,
+                    f64::from(k / 100) * 0.006 - 0.18,
+                    1.0,
+                ]
+            })
+            .collect();
+        let dots: Vec<Vec3> = (0..35)
+            .map(|k| {
+                [
+                    f64::from(k % 7) * 0.1 - 0.3,
+                    f64::from(k / 7) * 0.08 - 0.16,
+                    1.0,
+                ]
+            })
+            .collect();
+        let view = |points: &[Vec3], shift: f64| -> Vec<Vec3> {
+            points
+                .iter()
+                .map(|p| [p[0] - shift, p[1], p[2]])
+                .filter(|p| p[0].abs() < 0.2)
+                .collect()
+        };
+        let mut fusion = Fusion::new(0.004);
+        for i in 0..12 {
+            let shift = 0.005 * f64::from(i);
+            if i % 4 == 0 {
+                fusion.add_dark(&view(&dots, shift));
+            } else {
+                fusion.add(&view(&plate, shift));
+            }
+        }
+        for (i, pose) in fusion.poses.iter().enumerate().skip(8) {
+            let x = pose.translation[0];
+            assert!((x - 0.005 * i as f64).abs() < 1e-6, "frame {i} at {x}");
+        }
     }
 
     #[test]
