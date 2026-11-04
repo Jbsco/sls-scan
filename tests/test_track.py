@@ -109,3 +109,10 @@ def test_light_off_dots_hold_tracking_along_a_smooth_panel():
     poses, _ = track.fuse(frames, 0.006, dots=seen)
     errors = [np.linalg.norm(t - true_t) for (_, t), true_t in zip(poses, truth)]
     assert max(errors[8:]) < 0.0005
+
+
+def test_dots_between_map_dots_do_not_pair():
+    gx, gy = np.meshgrid(np.arange(-0.14, 0.141, 0.035), np.arange(-0.07, 0.071, 0.035))
+    grid = np.column_stack([gx.ravel(), gy.ravel(), np.full(gx.size, 0.5)])
+    poses, _ = track.fuse([None, None], 0.001, dots=[grid, grid + [0.018, 0.0, 0.0]])
+    assert np.allclose(poses[1][1], 0.0)
