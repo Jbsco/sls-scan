@@ -66,14 +66,22 @@ def parse_frame(payload: bytes) -> tuple[dict, np.ndarray]:
             "timestamp_ns": timestamp_ns}, pixels
 
 
+def is_dark(pair: int, dark_every: int) -> bool:
+    """Return whether a stereo pair is taken with the pattern light off: every
+    dark_every-th pair from the first, none when dark_every is 0."""
+    return dark_every > 0 and pair % dark_every == 0
+
+
 def pattern_names(pattern_set: str, width: int, height: int, steps: int,
-                  frames: int = 1) -> list[str]:
+                  frames: int = 1, dark_every: int = 0) -> list[str]:
     """Return the capture file names of a pattern set, in sequence order.
 
-    A stereo set is frames pairs, left then right, each pair from one trigger. A
+    A stereo set is frames pairs, left then right, each pair from one trigger, and a pair
+    taken with the pattern light off is named dark_ in place of frame_. A
     stereo-calibration set is one board pair."""
     if pattern_set == "stereo":
-        return [f"frame_{i:03d}/{side}" for i in range(frames) for side in ("left", "right")]
+        return [f"{'dark' if is_dark(i, dark_every) else 'frame'}_{i:03d}/{side}"
+                for i in range(frames) for side in ("left", "right")]
     if pattern_set == "stereo-calibration":
         return ["left", "right"]
     if pattern_set == "calibration":
@@ -109,17 +117,19 @@ def connect(host: str, port: int, wait: float = 0.0,
 
 def capture(host: str, port: int, pattern_set: str, out: str, pitch: int = 32,
             steps: int = 4, timeout: float = 60.0, wait: float = 0.0, frames: int = 1,
-            rate_hz: float = 0.0) -> dict:
+            rate_hz: float = 0.0, dark_every: int = 0) -> dict:
     """Run one sequence on a node and save its frames as PNG files under out. A rate asks
-    a stereo set to be triggered at that many pairs per second."""
+    a stereo set to be triggered at that many pairs per second, and dark_every asks for
+    every dark_every-th pair with the pattern light off."""
     import cv2
 
     sock, hello = connect(host, port, wait, timeout)
     with sock:
         projector = hello["projector"]
-        names = pattern_names(pattern_set, projector["width"], projector["height"], steps, frames)
+        names = pattern_names(pattern_set, projector["width"], projector["height"], steps, frames,
+                              dark_every)
         request = {"set": pattern_set, "pitch": pitch, "steps": steps, "frames": frames,
-                   "rate_hz": rate_hz}
+                   "rate_hz": rate_hz, "dark_every": dark_every}
         send(sock, SEQUENCE, json.dumps(request).encode())
         os.makedirs(out, exist_ok=True)
         indices, stamps = [], []
@@ -181,11 +191,12 @@ class StandIn(socketserver.ThreadingTCPServer):
         """Return the images of a sequence and the timestamp of each, in nanoseconds."""
         if request["set"] == "stereo":
             count = int(request.get("frames", 1))
+            dark_every = int(request.get("dark_every", 0))
             poses = synthetic.sweep_poses(count, yaw_deg=min(25.0, float(count)),
                                           pitch_deg=min(8.0, 0.3 * count))
             images, stamps = [], []
-            captures = synthetic.sweep_captures(self.stereo, synthetic.sweep_scene(), poses,
-                                                self.dots, self.seed)
+            captures = synthetic.sweep_captures(self.stereo, self.sweep_scene(dark_every), poses,
+                                                self.dots, self.seed, dark_every)
             for i, pair in enumerate(captures):
                 images += [pair["left"], pair["right"]]
                 stamps += [i * STEREO_PERIOD_NS] * 2
@@ -198,16 +209,26 @@ class StandIn(socketserver.ThreadingTCPServer):
         images = self._pattern_frames(request)
         return images, [i * FRAME_PERIOD_NS for i in range(len(images))]
 
-    def paced_pairs(self, count: int, rate_hz: float):
+    @staticmethod
+    def sweep_scene(dark_every: int) -> dict:
+        """The sweep scene, with reference dots on its mat when pairs are taken with the
+        pattern light off."""
+        return synthetic.sweep_scene(dot_pitch=0.03 if dark_every > 0 else 0.0)
+
+    def paced_pairs(self, count: int, rate_hz: float, dark_every: int = 0):
         """Yield (pair index, left, right, timestamp in nanoseconds) for count pairs on a
         trigger clock at rate_hz, playing a short pre-rendered sweep in a loop. A pair whose
         trigger time passed more than one period before the node reaches it is dropped, as
         a node with a full queue drops it."""
-        if self.cycle is None:
+        if self.cycle is None or self.cycle[0] != (dark_every > 0):
             poses = synthetic.sweep_poses(PACED_CYCLE, yaw_deg=float(PACED_CYCLE),
                                           pitch_deg=0.3 * PACED_CYCLE)
-            self.cycle = [(pair["left"], pair["right"]) for pair in synthetic.sweep_captures(
-                self.stereo, synthetic.sweep_scene(), poses, self.dots, self.seed)]
+            scene = self.sweep_scene(dark_every)
+            lit = [(pair["left"], pair["right"]) for pair in synthetic.sweep_captures(
+                self.stereo, scene, poses, self.dots, self.seed)]
+            dark = [(pair["left"], pair["right"]) for pair in synthetic.sweep_captures(
+                self.stereo, scene, poses, self.dots, self.seed, 1)] if dark_every > 0 else []
+            self.cycle = (dark_every > 0, lit, dark)
         period = 1.0 / rate_hz
         start = time.monotonic() + period
         for i in range(count):
@@ -217,7 +238,7 @@ class StandIn(socketserver.ThreadingTCPServer):
                 time.sleep(due - now)
             elif now - due > period:
                 continue
-            left, right = self.cycle[i % len(self.cycle)]
+            left, right = self.cycle[2 if is_dark(i, dark_every) else 1][i % PACED_CYCLE]
             yield i, left, right, int(round(i * period * 1e9))
 
     def _pattern_frames(self, request: dict) -> list:
@@ -251,7 +272,8 @@ class _Handler(socketserver.BaseRequestHandler):
             if request.get("set") == "stereo" and rate > 0.0:
                 sent = 0
                 for i, left, right, stamp in server.paced_pairs(int(request.get("frames", 1)),
-                                                                rate):
+                                                                rate,
+                                                                int(request.get("dark_every", 0))):
                     send(self.request, FRAME, frame_payload(sequence, 2 * i, 0, stamp, left))
                     send(self.request, FRAME, frame_payload(sequence, 2 * i + 1, 0, stamp, right))
                     sent += 2

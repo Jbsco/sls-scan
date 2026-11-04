@@ -176,6 +176,7 @@ fn capture_set(
         steps: 4,
         frames: 1,
         rate_hz: 0,
+        dark_every: 0,
     };
     let mut projector = None;
     let mut failure = None;

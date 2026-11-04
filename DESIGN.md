@@ -1457,3 +1457,20 @@ model points to 0.000 µm.
 A Rust test slides 50 mm along a flat plate, which leaves the slide free without dots,
 and tracks it to 1 µm with them. Light-off frames from the capture node and dot tracking
 in the live view come next.
+
+## D77. Light-off pairs in the capture protocol (2026-11-03)
+
+A stereo request may set `dark_every`. With N, every Nth pair from the first, pair 0, N,
+2N and on, is taken with the pattern light off, D63's MOSFET opening between exposures.
+The first pair is dark so that dots are mapped before the head moves. Those pairs are
+saved as `dark_000/left.png` and `dark_000/right.png` in place of `frame_`, keeping their
+pair index, so lit and dark pairs stay in one numbered sequence.
+
+We chose every 4th pair for the application's reference dots switch, which comes with
+live dot tracking and stays off by default, since complex shapes need no dots (D64). At
+30 pairs per second that gives a dot fix every 133 ms and leaves 22.5 lit pairs per
+second, more than the 15 depth frames per second the GPU keeps (D74).
+
+The stand-in puts reference dots every 30 mm on its sweep's mat when a request has
+light-off pairs, and renders those pairs under room light in both its one-shot and its
+paced stream. Without light-off pairs its mat stays bare, so earlier sweep figures stand.

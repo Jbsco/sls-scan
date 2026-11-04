@@ -557,22 +557,33 @@ def loop_poses(frames: int, yaw_deg: float = 25.0, pitch_deg: float = 8.0,
     return poses
 
 
-def sweep_scene(distance_m: float = 0.5) -> dict:
+def sweep_scene(distance_m: float = 0.5, dot_pitch: float = 0.0) -> dict:
     """A part on a mat for sweep tests, in the world frame of sweep_poses: a 140 mm mat, a
-    ball bar of two 25 mm spheres about 80 mm apart, and a 16 mm sphere."""
+    ball bar of two 25 mm spheres about 80 mm apart, and a 16 mm sphere. A dot_pitch puts
+    reference dots of 2 mm radius on the mat that far apart."""
     z = distance_m
-    return {"mat": Plate(np.array([0.0, 0.0, z + 0.02]), np.eye(3), 0.07, 0.07),
+    grid = np.arange(-0.06, 0.0601, dot_pitch) if dot_pitch > 0 else np.empty(0)
+    dots = tuple((u, v) for u in grid for v in grid)
+    return {"mat": Plate(np.array([0.0, 0.0, z + 0.02]), np.eye(3), 0.07, 0.07, 0.8, dots,
+                         0.002),
             "ball-bar": [Ball(np.array([-0.04, 0.005, z]), 0.0125),
                          Ball(np.array([0.04, -0.005, z + 0.002]), 0.0125)],
             "sphere": Ball(np.array([0.0, -0.04, z + 0.008]), 0.008)}
 
 
-def sweep_captures(rig: StereoRig, scene: dict, poses: list, pattern: np.ndarray, seed: int = 0):
-    """Yield the stereo capture at each head pose; the pattern light moves with the head."""
+def sweep_captures(rig: StereoRig, scene: dict, poses: list, pattern: np.ndarray, seed: int = 0,
+                   dark_every: int = 0):
+    """Yield the stereo capture at each head pose; the pattern light moves with the head.
+    With dark_every, every dark_every-th pair from the first is taken under room light
+    alone, with the pattern light off."""
     rng = np.random.default_rng(seed)
     shapes = [scene["mat"], *scene["ball-bar"], scene["sphere"]]
-    for r, t in poses:
-        yield stereo_capture(rig, transform_scene(shapes, r, t), pattern, rng)
+    for i, (r, t) in enumerate(poses):
+        moved = transform_scene(shapes, r, t)
+        if dark_every > 0 and i % dark_every == 0:
+            yield stereo_room_view(rig, moved, rng)
+        else:
+            yield stereo_capture(rig, moved, pattern, rng)
 
 
 def look_at(eye: np.ndarray, target: np.ndarray, up=(0.0, 0.0, 1.0)) -> tuple[np.ndarray, np.ndarray]:
