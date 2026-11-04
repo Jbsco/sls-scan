@@ -1424,6 +1424,12 @@ head, and the live TSDF of D54 averages many frames over 1 mm voxels.
 Refinement kept about 25 ms that did not shrink with fewer samples under this load, so
 sparser sampling will not go much further. A run on a quiet machine will settle the rate.
 
+On 2026-11-04 another build kept that desktop's load average near 6. Eight runs at 12 px
+took 54.6 to 59.8 ms per frame, 16.7 to 18.3 frames per second, so live frames clear
+Phase 4's 15 per second under that load. Runs at 8 px between them took 113.4 to
+122.8 ms. Refinement time followed sample count: 102 ms for 15,908 samples at 8 px and
+45 ms for 7,064 at 12 px.
+
 ## D75. Dot finding in the application (2026-11-03)
 
 `dots.rs` ports D68's dot finding to Rust. The light-off pair goes through D31's GPU
