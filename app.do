@@ -2,8 +2,8 @@
 # Application gate: formatting, lints and tests of the Rust application; its capture
 # client, stereo calibration, fused depth frames and recorded-pair replay against the
 # stand-in node over the capture protocol; and its GPU decode, rectification, coarse
-# disparity, refinement, depth frames, fusion, TSDF and static-view registration against
-# the NumPy and OpenCV references.
+# disparity, refinement, depth frames, fusion, TSDF, static-view registration and dot
+# finding against the NumPy and OpenCV references.
 exec >&2
 if ! command -v cargo >/dev/null 2>&1; then
     echo "app: cargo not found - skipped"
@@ -44,6 +44,8 @@ python3 -m slscan.cli decode-vectors --out "$SESSION/vectors" >/dev/null
 $RUN decode-check "$SESSION/vectors"
 python3 -m slscan.cli stereo-vectors --out "$SESSION/stereo" >/dev/null
 $RUN rectify-check "$SESSION/stereo"
+python3 -m slscan.cli dot-vectors --out "$SESSION/dots" >/dev/null
+$RUN dot-check "$SESSION/dots"
 $RUN coarse-check "$SESSION/stereo"
 $RUN refine-check "$SESSION/stereo"
 $RUN depth-check "$SESSION/stereo"

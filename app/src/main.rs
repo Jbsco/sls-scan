@@ -2,6 +2,7 @@ use slscan_app::calibration;
 use slscan_app::client::{self, Event};
 use slscan_app::coarse;
 use slscan_app::depth;
+use slscan_app::dots;
 use slscan_app::fuse;
 use slscan_app::gpu;
 use slscan_app::protocol::SequenceRequest;
@@ -894,6 +895,135 @@ fn refine_check(args: &[String]) -> ExitCode {
 struct Rectifications {
     left: rectify::RectifyParams,
     right: rectify::RectifyParams,
+}
+
+#[derive(serde::Deserialize)]
+struct DotMeta {
+    width: usize,
+    height: usize,
+    near: f64,
+    far: f64,
+}
+
+fn points_of(bytes: &[u8]) -> Vec<[f64; 3]> {
+    bytes
+        .chunks_exact(24)
+        .map(|c| {
+            [0, 1, 2].map(|k| {
+                let mut word = [0u8; 8];
+                word.copy_from_slice(&c[8 * k..8 * k + 8]);
+                f64::from_le_bytes(word)
+            })
+        })
+        .collect()
+}
+
+/// Largest distance `dot-check` accepts between a Rust dot and its NumPy dot, whose
+/// rectified images may differ by a grey level at some pixels.
+const DOT_METRES: f64 = 2e-6;
+
+/// Rectify the light-off pair `slscan dot-vectors` wrote on the GPU, find its dots and
+/// compare them with the NumPy dots.
+fn dot_check(args: &[String]) -> ExitCode {
+    let Some(dir) = args.first().map(PathBuf::from) else {
+        eprintln!("usage: sls-scan dot-check <dot vector directory> [--fallback]");
+        return ExitCode::FAILURE;
+    };
+    let fallback = args.iter().any(|a| a == "--fallback");
+    let read = |name: &str| std::fs::read(dir.join(name));
+    let (meta, params, files) = match (
+        read("meta.json"),
+        read("rectify.json"),
+        [
+            read("left-raw.bin"),
+            read("right-raw.bin"),
+            read("surface.bin"),
+            read("dots.bin"),
+        ],
+    ) {
+        (Ok(m), Ok(p), [Ok(a), Ok(b), Ok(c), Ok(d)]) => (m, p, [a, b, c, d]),
+        _ => {
+            eprintln!("dot vectors missing in {}", dir.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let (meta, params): (DotMeta, Rectifications) = match (
+        serde_json::from_slice(&meta),
+        serde_json::from_slice(&params),
+    ) {
+        (Ok(m), Ok(p)) => (m, p),
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("dot vector metadata: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let rectifier = match rectify::Rectifier::new(fallback) {
+        Ok(r) => r,
+        Err(e) if std::env::var_os("SLS_REQUIRE_GPU").is_none() => {
+            println!("no GPU adapter, dot check skipped: {e}");
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            eprintln!("no GPU adapter: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let [left_raw, right_raw, surface, reference] = files;
+    let (w, h) = (meta.width as u32, meta.height as u32);
+    let rectified = rectifier
+        .rectify(&params.left, w, h, &left_raw)
+        .and_then(|l| {
+            rectifier
+                .rectify(&params.right, w, h, &right_raw)
+                .map(|r| (l, r))
+        });
+    let (left, right) = match rectified {
+        Ok(pair) => pair,
+        Err(e) => {
+            eprintln!("rectify failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let surface = points_of(&surface);
+    let reference = points_of(&reference);
+    let clock = Instant::now();
+    let found = dots::find_dots(
+        &params.left,
+        &params.right,
+        (&left, &right),
+        meta.width,
+        meta.height,
+        &surface,
+        meta.near,
+        meta.far,
+    );
+    let ms = clock.elapsed().as_secs_f64() * 1000.0;
+    let largest = found
+        .iter()
+        .map(|p| {
+            reference
+                .iter()
+                .map(|q| (0..3).map(|k| (p[k] - q[k]).powi(2)).sum::<f64>().sqrt())
+                .fold(f64::INFINITY, f64::min)
+        })
+        .fold(0.0, f64::max);
+    println!(
+        "adapter {}: {} dots found in {ms:.1} ms against {} NumPy dots, largest distance {:.3} µm",
+        rectifier.adapter,
+        found.len(),
+        reference.len(),
+        largest * 1e6
+    );
+    if found.len() == reference.len() && largest < DOT_METRES {
+        println!("dot check: Rust dot finding matches the NumPy reference");
+        ExitCode::SUCCESS
+    } else {
+        println!(
+            "dot check: Rust and NumPy dots differ in count or by more than {} µm",
+            DOT_METRES * 1e6
+        );
+        ExitCode::FAILURE
+    }
 }
 
 fn rectify_check(args: &[String]) -> ExitCode {
@@ -2084,6 +2214,7 @@ fn main() -> ExitCode {
         Some("decode-check") => return decode_check(&args[2..]),
         Some("refine-check") => return refine_check(&args[2..]),
         Some("rectify-check") => return rectify_check(&args[2..]),
+        Some("dot-check") => return dot_check(&args[2..]),
         Some("coarse-check") => return coarse_check(&args[2..]),
         Some("depth-check") => return depth_check(&args[2..]),
         Some("fusion-check") => return fusion_check(&args[2..]),
