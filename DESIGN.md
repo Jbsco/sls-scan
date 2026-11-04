@@ -1589,3 +1589,9 @@ affine windows now measure that bar 25 µm shorter, 80.379 mm against 80.404 mm 
 between -9 and -38 µm with true calibration. With ours it moves between -31 and -46 µm.
 We have not found where matching takes up the rest. Pipeline tests now allow 50 µm on that bar,
 where they allowed 20 µm.
+
+Later on 2026-11-04 we rectified that capture with cubic in place of linear
+interpolation. True calibration then measured the bar 36.4 µm short, and ours 19.7 µm
+short, where linear interpolation gave 11.9 and 42.1 µm. It seems likely that this shift
+comes from resampling, not calibration, and that one capture's bar spacing at the near
+head moves about 25 µm with how the rectified images are resampled.
