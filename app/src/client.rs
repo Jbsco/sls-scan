@@ -118,6 +118,7 @@ pub fn capture(
         hello.projector.height,
         request.steps,
         request.frames,
+        request.dark_every,
     )
     .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unknown pattern set"))?;
     on_event(Event::Connected(hello));

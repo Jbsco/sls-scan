@@ -25,11 +25,12 @@ fn headless_capture(args: &[String]) -> ExitCode {
         steps: 4,
         frames: 1,
         rate_hz: 0,
+        dark_every: 0,
     };
     for pair in args.chunks(2) {
         let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
             eprintln!(
-                "arguments come in pairs: --node, --set, --pitch, --steps, --frames, --rate, --wait, --out"
+                "arguments come in pairs: --node, --set, --pitch, --steps, --frames, --rate, --dark-every, --wait, --out"
             );
             return ExitCode::FAILURE;
         };
@@ -46,6 +47,7 @@ fn headless_capture(args: &[String]) -> ExitCode {
             "--steps" => value.parse().map(|v| request.steps = v),
             "--frames" => value.parse().map(|v| request.frames = v),
             "--rate" => value.parse().map(|v| request.rate_hz = v),
+            "--dark-every" => value.parse().map(|v| request.dark_every = v),
             "--out" => {
                 out = Some(PathBuf::from(value));
                 Ok(())
@@ -231,6 +233,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
         steps: 4,
         frames,
         rate_hz: 0,
+        dark_every: 0,
     };
     let mut left: Option<Vec<u8>> = None;
     let mut results: Vec<(String, Result<depth::DepthResult, String>)> = Vec::new();

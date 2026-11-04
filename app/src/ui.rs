@@ -248,6 +248,7 @@ impl ScanApp {
             steps: self.steps,
             frames: if stereo { self.stereo_frames } else { 1 },
             rate_hz: 0,
+            dark_every: 0,
         };
         let repaint = ctx.clone();
         thread::spawn(move || {
