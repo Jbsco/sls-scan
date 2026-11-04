@@ -877,8 +877,20 @@ def cmd_view_bench(args: argparse.Namespace) -> int:
         views = [synthetic.point_view(shapes, r, t, rng, 0.42, 440, args.noise_um * 1e-6)
                  for r, t in poses]
         source = f"ray-cast views, {args.noise_um:g} µm noise"
+    datums = None
+    if args.datums:
+        import json
+
+        names = [f"bar-{i + 1}{side}" for i in range(len(scene["scale-bars"])) for side in "ab"]
+        balls = [ball for bar in scene["scale-bars"] for ball in bar]
+        datums = {"spheres": {name: {"centre": ball.centre.tolist(), "radius": ball.radius}
+                              for name, ball in zip(names, balls)},
+                  "scale_bars": [names[i:i + 2] for i in range(0, len(names), 2)]}
+        with open(args.datums, "w", encoding="utf-8") as f:
+            json.dump(datums, f, indent=1)
+        print(f"datums written to {args.datums}")
     start = time.time()
-    result = register.view_bench(scene, poses, views, args.voxel_mm / 1000.0, args.rounds)
+    result = register.view_bench(scene, poses, views, args.voxel_mm / 1000.0, args.rounds, datums)
     print(f"{result['views']} {source}, {distance:g} m out and {height:g} m up, "
           f"{np.mean([len(v) for v in views]):.0f} points each, {args.voxel_mm:g} mm voxels, "
           f"{args.rounds} rounds, registered in {time.time() - start:.0f} s")
@@ -891,6 +903,10 @@ def cmd_view_bench(args: argparse.Namespace) -> int:
     print("scale bar errors "
           + ", ".join(f"{1e3 * e:+.3f} mm" for e in result["scale_bar_errors_m"])
           + " (limit 0.5 mm)")
+    if datums:
+        print("datums found without seeds, residuals "
+              + ", ".join(f"{n} {1e3 * d['residual_m']:.3f} mm"
+                          for n, d in result["datums"]["datums"].items()))
     ok = placed == result["views"] and max(abs(e) for e in result["scale_bar_errors_m"]) < 0.0005
     return 0 if ok else 1
 
@@ -1167,6 +1183,8 @@ def main(argv=None) -> int:
     p.add_argument("--noise-um", type=float, default=40.0, help="point noise per coordinate")
     p.add_argument("--voxel-mm", type=float, default=10.0, help="coarse match voxel size")
     p.add_argument("--rounds", type=int, default=1, help="ICP rounds against all other views")
+    p.add_argument("--datums", help="write the scale bar spheres as a datum file without seeds, "
+                                    "then find and align them in the merged views")
     p.add_argument("--seed", type=int, default=1)
     p.set_defaults(func=cmd_view_bench)
 
