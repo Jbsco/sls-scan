@@ -1595,3 +1595,26 @@ interpolation. True calibration then measured the bar 36.4 µm short, and ours 1
 short, where linear interpolation gave 11.9 and 42.1 µm. It seems likely that this shift
 comes from resampling, not calibration, and that one capture's bar spacing at the near
 head moves about 25 µm with how the rectified images are resampled.
+
+## D81. Datum spheres found without seeds (2026-11-04)
+
+Datums now define the object's frame without a picked point. When a datum file gives no
+seeds, `slscan report` finds spheres of each datum radius in the cloud.
+
+Points averaged over voxels of a tenth of that radius each vote for the two centres at
+that radius along their normal. Cells of a quarter radius with the most votes, summed
+over their neighbours, seed sphere fits over shrinking shells. A fit counts when its
+radius is within 10% of the datum's, its form RMS is under 5% of it, and its points
+spread far enough around the centre that a flat patch cannot pass.
+
+Found spheres are matched to datums by their distances. Three found spheres whose
+distances and radii agree with the measured triangle of largest area give a rigid motion,
+which must place every datum within 3 mm of a found sphere of its radius. We refuse a
+layout that two such motions fit, such as an equilateral triangle, because its frame is
+ambiguous. `slscan report --aligned` writes the cloud or mesh in the object's frame.
+
+`slscan view-bench --datums` writes the metre part's four scale bar spheres as a datum
+file without seeds, then finds them in the merged views among the part's balls of 50 to
+100 mm radius. With ray-cast views their residuals were 2 to 5 µm. With stereo views and a
+recovered calibration they were 0.095 to 0.198 mm, where that run's scale bars read
+-0.126 and +0.008 mm.
