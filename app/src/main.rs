@@ -145,10 +145,11 @@ fn headless_depth(args: &[String]) -> ExitCode {
     let mut volume_out: Option<PathBuf> = None;
     let mut mesh_out: Option<PathBuf> = None;
     let mut faces = 0usize;
+    let mut dark_every = 0u32;
     for pair in args.chunks(2) {
         let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
             eprintln!(
-                "arguments come in pairs: --node, --params, --frames, --wait, --out, --mode, --surface, --volume, --mesh, --faces"
+                "arguments come in pairs: --node, --params, --frames, --dark-every, --wait, --out, --mode, --surface, --volume, --mesh, --faces"
             );
             return ExitCode::FAILURE;
         };
@@ -171,6 +172,13 @@ fn headless_depth(args: &[String]) -> ExitCode {
                 Ok(v) => frames = v,
                 Err(_) => {
                     eprintln!("--frames takes a number");
+                    return ExitCode::FAILURE;
+                }
+            },
+            "--dark-every" => match value.parse() {
+                Ok(v) => dark_every = v,
+                Err(_) => {
+                    eprintln!("--dark-every takes a number");
                     return ExitCode::FAILURE;
                 }
             },
@@ -233,10 +241,13 @@ fn headless_depth(args: &[String]) -> ExitCode {
         steps: 4,
         frames,
         rate_hz: 0,
-        dark_every: 0,
+        dark_every,
     };
     let mut left: Option<Vec<u8>> = None;
     let mut results: Vec<(String, Result<depth::DepthResult, String>)> = Vec::new();
+    // Light-off pairs keyed by the index of the lit result that follows them.
+    let mut dark_before: std::collections::HashMap<usize, (String, Vec<u8>, Vec<u8>)> =
+        std::collections::HashMap::new();
     let captured = client::capture(&node, &request, wait, |event| match event {
         Event::Connected(hello) => println!("connected to {} at {node}", hello.node),
         Event::Frame { name, pixels, .. } => {
@@ -244,9 +255,14 @@ fn headless_depth(args: &[String]) -> ExitCode {
                 left = Some(pixels);
             } else if let Some(l) = left.take() {
                 let pair = name.trim_end_matches("/right").to_owned();
-                let cameras = (&setup.cameras.left, &setup.cameras.right);
-                let result = frame.measure(&depth_params, preview.as_ref(), cameras, &l, &pixels);
-                results.push((pair, result));
+                if pair.starts_with("dark_") {
+                    dark_before.insert(results.len(), (pair, l, pixels));
+                } else {
+                    let cameras = (&setup.cameras.left, &setup.cameras.right);
+                    let result =
+                        frame.measure(&depth_params, preview.as_ref(), cameras, &l, &pixels);
+                    results.push((pair, result));
+                }
             }
         }
         _ => {}
@@ -256,6 +272,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
         return ExitCode::FAILURE;
     }
     let mut ok = !results.is_empty();
+    let dark_pairs = dark_before.len();
     let mut fusion = fuse::Fusion::new(FUSION_VOXEL_M);
     let mut last: &[[f64; 3]] = &[];
     let mut volume = tsdf::Live::coarse();
@@ -264,7 +281,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
         rotation: setup.cameras.left.rotation,
         projection: setup.cameras.left.projection,
     };
-    for (pair, result) in &results {
+    for (i, (pair, result)) in results.iter().enumerate() {
         match result {
             Ok(d) => {
                 let total: f64 = d.timings.iter().map(|(_, ms)| ms).sum();
@@ -283,6 +300,30 @@ fn headless_depth(args: &[String]) -> ExitCode {
                         fuse::ISOLATED_SPACINGS,
                     );
                     let dropped = d.points.len() - points.len();
+                    if let Some((dark, l, r)) = dark_before.remove(&i) {
+                        let cameras = (&setup.cameras.left, &setup.cameras.right);
+                        match frame.dots(&depth_params, cameras, &l, &r, &points) {
+                            Ok(dots) => {
+                                if !fusion.dots().is_empty() && dots.len() < 3 {
+                                    println!("{dark}: fewer than 3 dots, no pose from dots");
+                                    ok = false;
+                                }
+                                let pose = fusion.add_dark(&dots);
+                                println!(
+                                    "{dark}: {} dots against {pair}, {} map dots, pose at [{:.1}, {:.1}, {:.1}] mm",
+                                    dots.len(),
+                                    fusion.dots().len(),
+                                    pose.translation[0] * 1e3,
+                                    pose.translation[1] * 1e3,
+                                    pose.translation[2] * 1e3
+                                );
+                            }
+                            Err(e) => {
+                                println!("{dark}: dot finding failed: {e}");
+                                ok = false;
+                            }
+                        }
+                    }
                     let start = Instant::now();
                     fusion.add(&points);
                     let ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -402,7 +443,13 @@ fn headless_depth(args: &[String]) -> ExitCode {
             }
         }
     }
-    println!("depth: {} pairs", results.len());
+    if !dark_before.is_empty() {
+        println!(
+            "{} light-off pairs had no lit depth frame after them",
+            dark_before.len()
+        );
+    }
+    println!("depth: {} pairs, {dark_pairs} light-off", results.len());
     if ok {
         ExitCode::SUCCESS
     } else {

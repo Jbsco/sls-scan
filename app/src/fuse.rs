@@ -12,8 +12,8 @@ const NEIGHBOURS: usize = 12;
 const LIMITS: [f64; 4] = [0.004, 0.002, 0.001, 0.0005];
 const ITERATIONS: usize = 10;
 const MIN_PAIRS: usize = 50;
-/// A frame's dot pairs with the nearest map dot within this, which must stay under half
-/// the dots' spacing, as `track.fuse` takes it.
+/// A frame's dot pairs with the nearest map dot within 0.4 of the map's median dot
+/// spacing, at most this, as `track.fuse` takes it.
 const DOT_RADIUS: f64 = 0.03;
 /// Fewest dot pairs that join a frame's ICP.
 const MIN_DOT_PAIRS: usize = 3;
@@ -619,8 +619,41 @@ impl Fusion {
         &self.dot_map
     }
 
-    /// Pairs of a frame dot and the nearest map dot within `DOT_RADIUS` after `pose`.
+    /// Match radius: 0.4 of the map's median nearest-neighbour spacing, at most
+    /// `DOT_RADIUS`.
+    fn dot_radius(&self) -> f64 {
+        if self.dot_map.len() < 2 {
+            return DOT_RADIUS;
+        }
+        let mut nearest: Vec<f64> = self
+            .dot_map
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                self.dot_map
+                    .iter()
+                    .enumerate()
+                    .filter(|&(j, _)| j != i)
+                    .map(|(_, b)| {
+                        let d = sub(a, b);
+                        dot(&d, &d).sqrt()
+                    })
+                    .fold(f64::INFINITY, f64::min)
+            })
+            .collect();
+        nearest.sort_by(f64::total_cmp);
+        let n = nearest.len();
+        let median = if n % 2 == 1 {
+            nearest[n / 2]
+        } else {
+            0.5 * (nearest[n / 2 - 1] + nearest[n / 2])
+        };
+        DOT_RADIUS.min(0.4 * median)
+    }
+
+    /// Pairs of a frame dot and the nearest map dot within `dot_radius` after `pose`.
     fn match_dots(&self, dots: &[Vec3], pose: &Pose) -> Vec<(usize, usize)> {
+        let radius = self.dot_radius();
         dots.iter()
             .enumerate()
             .filter_map(|(i, d)| {
@@ -632,7 +665,7 @@ impl Fusion {
                         let e = sub(m, &q);
                         (dot(&e, &e).sqrt(), j)
                     })
-                    .filter(|&(distance, _)| distance < DOT_RADIUS)
+                    .filter(|&(distance, _)| distance < radius)
                     .min_by(|a, b| a.0.total_cmp(&b.0))
                     .map(|(_, j)| (i, j))
             })
@@ -823,6 +856,24 @@ mod tests {
             let x = pose.translation[0];
             assert!((x - 0.005 * i as f64).abs() < 1e-6, "frame {i} at {x}");
         }
+    }
+
+    #[test]
+    fn dots_between_map_dots_do_not_pair() {
+        let grid: Vec<Vec3> = (0..45)
+            .map(|k| {
+                [
+                    f64::from(k % 9) * 0.035 - 0.14,
+                    f64::from(k / 9) * 0.035 - 0.07,
+                    0.5,
+                ]
+            })
+            .collect();
+        let shifted: Vec<Vec3> = grid.iter().map(|p| [p[0] + 0.018, p[1], p[2]]).collect();
+        let mut fusion = Fusion::new(0.001);
+        fusion.add_dark(&grid);
+        let pose = fusion.add_dark(&shifted);
+        assert_eq!(pose.translation, [0.0; 3]);
     }
 
     #[test]

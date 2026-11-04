@@ -74,8 +74,9 @@ column Gray codes with their inverses, then the phase shifts (`gray_000` onward,
     app/target/debug/sls-scan capture --set scan --pitch 16 --wait 30
 
 The stand-in renders a sweep around a part on a mat for stereo sets, about 2° per frame
-at 30 fps, and the next board pose for each calibration set. With light-off pairs its mat
-has reference dots, and those pairs are rendered under room light. For phase-shift scan sets it
+at 30 fps, and the next board pose for each calibration set. With light-off pairs it
+slides 2.5 mm per pair along a flat panel with reference dots about 35 mm apart, and
+renders those pairs under room light (D79). For phase-shift scan sets it
 renders the chosen scene with timestamps at 60 Hz. Captures land in the layouts that
 `slscan scan` and `slscan calibrate` read.
 

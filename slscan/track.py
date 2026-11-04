@@ -107,6 +107,13 @@ def icp(source: np.ndarray, target: np.ndarray, target_normals: np.ndarray, rota
     return r, t, rms
 
 
+def dot_spacing(dots: np.ndarray) -> float:
+    """Return the median distance from each dot to its nearest neighbour."""
+    from scipy.spatial import cKDTree
+
+    return float(np.median(cKDTree(dots).query(dots, k=2)[0][:, 1]))
+
+
 def match_dots(dots: np.ndarray, rotation: np.ndarray, translation: np.ndarray,
                dot_map: np.ndarray, radius: float = 0.01) -> tuple[np.ndarray, np.ndarray]:
     """Pair each dot (in its frame) with the nearest dot of the map within radius, after
@@ -129,7 +136,7 @@ def fuse(frames, voxel: float = 0.0005, dots=None, dot_radius: float = 0.03,
     previous frame's pose. With dots, one array of reference dot positions per frame in
     its camera frame, each frame's dots pair with a map of the dots seen so far and add
     point-to-point terms to its ICP, and dots without a pair join the map. A dot pairs
-    with a map dot within dot_radius, which must stay under half the dots' spacing.
+    with a map dot within 0.4 of the map's median dot spacing, at most dot_radius.
 
     A frame of None is a pair taken with the pattern light off, which has dots and no
     points. Its pose is the rigid fit of its dots to their map dots when three or more
@@ -145,7 +152,10 @@ def fuse(frames, voxel: float = 0.0005, dots=None, dot_radius: float = 0.03,
     poses, model, raw, fixes = [], None, [], []
     r, t = np.eye(3), np.zeros(3)
     dot_map, dot_counts = np.empty((0, 3)), np.empty(0)
+    limit = dot_radius
     for k, points in enumerate(frames):
+        if len(dot_map) >= 2:
+            dot_radius = min(limit, 0.4 * dot_spacing(dot_map))
         if len(fixes) >= 2:
             (k0, r0, t0), (k1, r1, t1) = fixes[-2], fixes[-1]
             ahead = (k - k1) / (k1 - k0)

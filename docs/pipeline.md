@@ -258,6 +258,11 @@ exit at 10⁻⁴ px by default (D74), and `sls-scan depth` runs the same path wi
 window. The calibration panel captures board pairs, solves the stereo
 calibration through the Python tool and writes those parameters for the next run (D41).
 
+The "Reference dots (smooth panels)" switch takes every 4th stereo pair with the pattern
+light off. The worker finds that pair's dots against the next lit depth frame and poses
+it from them before the lit frame joins, and `sls-scan depth --dark-every 4` does the
+same without the window (D79).
+
 On a software adapter such as lavapipe, the worker and `sls-scan depth` run previews in
 place of depth frames and leave them out of the fused model (D50). Each depth frame drops
 isolated points (D59) and folds into a coarse TSDF at its tracked pose, and the scene

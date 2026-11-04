@@ -377,6 +377,31 @@ impl DepthFrame {
         self.gpu.software
     }
 
+    /// Reference dots in a raw pair taken with the pattern light off, placed in the left
+    /// camera's frame against `surface`, the points of a pattern-lit pair taken next to it.
+    pub fn dots(
+        &self,
+        params: &DepthParams,
+        cameras: (&RectifyParams, &RectifyParams),
+        left_raw: &[u8],
+        right_raw: &[u8],
+        surface: &[[f64; 3]],
+    ) -> Result<Vec<[f64; 3]>, String> {
+        let (w, h) = (params.coarse.width, params.coarse.height);
+        let left = self.rectifier.rectify(cameras.0, w, h, left_raw)?;
+        let right = self.rectifier.rectify(cameras.1, w, h, right_raw)?;
+        Ok(crate::dots::find_dots(
+            cameras.0,
+            cameras.1,
+            (&left, &right),
+            w as usize,
+            h as usize,
+            surface,
+            params.near_m,
+            params.far_m,
+        ))
+    }
+
     /// Measure one raw stereo pair: a preview at `preview` settings when given, else a full
     /// depth frame.
     pub fn measure(

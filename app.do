@@ -29,6 +29,8 @@ $RUN calibrate --node "127.0.0.1:$PORT" --set stereo --wait 30 --poses 12 --out 
 $RUN depth --node "127.0.0.1:$PORT" --params "$SESSION/stereo/depth.json" --frames 2 --wait 30 \
     --mode depth --surface "$SESSION/surface.ply" --volume "$SESSION/volume" \
     --mesh "$SESSION/scan.stl"
+$RUN depth --node "127.0.0.1:$PORT" --params "$SESSION/stereo/depth.json" --frames 12 --dark-every 4 \
+    --wait 30 --mode depth
 python3 -m slscan.cli mesh-volume "$SESSION/volume" --out "$SESSION/volume.stl"
 $RUN mesh-volume "$SESSION/volume" --out "$SESSION/volume-rust.stl" --fill-mm 10 --faces 5000
 $RUN depth --node "127.0.0.1:$PORT" --params "$SESSION/stereo/depth.json" --frames 4 --wait 30 \
@@ -57,6 +59,9 @@ $RUN fusion-check "$SESSION/dot-fusion"
 python3 -m slscan.cli dot-fusion-vectors --out "$SESSION/dark-fusion" --frames 16 \
     --slide-mm 105 --dark-every 4 >/dev/null
 $RUN fusion-check "$SESSION/dark-fusion"
+python3 -m slscan.cli dot-fusion-vectors --out "$SESSION/dense-fusion" --frames 16 \
+    --slide-mm 45 --dot-pitch-mm 40 --dark-every 4 >/dev/null
+$RUN fusion-check "$SESSION/dense-fusion"
 python3 -m slscan.cli tsdf-vectors --out "$SESSION/tsdf" >/dev/null
 $RUN tsdf-check "$SESSION/tsdf"
 python3 -m slscan.cli register-vectors --out "$SESSION/register" >/dev/null

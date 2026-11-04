@@ -33,9 +33,15 @@ fn limit_label(value: f64, limit: f64, what: &str) -> egui::RichText {
 
 /// Voxel size of the fused model, as `track.fuse` uses by default.
 const FUSION_VOXEL_M: f64 = 0.0005;
+/// With reference dots on, every this many-th stereo pair is taken with the pattern
+/// light off (`DESIGN.md` D77).
+const DARK_EVERY: u32 = 4;
 
 enum DepthJob {
     Pair(Vec<u8>, Vec<u8>),
+    /// A pair taken with the pattern light off, kept until the next lit pair's points
+    /// place its dots.
+    Dark(Vec<u8>, Vec<u8>),
     Reset,
     /// Mesh the live volume, closing holes up to a size in metres and decimating to a
     /// triangle count when it is not 0, and reply with the mesh.
@@ -48,6 +54,8 @@ struct LiveFrame {
     model: Result<Vec<Vec3>, (String, Vec<Vec3>)>,
     fuse_ms: f64,
     rms: Option<f64>,
+    /// Dots found in the light-off pair before this frame, and dots in the map.
+    dots: Option<(Result<usize, String>, usize)>,
 }
 
 struct DepthWorker {
@@ -80,6 +88,8 @@ pub struct ScanApp {
     stats: Option<Stats>,
     params_path: String,
     stereo_frames: u32,
+    /// Take every `DARK_EVERY`-th stereo pair with the pattern light off for reference dots.
+    dots: bool,
     depth: Option<DepthWorker>,
     pending_left: Option<Vec<u8>>,
     cloud: Vec<[f64; 3]>,
@@ -119,6 +129,7 @@ impl Default for ScanApp {
             stats: None,
             params_path: "data/depth.json".to_owned(),
             stereo_frames: 30,
+            dots: false,
             depth: None,
             pending_left: None,
             cloud: Vec::new(),
@@ -160,12 +171,18 @@ impl ScanApp {
                 projection: setup.cameras.left.projection,
             };
             let size = (params.coarse.width, params.coarse.height);
+            let mut pending_dark: Option<(Vec<u8>, Vec<u8>)> = None;
             for job in jobs_rx {
                 let (left, right) = match job {
                     DepthJob::Pair(left, right) => (left, right),
+                    DepthJob::Dark(left, right) => {
+                        pending_dark = Some((left, right));
+                        continue;
+                    }
                     DepthJob::Reset => {
                         fusion = Fusion::new(FUSION_VOXEL_M);
                         volume.reset();
+                        pending_dark = None;
                         continue;
                     }
                     DepthJob::Mesh(fill_m, faces, reply) => {
@@ -177,6 +194,7 @@ impl ScanApp {
                 let depth = frame.measure(&params, preview.as_ref(), cameras, &left, &right);
                 let start = std::time::Instant::now();
                 let mut surface = Ok(Vec::new());
+                let mut dots = None;
                 if let (Ok(d), None) = (&depth, &preview) {
                     let points = fuse::drop_isolated(
                         &d.points,
@@ -184,6 +202,13 @@ impl ScanApp {
                         camera.projection[0],
                         fuse::ISOLATED_SPACINGS,
                     );
+                    if let Some((l, r)) = pending_dark.take() {
+                        let found = frame.dots(&params, cameras, &l, &r, &points);
+                        if let Ok(seen) = &found {
+                            fusion.add_dark(seen);
+                        }
+                        dots = Some((found.map(|seen| seen.len()), fusion.dots().len()));
+                    }
                     fusion.add(&points);
                     if let Some(pose) = fusion.poses.last() {
                         let grid =
@@ -204,6 +229,7 @@ impl ScanApp {
                     model: surface.map_err(|e| (e, fusion.model().to_vec())),
                     fuse_ms: start.elapsed().as_secs_f64() * 1000.0,
                     rms: fusion.last_rms,
+                    dots,
                 };
                 let _ = results_tx.send(live);
                 repaint.request_repaint();
@@ -248,7 +274,7 @@ impl ScanApp {
             steps: self.steps,
             frames: if stereo { self.stereo_frames } else { 1 },
             rate_hz: 0,
-            dark_every: 0,
+            dark_every: if stereo && self.dots { DARK_EVERY } else { 0 },
         };
         let repaint = ctx.clone();
         thread::spawn(move || {
@@ -549,7 +575,8 @@ impl ScanApp {
     }
 
     /// Keep a left frame until its right arrives, then send the pair to the worker when it
-    /// is idle, or count the pair as skipped.
+    /// is idle, or count the pair as skipped. A light-off pair is always sent, since the
+    /// lit pair after it needs it.
     fn pair_frame(&mut self, name: &str, pixels: Vec<u8>) {
         if name.ends_with("/left") {
             self.pending_left = Some(pixels);
@@ -558,6 +585,10 @@ impl ScanApp {
         let (Some(left), Some(worker)) = (self.pending_left.take(), self.depth.as_mut()) else {
             return;
         };
+        if name.starts_with("dark_") {
+            let _ = worker.jobs.send(DepthJob::Dark(left, pixels));
+            return;
+        }
         if worker.in_flight == 0 && worker.jobs.send(DepthJob::Pair(left, pixels)).is_ok() {
             worker.in_flight += 1;
         } else {
@@ -574,6 +605,11 @@ impl ScanApp {
             let rms = live
                 .rms
                 .map_or_else(String::new, |r| format!(", ICP residual {:.1} µm", r * 1e6));
+            let rms = match &live.dots {
+                Some((Ok(found), map)) => format!("{rms}, {found} dots seen, {map} in map"),
+                Some((Err(e), _)) => format!("{rms}, dot finding failed: {e}"),
+                None => rms,
+            };
             let (model, kind) = match live.model {
                 Ok(surface) => (surface, "TSDF surface".to_owned()),
                 Err((e, fused)) => (fused, format!("fused points (TSDF failed: {e})")),
@@ -667,6 +703,8 @@ impl ScanApp {
             );
             ui.label("Depth parameters");
             ui.text_edit_singleline(&mut self.params_path);
+            ui.checkbox(&mut self.dots, "Reference dots (smooth panels)")
+                .on_hover_text("Take every 4th pair with the pattern light off and track from the dots seen in it");
         }
         ui.add(
             egui::DragValue::new(&mut self.pitch)

@@ -41,11 +41,11 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   an estimated 15 to 16 (D72, D74).
 - Phase 5, in progress. Continuous scanning. Pose tracking from geometry, with optional
   markers on a mat (D63) and removable dots on long smooth panels (D64), TSDF fusion,
-  loop closure. Acceptance: a sweep around a part fuses to a model
-  whose ball bar is within 0.05 mm and shows no doubling at revisited surfaces. ICP
-  tracking with point fusion (D26) and a TSDF (D51) keep a synthetic sweep's ball bar
-  within 0.03 mm, live in the application (D42, D54). Closed loops return within 15 µm
-  (D55). Dots from light-off frames keep smooth panels within 0.08 mm (D67, D68).
+  loop closure. Acceptance: a sweep around a part fuses to a model whose ball bar is
+  within 0.05 mm and shows no doubling at revisited surfaces. ICP tracking and a TSDF keep
+  a synthetic sweep's ball bar within 0.03 mm, live (D26, D51, D54). Closed loops return
+  within 15 µm (D55). Dots from light-off frames keep smooth point-frame panels within
+  0.22 mm (D78), and the application tracks from them live (D79).
 - Phase 6, in progress. Many static views. View poses from geometry by a coarse match
   and ICP refinement, optional markers, datums defining the object's frame, a merged
   cloud (D63). Acceptance: two scale bars in different orientations measure within 0.5 mm
