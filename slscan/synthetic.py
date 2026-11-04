@@ -557,18 +557,32 @@ def loop_poses(frames: int, yaw_deg: float = 25.0, pitch_deg: float = 8.0,
     return poses
 
 
-def sweep_scene(distance_m: float = 0.5, dot_pitch: float = 0.0) -> dict:
+def sweep_scene(distance_m: float = 0.5) -> dict:
     """A part on a mat for sweep tests, in the world frame of sweep_poses: a 140 mm mat, a
-    ball bar of two 25 mm spheres about 80 mm apart, and a 16 mm sphere. A dot_pitch puts
-    reference dots of 2 mm radius on the mat that far apart."""
+    ball bar of two 25 mm spheres about 80 mm apart, and a 16 mm sphere."""
     z = distance_m
-    grid = np.arange(-0.06, 0.0601, dot_pitch) if dot_pitch > 0 else np.empty(0)
-    dots = tuple((u, v) for u in grid for v in grid)
-    return {"mat": Plate(np.array([0.0, 0.0, z + 0.02]), np.eye(3), 0.07, 0.07, 0.8, dots,
-                         0.002),
+    return {"mat": Plate(np.array([0.0, 0.0, z + 0.02]), np.eye(3), 0.07, 0.07),
             "ball-bar": [Ball(np.array([-0.04, 0.005, z]), 0.0125),
                          Ball(np.array([0.04, -0.005, z + 0.002]), 0.0125)],
             "sphere": Ball(np.array([0.0, -0.04, z + 0.008]), 0.008)}
+
+
+def panel_scene(distance_m: float = 0.5, dot_pitch: float = 0.035) -> dict:
+    """A smooth panel for light-off sweeps, in the world frame of slide_poses: a flat
+    0.6 × 0.3 m plate tilted 8° at distance_m, with reference dots of 2 mm radius about
+    dot_pitch apart, each moved up to 3 mm from a grid as hand-placed dots would be."""
+    rng = np.random.default_rng(7)
+    grid = [(u, v) for u in np.arange(-0.28, 0.281, dot_pitch)
+            for v in np.arange(-0.13, 0.131, dot_pitch)]
+    dots = tuple((u + rng.uniform(-0.003, 0.003), v + rng.uniform(-0.003, 0.003))
+                 for u, v in grid)
+    return {"panel": Plate(np.array([0.0, 0.0, distance_m]), rotation(8.0, 0.0), 0.3, 0.15, 0.8,
+                           dots, 0.002)}
+
+
+def slide_poses(frames: int, step_m: float = 0.0025) -> list:
+    """Head poses (world to head) sliding step_m per frame along the head's x axis."""
+    return [(np.eye(3), np.array([-step_m * k, 0.0, 0.0])) for k in range(frames)]
 
 
 def sweep_captures(rig: StereoRig, scene: dict, poses: list, pattern: np.ndarray, seed: int = 0,
@@ -577,7 +591,8 @@ def sweep_captures(rig: StereoRig, scene: dict, poses: list, pattern: np.ndarray
     With dark_every, every dark_every-th pair from the first is taken under room light
     alone, with the pattern light off."""
     rng = np.random.default_rng(seed)
-    shapes = [scene["mat"], *scene["ball-bar"], scene["sphere"]]
+    shapes = [shape for value in scene.values()
+              for shape in (value if isinstance(value, list) else [value])]
     for i, (r, t) in enumerate(poses):
         moved = transform_scene(shapes, r, t)
         if dark_every > 0 and i % dark_every == 0:

@@ -192,11 +192,10 @@ class StandIn(socketserver.ThreadingTCPServer):
         if request["set"] == "stereo":
             count = int(request.get("frames", 1))
             dark_every = int(request.get("dark_every", 0))
-            poses = synthetic.sweep_poses(count, yaw_deg=min(25.0, float(count)),
-                                          pitch_deg=min(8.0, 0.3 * count))
+            scene, poses = self.stereo_sequence(count, dark_every)
             images, stamps = [], []
-            captures = synthetic.sweep_captures(self.stereo, self.sweep_scene(dark_every), poses,
-                                                self.dots, self.seed, dark_every)
+            captures = synthetic.sweep_captures(self.stereo, scene, poses, self.dots, self.seed,
+                                                dark_every)
             for i, pair in enumerate(captures):
                 images += [pair["left"], pair["right"]]
                 stamps += [i * STEREO_PERIOD_NS] * 2
@@ -210,10 +209,14 @@ class StandIn(socketserver.ThreadingTCPServer):
         return images, [i * FRAME_PERIOD_NS for i in range(len(images))]
 
     @staticmethod
-    def sweep_scene(dark_every: int) -> dict:
-        """The sweep scene, with reference dots on its mat when pairs are taken with the
-        pattern light off."""
-        return synthetic.sweep_scene(dot_pitch=0.03 if dark_every > 0 else 0.0)
+    def stereo_sequence(count: int, dark_every: int) -> tuple[dict, list]:
+        """The scene and head poses of a stereo set: a sweep around a part on a mat, or with
+        light-off pairs a slide along a dotted panel, which reference dots serve."""
+        if dark_every > 0:
+            return synthetic.panel_scene(), synthetic.slide_poses(count)
+        poses = synthetic.sweep_poses(count, yaw_deg=min(25.0, float(count)),
+                                      pitch_deg=min(8.0, 0.3 * count))
+        return synthetic.sweep_scene(), poses
 
     def paced_pairs(self, count: int, rate_hz: float, dark_every: int = 0):
         """Yield (pair index, left, right, timestamp in nanoseconds) for count pairs on a
@@ -221,9 +224,12 @@ class StandIn(socketserver.ThreadingTCPServer):
         trigger time passed more than one period before the node reaches it is dropped, as
         a node with a full queue drops it."""
         if self.cycle is None or self.cycle[0] != (dark_every > 0):
-            poses = synthetic.sweep_poses(PACED_CYCLE, yaw_deg=float(PACED_CYCLE),
-                                          pitch_deg=0.3 * PACED_CYCLE)
-            scene = self.sweep_scene(dark_every)
+            if dark_every > 0:
+                scene, poses = self.stereo_sequence(PACED_CYCLE, dark_every)
+            else:
+                scene = synthetic.sweep_scene()
+                poses = synthetic.sweep_poses(PACED_CYCLE, yaw_deg=float(PACED_CYCLE),
+                                              pitch_deg=0.3 * PACED_CYCLE)
             lit = [(pair["left"], pair["right"]) for pair in synthetic.sweep_captures(
                 self.stereo, scene, poses, self.dots, self.seed)]
             dark = [(pair["left"], pair["right"]) for pair in synthetic.sweep_captures(
