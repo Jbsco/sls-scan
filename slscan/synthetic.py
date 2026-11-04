@@ -654,3 +654,25 @@ def metre_object() -> dict:
             [Ball(np.array([-0.15, 0.02, 0.12]), 0.0254),
              Ball(np.array([0.12, 0.12, 0.38]), 0.0254)]]
     return {"part": part, "scale-bars": bars}
+
+def panel_frames(rng: np.random.Generator, frames: int = 24, slide: float = 0.24,
+                 dot_pitch: float = 0.1) -> tuple[list, list, list]:
+    """Return point frames, reference dot frames and true translations (into the first
+    frame) of a camera sliding slide metres along a cylindrical panel of 1.5 m radius
+    1 m away, with dots every dot_pitch metres."""
+    def z(x, y):
+        return 1.0 + 1.5 - np.sqrt(1.5 ** 2 - y ** 2)
+    x, y = rng.uniform(-0.6, 0.6, 15000), rng.uniform(-0.3, 0.3, 15000)
+    world = np.column_stack([x, y, z(x, y)])
+    gx, gy = np.meshgrid(np.arange(-0.6, 0.6001, dot_pitch), np.arange(-0.25, 0.2501, dot_pitch))
+    dots = np.column_stack([gx.ravel(), gy.ravel(), z(gx.ravel(), gy.ravel())])
+    clouds, dot_frames, truth = [], [], []
+    for i in range(frames):
+        t = np.array([slide * (i / (frames - 1) - 0.5), 0.0, 0.0])
+        for points, out, noise in ((world, clouds, 3e-5), (dots, dot_frames, 5e-5)):
+            seen = points - t
+            inside = (np.abs(seen[:, 0]) < 0.4 * seen[:, 2]) & (np.abs(seen[:, 1]) < 0.3 * seen[:, 2])
+            seen = seen[inside]
+            out.append(seen + rng.normal(scale=noise, size=seen.shape))
+        truth.append(t - np.array([slide * -0.5, 0.0, 0.0]))
+    return clouds, dot_frames, truth
