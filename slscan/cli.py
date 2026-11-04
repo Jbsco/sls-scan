@@ -351,12 +351,13 @@ def cmd_stereo_vectors(args: argparse.Namespace) -> int:
     left_pts, right_pts, warps = stereo.refine(rl, rr, points, guesses, args.window,
                                                return_warps=True)
     refined, kept = stereo.second_order_matches(rl, rr, left_pts, right_pts, warps, args.window,
-                                                args.iterations)
+                                                args.iterations, exit_px=args.exit_px)
     _, _, _, block_points, block_guesses = stereo.coarse_samples(
         cal, images["left"], images["right"], 0.4, 0.6, args.step, args.window, coarse="block")
     small, lo, count = stereo.block_disparity_small(rl, rr, stereo.disparity_at(rect, 0.6),
                                                     stereo.disparity_at(rect, 0.4))
-    direct, direct_kept = stereo.direct_refine(rl, rr, block_points, block_guesses, args.window)
+    direct, direct_kept = stereo.direct_refine(rl, rr, block_points, block_guesses, args.window,
+                                               exit_px=args.exit_px)
     os.makedirs(args.out, exist_ok=True)
     images["left"].tofile(os.path.join(args.out, "left-raw.bin"))
     images["right"].tofile(os.path.join(args.out, "right-raw.bin"))
@@ -380,7 +381,8 @@ def cmd_stereo_vectors(args: argparse.Namespace) -> int:
     np.column_stack([matched[in_range], cloud]).astype("<f8").tofile(
         os.path.join(args.out, "depth.bin"))
     meta = {"width": int(rl.shape[1]), "height": int(rl.shape[0]), "window": args.window,
-            "iterations": args.iterations, "samples": int(len(left_pts)),
+            "iterations": args.iterations, "exit_px": args.exit_px,
+            "samples": int(len(left_pts)),
             "direct_samples": int(len(block_points)), "max_move": 3.0,
             "min_correlation": 0.95,
             "coarse": {"width": int(small.shape[1]), "height": int(small.shape[0]), "scale": 4,
@@ -405,7 +407,8 @@ def cmd_depth_params(args: argparse.Namespace) -> int:
         cal = synthetic.true_stereo_calibration(head, synthetic.SMALL_BOARD)
     else:
         cal = calibrate.load_stereo(args.calibration)
-    params = stereo.depth_parameters(cal, args.near, args.far, args.step, args.window)
+    params = stereo.depth_parameters(cal, args.near, args.far, args.step, args.window,
+                                     exit_px=args.exit_px)
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(params, f)
@@ -593,7 +596,8 @@ def cmd_replay_reference(args: argparse.Namespace) -> int:
                        for side in ("left", "right"))
         rect, _, _, points, refined, kept = stereo.direct_matches(
             cal, left, right, depth["near"], depth["far"], depth["step"], params["window"],
-            depth["min_level"], params["max_move"], params["min_correlation"])
+            depth["min_level"], params["max_move"], params["min_correlation"],
+            exit_px=params.get("exit_px", 1e-5))
         matched = points[kept]
         cloud, in_range = stereo.triangulate(rect, matched, refined[kept], depth["near"],
                                              depth["far"], return_kept=True)
@@ -1144,6 +1148,8 @@ def main(argv=None) -> int:
     p.add_argument("--far", type=float, default=0.6, help="farthest surface in metres")
     p.add_argument("--step", type=int, default=8, help="sample spacing in pixels")
     p.add_argument("--window", type=int, default=25, help="matching window in pixels")
+    p.add_argument("--exit-px", type=float, default=1e-5,
+                   help="refinement stops when a step moves the match less than this")
     p.add_argument("--out", default="data/depth.json")
     p.add_argument("--json", action="store_true", help="print the result as one JSON object")
     p.set_defaults(func=cmd_depth_params)
@@ -1228,6 +1234,8 @@ def main(argv=None) -> int:
     p.add_argument("--step", type=int, default=8, help="sample spacing in pixels")
     p.add_argument("--window", type=int, default=25, help="matching window in pixels")
     p.add_argument("--iterations", type=int, default=20)
+    p.add_argument("--exit-px", type=float, default=1e-5,
+                   help="refinement stops when a step moves the match less than this")
     p.add_argument("--seed", type=int, default=1)
     p.set_defaults(func=cmd_stereo_vectors)
 

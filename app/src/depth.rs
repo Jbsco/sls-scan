@@ -19,6 +19,8 @@ pub struct DepthParams {
     /// Matching window in pixels.
     pub window: u32,
     pub iterations: u32,
+    /// Refinement stops once a step moves a match less than this, in pixels.
+    pub exit_px: f32,
     /// A sample's window must lie where the 5 x 5 mean of the left image rounds to this or
     /// more.
     pub min_level: f32,
@@ -63,6 +65,11 @@ pub struct Cameras {
     pub right: RectifyParams,
 }
 
+/// Refinement exit of parameter files written before the exit was a setting.
+pub fn earlier_exit() -> f32 {
+    1e-5
+}
+
 /// Everything a depth frame takes for one calibration, as `slscan depth-params` writes it.
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 pub struct DepthSetup {
@@ -70,6 +77,8 @@ pub struct DepthSetup {
     pub height: u32,
     pub window: u32,
     pub iterations: u32,
+    #[serde(default = "earlier_exit")]
+    pub exit_px: f32,
     pub max_move: f32,
     pub min_correlation: f32,
     pub coarse: CoarseSetup,
@@ -101,6 +110,7 @@ impl DepthSetup {
             step: self.depth.step,
             window: self.window,
             iterations: self.iterations,
+            exit_px: self.exit_px,
             min_level: self.depth.min_level,
             max_move: self.max_move,
             min_correlation: self.min_correlation,
@@ -428,6 +438,7 @@ impl DepthFrame {
             terms: 6,
             max_move: 1.0,
             min_correlation: None,
+            exit: params.exit_px,
         };
         let stages = [
             (3, params.max_move, Some(params.min_correlation)),

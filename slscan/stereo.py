@@ -81,17 +81,18 @@ def depth_parameters(cal: StereoCalibration, near_m: float, far_m: float, step: 
                      window: int = 25, iterations: int = 20, min_level: float = 6.0,
                      max_move: float = 3.0, min_correlation: float = 0.95, scale: int = 4,
                      block: int = 7, coarse_correlation: float = 0.6, margin: float = 0.05,
-                     fill: int = 2, preview_scale: int = 8) -> dict:
+                     fill: int = 2, preview_scale: int = 8, exit_px: float = 1e-5) -> dict:
     """Return everything the application's depth frame takes for one calibration: image
-    size, matching settings, the block matching search and settings, the depth bounds
-    and sampling, both cameras' rectification, and the preview's block matching scale and
-    search."""
+    size, matching settings with the refinement exit, the block matching search and
+    settings, the depth bounds and sampling, both cameras' rectification, and the
+    preview's block matching scale and search."""
     rect = rectify(cal)
     d_min, d_max = disparity_at(rect, far_m), disparity_at(rect, near_m)
     lo, count = search_range(d_min, d_max, scale)
     preview_lo, preview_count = search_range(d_min, d_max, preview_scale)
     return {"width": cal.left.width, "height": cal.left.height, "window": window,
-            "iterations": iterations, "max_move": max_move, "min_correlation": min_correlation,
+            "iterations": iterations, "exit_px": exit_px, "max_move": max_move,
+            "min_correlation": min_correlation,
             "coarse": {"scale": scale, "block": block, "lo": lo, "count": count,
                        "min_correlation": coarse_correlation, "margin": margin, "fill": fill},
             "depth": {"near": near_m, "far": far_m, "step": step, "min_level": min_level},
@@ -278,7 +279,7 @@ def second_order_matches(left: np.ndarray, right: np.ndarray, left_points: np.nd
                          right_points: np.ndarray, affine: np.ndarray, window: int = 21,
                          iterations: int = 20, batch: int = 1024, max_move: float = 1.0,
                          min_correlation: float | None = None,
-                         terms: int = 6) -> tuple[np.ndarray, np.ndarray]:
+                         terms: int = 6, exit_px: float = 1e-5) -> tuple[np.ndarray, np.ndarray]:
     """Refine every match with a second-order window by Gauss-Newton.
 
     Each window maps to the right image through a quadratic displacement field, 12
@@ -286,7 +287,8 @@ def second_order_matches(left: np.ndarray, right: np.ndarray, left_points: np.nd
     the refined right points (N, 2) and a kept flag (N,). A match is not kept when its
     solve fails or its column moves max_move px or more from its start. With
     min_correlation, a match is also not kept when its template and its window correlate
-    below that value. Terms 3 limits each window to an affine shape.
+    below that value. Terms 3 limits each window to an affine shape. A match stops
+    iterating once its centre moves under exit_px in a step.
     """
     hw = window // 2
     dy, dx = np.mgrid[-hw:hw + 1, -hw:hw + 1].astype(np.float32)
@@ -340,7 +342,7 @@ def second_order_matches(left: np.ndarray, right: np.ndarray, left_points: np.nd
             p[active, 1] += step[:, 6:12]
             gain[active] += step[:, 12]
             offset[active] += step[:, 13]
-            moving = np.max(np.abs(step[:, [0, 6]]), axis=1) >= 1e-5
+            moving = np.max(np.abs(step[:, [0, 6]]), axis=1) >= exit_px
             active = active[moving]
         ok &= np.all(np.isfinite(p.reshape(n, -1)), axis=1)
         ok &= np.abs(p[:, 0, 0] - (rp[:, 0] - lp[:, 0])) < max_move
@@ -406,7 +408,7 @@ def affine_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
 def direct_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
                    near_m: float, far_m: float, step: int = 8, window: int = 25,
                    min_level: float = 6.0, max_move: float = 3.0,
-                   min_correlation: float = 0.95, coarse: str = "block"):
+                   min_correlation: float = 0.95, coarse: str = "block", exit_px: float = 1e-5):
     """Match the samples of coarse_samples by Gauss-Newton alone, without Lucas-Kanade or
     ECC: affine windows from the coarse disparity of block_disparity, or of semi-global
     matching when coarse is "sgbm", kept when they move under max_move px and correlate
@@ -415,20 +417,24 @@ def direct_matches(cal: StereoCalibration, left: np.ndarray, right: np.ndarray,
     refined right points (N, 2) and a kept flag (N,)."""
     rect, rl, rr, points, guesses = coarse_samples(cal, left, right, near_m, far_m, step,
                                                    window, min_level, coarse)
-    refined, kept = direct_refine(rl, rr, points, guesses, window, max_move, min_correlation)
+    refined, kept = direct_refine(rl, rr, points, guesses, window, max_move, min_correlation,
+                                  exit_px)
     return rect, rl, rr, points, refined, kept
 
 
 def direct_refine(left: np.ndarray, right: np.ndarray, points: np.ndarray,
                   guesses: np.ndarray, window: int = 25, max_move: float = 3.0,
-                  min_correlation: float = 0.95) -> tuple[np.ndarray, np.ndarray]:
+                  min_correlation: float = 0.95,
+                  exit_px: float = 1e-5) -> tuple[np.ndarray, np.ndarray]:
     """Refine rectified matches from their coarse guesses in the two stages of
     direct_matches. Returns the refined right points (N, 2) and a kept flag (N,)."""
     start = np.repeat(np.eye(2)[None], len(points), axis=0)
     affine, affine_kept = second_order_matches(left, right, points, guesses, start, window,
                                                max_move=max_move,
-                                               min_correlation=min_correlation, terms=3)
-    refined, kept = second_order_matches(left, right, points, affine, start, window)
+                                               min_correlation=min_correlation, terms=3,
+                                               exit_px=exit_px)
+    refined, kept = second_order_matches(left, right, points, affine, start, window,
+                                         exit_px=exit_px)
     return refined, kept & affine_kept
 
 
