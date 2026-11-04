@@ -1,7 +1,9 @@
+import json
+
 import numpy as np
 import pytest
 
-from slscan import geometry, report, track
+from slscan import cli, geometry, report, track
 
 
 def sphere_points(centre, radius, rng, n=800):
@@ -90,3 +92,29 @@ def test_symmetric_datum_layouts_are_refused():
     with pytest.raises(ValueError, match="symmetric"):
         report.measure(points, {"spheres": spheres})
 
+
+def test_report_writes_the_cloud_in_the_object_frame(tmp_path):
+    rng = np.random.default_rng(5)
+    measured = {"a": [0.0, 0.0, 0.0], "b": [0.08, 0.0, 0.0], "c": [0.0, 0.06, 0.01]}
+    rotation = track.rodrigues(np.array([0.05, -0.1, 0.2]))
+    translation = np.array([-0.01, 0.02, 0.5])
+    geometry.write_ply(str(tmp_path / "scan.ply"), scan_of(measured, rotation, translation, rng))
+    with open(tmp_path / "datums.json", "w", encoding="utf-8") as f:
+        json.dump({"spheres": {n: {"centre": c, "radius": 0.0125} for n, c in measured.items()}}, f)
+    assert cli.main(["report", str(tmp_path / "scan.ply"), "--datums", str(tmp_path / "datums.json"),
+                     "--aligned", str(tmp_path / "aligned.ply")]) == 0
+    aligned = geometry.read_ply(str(tmp_path / "aligned.ply"))
+    near = aligned[np.linalg.norm(aligned - measured["b"], axis=1) < 0.014]
+    assert np.linalg.norm(geometry.fit_sphere(near)[0] - measured["b"]) < 0.0001
+
+
+def test_mesh_faces_read_back(tmp_path):
+    from slscan import mesh
+
+    vertices = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [1.0, 1.0, 0.0]])
+    faces = np.array([[0, 1, 2], [1, 3, 2]])
+    mesh.write_mesh(str(tmp_path / "mesh.ply"), vertices, faces)
+    geometry.write_ply(str(tmp_path / "points.ply"), vertices)
+    assert np.array_equal(geometry.read_ply_faces(str(tmp_path / "mesh.ply")), faces)
+    assert len(geometry.read_ply_faces(str(tmp_path / "points.ply"))) == 0
+    assert np.allclose(geometry.read_ply(str(tmp_path / "mesh.ply")), vertices)

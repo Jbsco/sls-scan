@@ -73,3 +73,18 @@ def read_ply(path: str) -> np.ndarray:
     count = int(next(line.split()[2] for line in data[:end].decode("ascii").split("\n")
                      if line.startswith("element vertex")))
     return np.frombuffer(data[end:end + 12 * count], dtype="<f4").reshape(count, 3).astype(np.float64)
+
+
+def read_ply_faces(path: str) -> np.ndarray:
+    """Read the triangles (F, 3) of a PLY mesh written by mesh.write_mesh, or none from a
+    PLY of points."""
+    with open(path, "rb") as f:
+        data = f.read()
+    end = data.index(b"end_header\n") + len(b"end_header\n")
+    header = data[:end].decode("ascii").split("\n")
+    counts = {line.split()[1]: int(line.split()[2]) for line in header
+              if line.startswith("element ")}
+    faces = counts.get("face", 0)
+    start = end + 12 * counts["vertex"]
+    rows = np.frombuffer(data[start:start + 13 * faces], dtype=[("n", "u1"), ("v", "<i4", 3)])
+    return rows["v"].astype(np.int64)

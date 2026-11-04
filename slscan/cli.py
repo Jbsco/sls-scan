@@ -124,7 +124,8 @@ def cmd_report(args: argparse.Namespace) -> int:
 
     from . import report
 
-    result = report.measure(geometry.read_ply(args.cloud), report.load_datums(args.datums))
+    points = geometry.read_ply(args.cloud)
+    result = report.measure(points, report.load_datums(args.datums))
     for name, datum in result["datums"].items():
         print(f"datum {name}: residual {1e6 * datum['residual_m']:.1f} µm, "
               f"radius {1e6 * datum['radius_error_m']:+.1f} µm")
@@ -134,6 +135,16 @@ def cmd_report(args: argparse.Namespace) -> int:
         with open(args.out, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=1)
         print(f"report written to {args.out}")
+    if args.aligned:
+        from . import mesh
+
+        moved = points @ np.array(result["rotation"]).T + np.array(result["translation_m"])
+        faces = geometry.read_ply_faces(args.cloud)
+        if len(faces):
+            mesh.write_mesh(args.aligned, moved, faces)
+        else:
+            geometry.write_ply(args.aligned, moved)
+        print(f"{'mesh' if len(faces) else 'points'} in the object's frame written to {args.aligned}")
     worst = max(d["residual_m"] for d in result["datums"].values())
     return 0 if worst <= args.limit_mm / 1000.0 else 1
 
@@ -1172,6 +1183,7 @@ def main(argv=None) -> int:
     p.add_argument("cloud", help="PLY points or mesh")
     p.add_argument("--datums", required=True, help="datum file of spheres and scale bars")
     p.add_argument("--out", help="write the report as JSON")
+    p.add_argument("--aligned", help="write the cloud or mesh in the object's frame")
     p.add_argument("--limit-mm", type=float, default=1.0, help="largest datum residual allowed")
     p.set_defaults(func=cmd_report)
 
