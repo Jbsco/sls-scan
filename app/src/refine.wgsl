@@ -10,7 +10,7 @@ struct Params {
     max_move: f32,
     min_correlation: f32,
     gate: u32,
-    pad0: u32,
+    exit: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -261,7 +261,7 @@ fn solve(lane: u32, u0: f32, v0: f32) {
         }
         if (!(abs(shared_q[0] - u0) < 32.0 && abs(shared_q[6] - v0) < 32.0)) {
             state = 2u;
-        } else if (max(abs(rhs[0] * scaling[0]), abs(rhs[6] * scaling[6])) < 1e-5) {
+        } else if (max(abs(rhs[0] * scaling[0]), abs(rhs[6] * scaling[6])) < params.exit) {
             state = 1u;
         }
     }

@@ -1393,3 +1393,33 @@ file.
 Debug builds of the application now optimize its own code at level 1, because the
 application gate builds in debug and the unoptimized check took 75 s. At level 1 it
 takes 4.9 s, with debug assertions and overflow checks still on.
+
+## D74. Live depth frame settings (2026-11-03)
+
+Live depth frames now sample every 12 px and stop refining a match once a step moves it
+less than 10⁻⁴ px. They sampled every 8 px with an exit at 10⁻⁵ px, and D72 measured 9
+stand-in sweep frames per second against Phase 4's 15. `slscan depth-params` writes both
+settings, and the WGSL kernel and the NumPy reference read the exit. Parameter files
+written before keep 10⁻⁵ px. `slscan scan-stereo`, the benches and deferred processing
+keep 8 px and 10⁻⁵ px.
+
+With the same exit on both sides, the GPU still matches NumPy on the plate set: a 99th
+percentile of 0.436 µm, 2.224 µm largest, none beyond 5 µm. Against NumPy at 10⁻⁵ px, the
+looser exit moved that 99th percentile from 0.434 to 0.436 µm.
+
+Stand-in sweep frames ran back to back on the desktop of D72, while a virtual machine
+kept about eight of its 16 threads busy:
+
+| Setting | Samples | Frame, mean of frames 2 to 4 | Refinement |
+|---|---|---|---|
+| 8 px, 10⁻⁵ px | 15,948 | 117.0 to 120.5 ms | 100.7 to 101.1 ms |
+| 10 px, 10⁻⁴ px | 10,213 | 81.1 to 86.3 ms | 63.3 to 65.9 ms |
+| 12 px, 10⁻⁴ px | 7,079 | 68.2 to 74.9 ms | 51.4 to 54.2 ms |
+
+We chose 12 px, which takes 40% less time than the old setting. Scaled to D72's quiet
+107 ms, it seems likely to come to about 64 ms, near 15.6 frames per second. Sweep ICP
+residuals stayed at 21 µm. Point spacing grows from 0.86 to 1.29 mm at 0.5 m on the near
+head, and the live TSDF of D54 averages many frames over 1 mm voxels.
+
+Refinement kept about 25 ms that did not shrink with fewer samples under this load, so
+sparser sampling will not go much further. A run on a quiet machine will settle the rate.

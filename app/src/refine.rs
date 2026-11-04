@@ -27,6 +27,8 @@ pub struct RefineParams {
     pub max_move: f32,
     /// A sample is not kept when its final window correlates below this.
     pub min_correlation: Option<f32>,
+    /// A sample stops iterating once a step moves its centre less than this, in pixels.
+    pub exit: f32,
 }
 
 pub struct Refiner {
@@ -181,9 +183,8 @@ impl Refiner {
         }
         uniform.extend_from_slice(&params.max_move.to_le_bytes());
         uniform.extend_from_slice(&params.min_correlation.unwrap_or(0.0).to_le_bytes());
-        for v in [u32::from(params.min_correlation.is_some()), 0] {
-            uniform.extend_from_slice(&v.to_le_bytes());
-        }
+        uniform.extend_from_slice(&u32::from(params.min_correlation.is_some()).to_le_bytes());
+        uniform.extend_from_slice(&params.exit.to_le_bytes());
         uniform
     }
 
@@ -388,6 +389,7 @@ mod tests {
             terms: 6,
             max_move: 1.0,
             min_correlation: None,
+            exit: 1e-5,
         };
         let samples = [48.0, 32.0, 46.0, 32.0, 1.0, 0.0, 0.0, 1.0];
         let (points, kept) = match refiner.refine(&params, &left, &right, &samples) {
@@ -418,6 +420,7 @@ mod tests {
             terms: 6,
             max_move: 1.0,
             min_correlation: None,
+            exit: 1e-5,
         };
         let flat = vec![100u8; 64 * 64];
         let samples = [32.0, 32.0, 30.0, 32.0, 1.0, 0.0, 0.0, 1.0];

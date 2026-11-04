@@ -697,6 +697,8 @@ struct StereoMeta {
     height: u32,
     window: u32,
     iterations: u32,
+    #[serde(default = "depth::earlier_exit")]
+    exit_px: f32,
     samples: usize,
     #[serde(default)]
     direct_samples: usize,
@@ -762,6 +764,7 @@ fn check_set(
             terms: 6,
             max_move: 1.0,
             min_correlation: None,
+            exit: meta.exit_px,
         };
         result = Some(refiner.stages(&base, images.0, images.1, samples, stages)?);
         fastest = fastest.min(start.elapsed().as_secs_f64() * 1000.0);
@@ -1364,6 +1367,7 @@ fn depth_check(args: &[String]) -> ExitCode {
         step: d.step,
         window: meta.window,
         iterations: meta.iterations,
+        exit_px: meta.exit_px,
         min_level: d.min_level,
         max_move: meta.max_move,
         min_correlation: meta.min_correlation,
