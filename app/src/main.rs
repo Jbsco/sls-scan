@@ -1541,6 +1541,108 @@ fn register_check(args: &[String]) -> ExitCode {
 const REGISTER_DEGREES: f64 = 0.001;
 const REGISTER_METRES: f64 = 5e-6;
 
+/// Register view clouds in order around an object, merge them and write the poses, as
+/// `slscan register` does.
+fn register_views_command(args: &[String]) -> ExitCode {
+    let split = args
+        .iter()
+        .position(|a| a.starts_with("--"))
+        .unwrap_or(args.len());
+    let paths: Vec<PathBuf> = args[..split].iter().map(PathBuf::from).collect();
+    if paths.is_empty() {
+        eprintln!(
+            "usage: sls-scan register <view.ply>... [--voxel-mm N] [--rounds N] [--merge-voxel-mm N] [--out merged.ply] [--poses poses.json]"
+        );
+        return ExitCode::FAILURE;
+    }
+    let (mut voxel_mm, mut rounds, mut merge_mm) = (10.0f64, 1usize, 0.5f64);
+    let (mut out, mut pose_file) = (
+        PathBuf::from("data/merged.ply"),
+        PathBuf::from("data/poses.json"),
+    );
+    for pair in args[split..].chunks(2) {
+        let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
+            eprintln!(
+                "arguments come in pairs: --voxel-mm, --rounds, --merge-voxel-mm, --out, --poses"
+            );
+            return ExitCode::FAILURE;
+        };
+        let parsed = match key.as_str() {
+            "--voxel-mm" => value.parse().map(|v| voxel_mm = v).map_err(|_| ()),
+            "--rounds" => value.parse().map(|v| rounds = v).map_err(|_| ()),
+            "--merge-voxel-mm" => value.parse().map(|v| merge_mm = v).map_err(|_| ()),
+            "--out" => {
+                out = PathBuf::from(value);
+                Ok(())
+            }
+            "--poses" => {
+                pose_file = PathBuf::from(value);
+                Ok(())
+            }
+            _ => Err(()),
+        };
+        if parsed.is_err() {
+            eprintln!("bad argument {key} {value}");
+            return ExitCode::FAILURE;
+        }
+    }
+    let Some(views) = read_views(&paths) else {
+        return ExitCode::FAILURE;
+    };
+    let (poses, records) = register::register_views(&views, voxel_mm / 1000.0, rounds);
+    let mut merged: Vec<[f64; 3]> = views
+        .iter()
+        .zip(&poses)
+        .flat_map(|(v, pose)| v.iter().map(|p| pose.apply(p)))
+        .collect();
+    if merge_mm > 0.0 {
+        merged = register::voxel_average(&merged, merge_mm / 1000.0);
+    }
+    if let Err(e) = depth::write_ply(&out, &merged) {
+        eprintln!("{}: {e}", out.display());
+        return ExitCode::FAILURE;
+    }
+    let overlaps: Vec<Option<f64>> = std::iter::once(None)
+        .chain(records.iter().map(|r| Some(r.overlap)))
+        .collect();
+    let listed: Vec<serde_json::Value> = paths
+        .iter()
+        .zip(&poses)
+        .zip(&overlaps)
+        .map(|((path, pose), overlap)| {
+            serde_json::json!({
+                "file": path.display().to_string(),
+                "rotation": pose.rotation,
+                "translation": pose.translation,
+                "overlap_with_previous": overlap,
+            })
+        })
+        .collect();
+    let document = serde_json::json!({"frame": paths[0].display().to_string(), "views": listed});
+    let written = serde_json::to_string_pretty(&document)
+        .map_err(std::io::Error::other)
+        .and_then(|text| std::fs::write(&pose_file, text));
+    if let Err(e) = written {
+        eprintln!("{}: {e}", pose_file.display());
+        return ExitCode::FAILURE;
+    }
+    for (path, record) in paths[1..].iter().zip(&records) {
+        println!(
+            "{}: overlap with the view before {:.2}",
+            path.display(),
+            record.overlap
+        );
+    }
+    println!(
+        "{} points written to {}, poses in the frame of {} written to {}",
+        merged.len(),
+        out.display(),
+        paths[0].display(),
+        pose_file.display()
+    );
+    ExitCode::SUCCESS
+}
+
 fn mesh_volume(args: &[String]) -> ExitCode {
     let Some(dir) = args.first().map(PathBuf::from) else {
         eprintln!(
@@ -1983,6 +2085,7 @@ fn main() -> ExitCode {
         Some("fusion-check") => return fusion_check(&args[2..]),
         Some("tsdf-check") => return tsdf_check(&args[2..]),
         Some("mesh-volume") => return mesh_volume(&args[2..]),
+        Some("register") => return register_views_command(&args[2..]),
         Some("register-check") => return register_check(&args[2..]),
         Some("replay") => return replay(&args[2..]),
         _ => {}

@@ -53,6 +53,8 @@ python3 -m slscan.cli tsdf-vectors --out "$SESSION/tsdf" >/dev/null
 $RUN tsdf-check "$SESSION/tsdf"
 python3 -m slscan.cli register-vectors --out "$SESSION/register" >/dev/null
 $RUN register-check "$SESSION/register"
+$RUN register "$SESSION"/register/view_*.ply --voxel-mm 5 --out "$SESSION/merged.ply" \
+    --poses "$SESSION/poses.json"
 echo "app: all checks clean"
 [ -n "${3:-}" ] && touch "$3"
 exit 0
