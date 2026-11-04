@@ -99,10 +99,10 @@ the printed calibrate, scan and measure steps.
 
 | Test | Projector image 150 mm | Projector image 360 mm | Truth or target |
 |---|---|---|---|
-| Flat plate, 80 mm, tilted | 7.6 µm RMS | 17.1 µm RMS | under 10 µm |
-| Sphere radius | -3.4 µm | +0.2 µm | 12.5 mm sphere |
+| Flat plate, 80 mm, tilted | 7.5 µm RMS | 17.1 µm RMS | under 10 µm |
+| Sphere radius | -3.4 µm | 0.0 µm | 12.5 mm sphere |
 | Sphere form | 5.2 µm RMS | 12.4 µm RMS | |
-| Ball bar spacing | -3.3 µm | -1.4 µm | 80.424 mm |
+| Ball bar spacing | -2.8 µm | -1.0 µm | 80.424 mm |
 
 Depth error of one preview cycle on a moving plate (`slscan motion-error --head small`):
 Global Shutter camera, 60 Hz, four steps, projector image 150 mm.
@@ -122,17 +122,23 @@ which only the bench measures.
 These results are the active stereo head of `DESIGN.md` D25 on the virtual bench. Two
 Global Shutter cameras sit behind 16 mm lenses on a 0.2 m baseline crossing at 0.5 m.
 An uncalibrated light throws a random-dot pattern on uncoated artifacts, and the
-calibration is recovered from twelve synthetic poses of a 90 × 60 mm board. It
-reprojects to 0.076 and 0.065 px (limit 0.3 px) with a baseline of 200.19 mm against
-200 mm. Commands: `slscan simulate --head stereo`, then the printed calibrate-stereo,
-scan-stereo and measure steps, with `--order 1 --window 21` for affine windows.
+calibration is recovered from twelve synthetic poses of a 90 × 60 mm board.
+
+This calibration reprojects to 0.076 and 0.065 px (limit 0.3 px) with a baseline of
+200.17 mm against 200 mm, with k2 fixed for these narrow lenses (D80). Commands:
+`slscan simulate --head stereo`, then the printed calibrate-stereo, scan-stereo and
+measure steps, with `--order 1 --window 21` for affine windows.
 
 | Test | Affine, 21 px | Second-order, 25 px | Truth or target |
 |---|---|---|---|
 | Flat plate, 80 mm, tilted | 8 µm RMS | 10 µm RMS | under 20 µm |
-| Sphere radius | 12.395 mm | 12.491 mm | 12.500 mm |
-| Sphere form | 17 µm RMS | 7 µm RMS | 0 |
-| Ball bar spacing, 25 mm spheres | 80.404 mm | 80.431 mm | 80.424 mm |
+| Sphere radius | 12.407 mm | 12.498 mm | 12.500 mm |
+| Sphere form | 19 µm RMS | 8 µm RMS | 0 |
+| Ball bar spacing, 25 mm spheres | 80.379 mm | 80.402 mm | 80.424 mm |
+
+Ball bar spacing from one capture depends on where the rectified images sample the
+dots. With the true calibration, shifting both rectified images by a fraction of a
+pixel, which leaves the geometry unchanged, moved the affine result from -9 to -38 µm.
 
 Window size and order trade curvature bias against noise. These runs use true
 calibration and a sample every 8 px, and times are for the plate view in NumPy and
@@ -173,15 +179,14 @@ recovered calibration and `--order 2` for second-order windows of 25 px.
 
 | Measure | Affine, true | Affine, recovered | Second-order, true | Second-order, recovered |
 |---|---|---|---|---|
-| Pose drift against truth | 107 µm, 0.047° | 344 µm, 0.051° | 141 µm, 0.046° | 348 µm, 0.050° |
-| Fused ball bar spacing | -3.9 µm | +4.4 µm | -2.9 µm | +1.2 µm |
-| Fused mat flatness | 19.9 µm RMS | 23.9 µm RMS | 14.2 µm RMS | 19.6 µm RMS |
-| Ball bar sphere radii | -116 and -76 µm | -120 and -76 µm | -33 and +8 µm | -22 and +1 µm |
-| Run time | 57 s | 58 s | 233 s | 241 s |
+| Pose drift against truth | 107 µm, 0.047° | 299 µm, 0.042° | 141 µm, 0.046° | 292 µm, 0.046° |
+| Fused ball bar spacing | -3.9 µm | -10.7 µm | -2.9 µm | -4.3 µm |
+| Fused mat flatness | 19.9 µm RMS | 19.2 µm RMS | 14.2 µm RMS | 15.8 µm RMS |
+| Ball bar sphere radii | -116 and -76 µm | -101 and -100 µm | -33 and +8 µm | -11 and -8 µm |
+| Run time | 57 s | 59 s | 233 s | 209 s |
 
-The largest pose error varies between runs of the same command, from 0.051° to 0.072°
-with affine windows and recovered calibration. Artifact results agree within 0.1 µm
-between those runs.
+Three runs with affine windows and recovered calibration gave a largest pose error of
+0.0424° to 0.0425°, with artifact results within 0.6 µm of each other.
 
 ## Static views
 

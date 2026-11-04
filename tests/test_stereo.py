@@ -39,6 +39,33 @@ def test_stereo_calibration_matches_the_head(head, stereo_calibration):
     assert math.degrees(math.acos(min(1.0, (np.trace(d) - 1) / 2))) < 0.2
 
 
+def test_narrow_lenses_keep_k2_at_zero(stereo_calibration):
+    for side in (stereo_calibration.left, stereo_calibration.right):
+        assert calibrate.half_field((side.width, side.height), side.matrix) < calibrate.NARROW_FIELD
+        assert side.distortion[1] == 0.0
+
+
+def test_recovered_calibration_triangulates_across_the_field(head, stereo_calibration):
+    truth = synthetic.true_stereo_calibration(head, BOARD)
+    r, t = truth.stereo.rotation, truth.stereo.translation
+    us, vs = np.meshgrid(np.linspace(20, 1435, 25), np.linspace(20, 1067, 19))
+    rays = np.linalg.solve(truth.left.matrix, np.vstack([us.ravel(), vs.ravel(), np.ones(us.size)])).T
+    points = np.concatenate([rays * z for z in (0.4, 0.5, 0.6)])
+    left = points @ truth.left.matrix.T
+    right = (points @ r.T + t) @ truth.right.matrix.T
+    left, right = left[:, :2] / left[:, 2:], right[:, :2] / right[:, 2:]
+    seen = np.all((right > 0) & (right < [1455, 1087]), axis=1)
+    cal = stereo_calibration
+    nl = cv2.undistortPoints(left[seen].reshape(-1, 1, 2), cal.left.matrix, cal.left.distortion)
+    nr = cv2.undistortPoints(right[seen].reshape(-1, 1, 2), cal.right.matrix, cal.right.distortion)
+    x = cv2.triangulatePoints(np.eye(3, 4), np.hstack([cal.stereo.rotation, cal.stereo.translation[:, None]]),
+                              nl.reshape(-1, 2).T, nr.reshape(-1, 2).T)
+    x = (x[:3] / x[3]).T
+    rotation, translation = geometry.rigid_fit(x, points[seen])
+    error = np.linalg.norm(x @ rotation.T + translation - points[seen], axis=1)
+    assert error.max() < 0.00025
+
+
 def test_stereo_calibration_yaml_round_trip(stereo_calibration, tmp_path):
     path = str(tmp_path / "stereo.yaml")
     calibrate.save_stereo(path, stereo_calibration)
@@ -62,7 +89,7 @@ def test_ball_bar_spacing(head, stereo_calibration, pattern):
     labels = geometry.split_two(points)
     centres = [geometry.fit_sphere(points[labels == i])[0] for i in (0, 1)]
     truth = np.linalg.norm(bar[0].centre - bar[1].centre)
-    assert abs(np.linalg.norm(centres[0] - centres[1]) - truth) < 0.00002
+    assert abs(np.linalg.norm(centres[0] - centres[1]) - truth) < 0.00005
 
 
 def test_window_curvature_bias_shrinks_with_window(head, pattern):

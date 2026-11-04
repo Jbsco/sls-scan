@@ -1544,3 +1544,42 @@ Two light-off pairs 10 mm apart measured 9.95 mm with the true calibration and 9
 with the recovered one. A pose from dots alone fits a small patch 0.5 m away, so a
 sub-pixel bias across the field becomes about 1 mrad of rotation and 0.5 mm of
 translation. Fixing k2 and k3 for narrow lenses would be a change of its own.
+
+## D80. k2 for narrow lenses (2026-11-04)
+
+Calibration fits k2 only for a camera or projector whose half-diagonal field is at least
+0.3 in tangent, about 17°. A narrower device keeps k2 and k3 at 0 and fits k1 with its
+tangential terms.
+
+A unit of k2 moves an image corner by R⁵ f pixels, for that tangent R and a focal length
+f in pixels. Behind a 16 mm lens a Global Shutter camera has R = 0.196, so a unit of k2
+moves its corner 1.3 px, and k1 with focal length absorbs all but 0.29 px of it. Board
+views stop short of those corners, and it seems likely that they leave k2 to trade against
+k1 and focal length.
+
+On twelve stand-in poses the near head fitted k2 of 1.77 and 3.65 where its cameras have
+none. Three jittered sessions gave -2.27 to +1.12.
+
+We triangulated noiseless points over each whole image at 0.4 to 0.6 m with each
+recovered calibration, then fitted them rigidly to truth. Over four sessions, largest
+errors fell from 0.18 to 0.67 mm with k2 fitted to 0.10 to 0.14 mm with k2 fixed. On
+6 mm metre-head lenses (R = 0.52, 68 px per unit of k2), a fixed k2 did worse in three
+sessions of four, so wide lenses keep fitting it. A 12 mm lens (R = 0.26) falls under
+this rule, though k1 leaves 0.9 px per unit of k2 at its corners.
+
+Synthetic cameras have no distortion, so this bench favours a fixed k2. A real 16 mm lens
+with a k2 of 0.3 would leave under 0.1 px at its corners.
+
+Through the application on the stand-in, two light-off pairs 10 mm apart now measure
+9.83 mm from their dots, against 9.73 mm before and 9.95 mm with true calibration. Over
+a 24-pair slide, the last light-off pose reads 49.5 mm for 50 mm, where D79 read
+48.4 mm. Sweep tracking with recovered calibration drifts 299 µm where it drifted
+344 µm, and repeat runs agree within 0.0001°.
+
+Sphere fits to exact surface points of the near head's ball bar, triangulated with
+either calibration, differ by at most 4 µm over six sessions. From rendered pairs,
+affine windows now measure that bar 25 µm shorter, 80.379 mm against 80.404 mm for
+80.424 mm. Shifting both rectified images by a fraction of a pixel moves this result
+between -9 and -38 µm with true calibration. With ours it moves between -31 and -46 µm.
+We have not found where matching takes up the rest. Pipeline tests now allow 50 µm on that bar,
+where they allowed 20 µm.
