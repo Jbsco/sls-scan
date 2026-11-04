@@ -424,7 +424,9 @@ def cmd_depth_params(args: argparse.Namespace) -> int:
 
 def cmd_dot_fusion_vectors(args: argparse.Namespace) -> int:
     """Write point frames and reference dot frames of a slide along a smooth panel, with
-    their NumPy tracking and fusion, for the application's fusion-check."""
+    their NumPy tracking and fusion, for the application's fusion-check. With dark_every,
+    every that many-th frame from the first is a light-off pair with dots and no points,
+    and lit frames have no dots."""
     import json
 
     from . import track
@@ -432,8 +434,13 @@ def cmd_dot_fusion_vectors(args: argparse.Namespace) -> int:
     clouds, dot_frames, _ = synthetic.panel_frames(np.random.default_rng(args.seed), args.frames,
                                                    args.slide_mm / 1000.0,
                                                    args.dot_pitch_mm / 1000.0)
+    dark = [args.dark_every > 0 and k % args.dark_every == 0 for k in range(len(clouds))]
+    if args.dark_every > 0:
+        clouds = [np.empty((0, 3)) if d else c for c, d in zip(clouds, dark)]
+        dot_frames = [f if d else np.empty((0, 3)) for f, d in zip(dot_frames, dark)]
     voxel = args.voxel_mm / 1000.0
-    tracked, model = track.fuse(clouds, voxel, dots=dot_frames)
+    tracked, model = track.fuse([None if d else c for c, d in zip(clouds, dark)], voxel,
+                                dots=dot_frames)
     os.makedirs(args.out, exist_ok=True)
     np.concatenate(clouds).astype("<f8").tofile(os.path.join(args.out, "frames.bin"))
     np.concatenate(dot_frames).astype("<f8").tofile(os.path.join(args.out, "dots.bin"))
@@ -441,13 +448,12 @@ def cmd_dot_fusion_vectors(args: argparse.Namespace) -> int:
         os.path.join(args.out, "poses.bin"))
     model.astype("<f8").tofile(os.path.join(args.out, "model.bin"))
     meta = {"counts": [int(len(c)) for c in clouds],
-            "dot_counts": [int(len(d)) for d in dot_frames], "voxel": voxel,
+            "dot_counts": [int(len(d)) for d in dot_frames], "dark": dark, "voxel": voxel,
             "model": int(len(model))}
     with open(os.path.join(args.out, "meta.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f)
-    print(f"dot fusion vectors written to {args.out}: {len(clouds)} frames, "
-          f"{min(meta['dot_counts'])} to {max(meta['dot_counts'])} dots each, "
-          f"{len(model)} fused points")
+    print(f"dot fusion vectors written to {args.out}: {len(clouds)} frames, {sum(dark)} light-off, "
+          f"up to {max(meta['dot_counts'])} dots each, {len(model)} fused points")
     return 0
 
 
@@ -1290,6 +1296,8 @@ def main(argv=None) -> int:
     p.add_argument("--slide-mm", type=float, default=120.0, help="slide length")
     p.add_argument("--dot-pitch-mm", type=float, default=100.0, help="dot spacing")
     p.add_argument("--voxel-mm", type=float, default=6.0)
+    p.add_argument("--dark-every", type=int, default=0,
+                   help="make every this many-th frame from the first a light-off pair")
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_dot_fusion_vectors)
 

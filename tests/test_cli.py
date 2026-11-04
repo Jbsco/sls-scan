@@ -315,3 +315,16 @@ def test_dot_fusion_vectors_command_tracks_with_dots(tmp_path):
     poses = np.fromfile(os.path.join(out, "poses.bin"), dtype="<f8").reshape(-1, 12)
     assert len(dots) == 3 * sum(meta["dot_counts"]) and len(poses) == 4
     assert abs(poses[-1, 9] - 0.03) < 0.0005
+
+
+def test_dot_fusion_vectors_command_writes_light_off_frames(tmp_path):
+    out = str(tmp_path / "dark")
+    assert cli.main(["dot-fusion-vectors", "--out", out, "--frames", "12", "--slide-mm", "77",
+                     "--dark-every", "4"]) == 0
+    with open(os.path.join(out, "meta.json"), encoding="utf-8") as f:
+        meta = json.load(f)
+    assert meta["dark"] == [k % 4 == 0 for k in range(12)]
+    assert all(c == 0 for c, d in zip(meta["counts"], meta["dark"]) if d)
+    assert all(c == 0 for c, d in zip(meta["dot_counts"], meta["dark"]) if not d)
+    poses = np.fromfile(os.path.join(out, "poses.bin"), dtype="<f8").reshape(-1, 12)
+    assert abs(poses[-1, 9] - 0.077) < 0.0005
