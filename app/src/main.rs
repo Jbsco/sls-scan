@@ -7,6 +7,7 @@ use slscan_app::gpu;
 use slscan_app::protocol::SequenceRequest;
 use slscan_app::rectify;
 use slscan_app::refine;
+use slscan_app::register;
 use slscan_app::tsdf;
 use slscan_app::ui::ScanApp;
 use std::path::{Path, PathBuf};
@@ -1431,6 +1432,115 @@ struct VolumeMeta {
 }
 
 /// Mesh a saved TSDF volume, as `slscan mesh-volume` does, without Python.
+#[derive(serde::Deserialize)]
+struct PoseRecord {
+    rotation: [[f64; 3]; 3],
+    translation: [f64; 3],
+}
+
+#[derive(serde::Deserialize)]
+struct RegisterVectors {
+    voxel: f64,
+    rounds: usize,
+    views: Vec<String>,
+    numpy: Vec<PoseRecord>,
+    truth: Vec<PoseRecord>,
+}
+
+/// Angle in degrees and translation distance in metres between two poses.
+fn pose_difference(pose: &fuse::Pose, other: &PoseRecord) -> (f64, f64) {
+    let r = &pose.rotation;
+    let o = &other.rotation;
+    let trace: f64 = (0..3)
+        .map(|i| (0..3).map(|k| r[i][k] * o[i][k]).sum::<f64>())
+        .sum();
+    let angle = ((trace - 1.0) / 2.0).clamp(-1.0, 1.0).acos().to_degrees();
+    let d: f64 = (0..3)
+        .map(|i| (pose.translation[i] - other.translation[i]).powi(2))
+        .sum();
+    (angle, d.sqrt())
+}
+
+/// Read view clouds, failing with a message naming the file.
+fn read_views(paths: &[PathBuf]) -> Option<Vec<Vec<[f64; 3]>>> {
+    let mut views = Vec::new();
+    for path in paths {
+        match register::read_ply(path) {
+            Ok(v) => views.push(v),
+            Err(e) => {
+                eprintln!("{}: {e}", path.display());
+                return None;
+            }
+        }
+    }
+    Some(views)
+}
+
+/// Register the views `slscan register-vectors` wrote and compare the poses with the NumPy
+/// registration and the truth.
+fn register_check(args: &[String]) -> ExitCode {
+    let Some(dir) = args.first().map(PathBuf::from) else {
+        eprintln!("usage: sls-scan register-check <register vectors directory>");
+        return ExitCode::FAILURE;
+    };
+    let meta: RegisterVectors = match std::fs::read(dir.join("register.json"))
+        .map_err(|e| e.to_string())
+        .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
+    {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("register.json: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let paths: Vec<PathBuf> = meta.views.iter().map(|v| dir.join(v)).collect();
+    let Some(views) = read_views(&paths) else {
+        return ExitCode::FAILURE;
+    };
+    let clock = Instant::now();
+    let (poses, records) = register::register_views(&views, meta.voxel, meta.rounds);
+    println!(
+        "{} views registered in {:.0} ms at {} mm voxels, overlaps {}",
+        views.len(),
+        clock.elapsed().as_secs_f64() * 1000.0,
+        meta.voxel * 1000.0,
+        records
+            .iter()
+            .map(|r| format!("{:.2}", r.overlap))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let (mut worst_numpy, mut worst_truth) = ((0.0f64, 0.0f64), (0.0f64, 0.0f64));
+    for (pose, (numpy, truth)) in poses.iter().zip(meta.numpy.iter().zip(&meta.truth)) {
+        let (a, t) = pose_difference(pose, numpy);
+        worst_numpy = (worst_numpy.0.max(a), worst_numpy.1.max(t));
+        let (a, t) = pose_difference(pose, truth);
+        worst_truth = (worst_truth.0.max(a), worst_truth.1.max(t));
+    }
+    println!(
+        "against NumPy poses: rotation up to {:.6}°, translation up to {:.3} µm; against truth: {:.5}°, {:.2} µm",
+        worst_numpy.0,
+        worst_numpy.1 * 1e6,
+        worst_truth.0,
+        worst_truth.1 * 1e6
+    );
+    if worst_numpy.0 < REGISTER_DEGREES && worst_numpy.1 < REGISTER_METRES {
+        println!("register check: Rust registration matches the NumPy reference");
+        ExitCode::SUCCESS
+    } else {
+        println!(
+            "register check: Rust and NumPy poses differ by more than {REGISTER_DEGREES}° or {} µm",
+            REGISTER_METRES * 1e6
+        );
+        ExitCode::FAILURE
+    }
+}
+
+/// Largest pose difference `register-check` accepts between the Rust and NumPy
+/// registrations, whose RANSAC draws differ.
+const REGISTER_DEGREES: f64 = 0.001;
+const REGISTER_METRES: f64 = 5e-6;
+
 fn mesh_volume(args: &[String]) -> ExitCode {
     let Some(dir) = args.first().map(PathBuf::from) else {
         eprintln!(
@@ -1873,6 +1983,7 @@ fn main() -> ExitCode {
         Some("fusion-check") => return fusion_check(&args[2..]),
         Some("tsdf-check") => return tsdf_check(&args[2..]),
         Some("mesh-volume") => return mesh_volume(&args[2..]),
+        Some("register-check") => return register_check(&args[2..]),
         Some("replay") => return replay(&args[2..]),
         _ => {}
     }
