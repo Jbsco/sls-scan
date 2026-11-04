@@ -1146,7 +1146,7 @@ def main(argv=None) -> int:
                    help="use the synthetic head's true calibration instead")
     p.add_argument("--near", type=float, default=0.4, help="nearest surface in metres")
     p.add_argument("--far", type=float, default=0.6, help="farthest surface in metres")
-    p.add_argument("--step", type=int, default=8, help="sample spacing in pixels")
+    p.add_argument("--step", type=int, default=12, help="sample spacing in pixels")
     p.add_argument("--window", type=int, default=25, help="matching window in pixels")
     p.add_argument("--exit-px", type=float, default=1e-4,
                    help="refinement stops when a step moves the match less than this")

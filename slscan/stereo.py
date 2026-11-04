@@ -77,7 +77,7 @@ def search_range(d_min: float, d_max: float, scale: int = 4) -> tuple[int, int]:
     return lo, hi - lo + 1
 
 
-def depth_parameters(cal: StereoCalibration, near_m: float, far_m: float, step: int = 8,
+def depth_parameters(cal: StereoCalibration, near_m: float, far_m: float, step: int = 12,
                      window: int = 25, iterations: int = 20, min_level: float = 6.0,
                      max_move: float = 3.0, min_correlation: float = 0.95, scale: int = 4,
                      block: int = 7, coarse_correlation: float = 0.6, margin: float = 0.05,
