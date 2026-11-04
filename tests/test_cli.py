@@ -304,3 +304,14 @@ def test_dot_vectors_command_writes_a_dotted_pair(tmp_path):
     raw = np.fromfile(os.path.join(out, "left-raw.bin"), dtype=np.uint8)
     assert len(dots) == meta["dots"] >= 9
     assert len(raw) == meta["width"] * meta["height"]
+
+
+def test_dot_fusion_vectors_command_tracks_with_dots(tmp_path):
+    out = str(tmp_path / "panel")
+    assert cli.main(["dot-fusion-vectors", "--out", out, "--frames", "4", "--slide-mm", "30"]) == 0
+    with open(os.path.join(out, "meta.json"), encoding="utf-8") as f:
+        meta = json.load(f)
+    dots = np.fromfile(os.path.join(out, "dots.bin"), dtype="<f8")
+    poses = np.fromfile(os.path.join(out, "poses.bin"), dtype="<f8").reshape(-1, 12)
+    assert len(dots) == 3 * sum(meta["dot_counts"]) and len(poses) == 4
+    assert abs(poses[-1, 9] - 0.03) < 0.0005

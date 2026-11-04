@@ -422,6 +422,35 @@ def cmd_depth_params(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_dot_fusion_vectors(args: argparse.Namespace) -> int:
+    """Write point frames and reference dot frames of a slide along a smooth panel, with
+    their NumPy tracking and fusion, for the application's fusion-check."""
+    import json
+
+    from . import track
+
+    clouds, dot_frames, _ = synthetic.panel_frames(np.random.default_rng(args.seed), args.frames,
+                                                   args.slide_mm / 1000.0,
+                                                   args.dot_pitch_mm / 1000.0)
+    voxel = args.voxel_mm / 1000.0
+    tracked, model = track.fuse(clouds, voxel, dots=dot_frames)
+    os.makedirs(args.out, exist_ok=True)
+    np.concatenate(clouds).astype("<f8").tofile(os.path.join(args.out, "frames.bin"))
+    np.concatenate(dot_frames).astype("<f8").tofile(os.path.join(args.out, "dots.bin"))
+    np.array([np.concatenate([r.ravel(), t]) for r, t in tracked]).astype("<f8").tofile(
+        os.path.join(args.out, "poses.bin"))
+    model.astype("<f8").tofile(os.path.join(args.out, "model.bin"))
+    meta = {"counts": [int(len(c)) for c in clouds],
+            "dot_counts": [int(len(d)) for d in dot_frames], "voxel": voxel,
+            "model": int(len(model))}
+    with open(os.path.join(args.out, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+    print(f"dot fusion vectors written to {args.out}: {len(clouds)} frames, "
+          f"{min(meta['dot_counts'])} to {max(meta['dot_counts'])} dots each, "
+          f"{len(model)} fused points")
+    return 0
+
+
 def cmd_fusion_vectors(args: argparse.Namespace) -> int:
     """Write the depth frames of a short synthetic sweep and their NumPy tracking and fusion
     as raw files for the application."""
@@ -1252,6 +1281,17 @@ def main(argv=None) -> int:
     p.add_argument("--truncation-mm", type=float, default=2.0)
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_tsdf_vectors)
+
+    p = sub.add_parser("dot-fusion-vectors",
+                       help="write point and dot frames of a slide along a smooth panel and "
+                            "their reference tracking with dots")
+    p.add_argument("--out", default="data/dot-fusion-vectors")
+    p.add_argument("--frames", type=int, default=12)
+    p.add_argument("--slide-mm", type=float, default=120.0, help="slide length")
+    p.add_argument("--dot-pitch-mm", type=float, default=100.0, help="dot spacing")
+    p.add_argument("--voxel-mm", type=float, default=6.0)
+    p.add_argument("--seed", type=int, default=0)
+    p.set_defaults(func=cmd_dot_fusion_vectors)
 
     p = sub.add_parser("fusion-vectors",
                        help="write the depth frames of a short synthetic sweep and their "
