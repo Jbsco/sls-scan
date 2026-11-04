@@ -197,7 +197,9 @@ writes it as PLY, OBJ or STL, and `slscan sweep-bench --tsdf --mesh` meshes a sw
 (D61).
 
 `slscan report` fits datum spheres in a cloud or mesh, aligns them to their centres
-measured on the object, and reports datum residuals and scale bar errors (D60).
+measured on the object, and reports datum residuals and scale bar errors (D60). A datum
+file without seeds has its spheres found by radius and matched by their distances, and
+`--aligned` writes the cloud or mesh in the object's frame (D81).
 
 ## Preview path
 
