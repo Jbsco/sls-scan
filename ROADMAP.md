@@ -36,9 +36,9 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   disparity, refinement and a coarse TSDF, with lavapipe as the CPU fallback. Acceptance:
   15 depth frames per second at 1.6 MP on either machine's GPU, 3 or more on the CPU
   fallback, and kernel outputs within tolerance of the Phase 2 reference on recorded
-  frames. Its kernels (D29, D31, D35) and CPU triangulation (D48) give a 61 ms plate
-  frame on a desktop GPU (D38), live (D40). Recorded pairs (D47) and TSDF kernels (D52,
-  D53) match NumPy. Unrefined previews reach 7 per second on llvmpipe (D49).
+  frames. Kernels (D29, D31, D35, D48) give 61 ms plate frames, live (D38, D40), and
+  match NumPy on recorded pairs and in the TSDF (D47, D52, D53). On one desktop,
+  16,000-sample GPU frames reach 9 per second and llvmpipe previews 34 (D72).
 - Phase 5, in progress. Continuous scanning. Pose tracking from geometry, with optional
   markers on a mat (D63) and removable dots on long smooth panels (D64), TSDF fusion,
   loop closure. Acceptance: a sweep around a part fuses to a model
