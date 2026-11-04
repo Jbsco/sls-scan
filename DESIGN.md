@@ -1372,3 +1372,24 @@ it, about 6 µs per sample. It reaches 9 frames per second, short of Phase 4's 1
 On the CPU, previews reach about 34 per second, well over Phase 4's 3, where a hosted
 runner reached 7 in a debug build (D49). Full frames take 2.6 to 2.8 s, so D50's choice of
 previews on software adapters stands.
+
+## D73. Static-view registration in the application (2026-11-03)
+
+`register.rs` ports D69 and D70 to Rust: voxel averages, normals turned toward the
+camera, FPFH, mutual feature pairs, RANSAC with its overlap shortlist, ICP refinement and
+the view chain. Rigid fits use Horn's unit quaternion method, an eigenvector of a 4 × 4
+matrix found by Jacobi rotations, since the application has no linear algebra library.
+Its RANSAC draws come from its own seeded generator, so its coarse motions differ from
+NumPy's, and ICP takes both to the same poses.
+
+`slscan register-vectors` writes four ray-cast views of D69's test object, 40 degrees
+apart, with the poses NumPy finds and the true ones. `sls-scan register-check` registers
+them in Rust and accepts 0.001 degrees and 5 µm against NumPy. On the desktop of D72,
+Rust poses matched NumPy's to 0.000000 degrees and 0.000 µm, and both lay within
+0.00092 degrees and 13.8 µm of truth. A release build took 2.9 s. `sls-scan register`
+takes PLY views as `slscan register` does and writes the same merged cloud and poses
+file.
+
+Debug builds of the application now optimize its own code at level 1, because the
+application gate builds in debug and the unoptimized check took 75 s. At level 1 it
+takes 4.9 s, with debug assertions and overflow checks still on.
