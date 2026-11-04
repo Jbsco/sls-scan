@@ -16,7 +16,7 @@ Each message is a header followed by its payload. Integers are little-endian.
 | Type | Name | Direction | Payload |
 |---|---|---|---|
 | 1 | HELLO | node to application | JSON: node name, projector size and refresh rate, cameras with size and format |
-| 2 | SEQUENCE | application to node | JSON: set (`stereo`, `stereo-calibration`, `scan` or `calibration`), frame pairs and trigger rate for a stereo set, phase pitch, phase steps |
+| 2 | SEQUENCE | application to node | JSON: set (`stereo`, `stereo-calibration`, `scan` or `calibration`), frame pairs, trigger rate and light-off spacing for a stereo set, phase pitch, phase steps |
 | 3 | FRAME | node to application | frame header, then pixels row by row |
 | 4 | END | node to application | JSON: sequence number and frame count |
 | 5 | ERROR | node to application | JSON: message |
@@ -55,6 +55,10 @@ than one period before it can send it, so a client that falls behind sees missin
 indices. The stand-in plays a short pre-rendered sweep in a loop at that rate
 (`DESIGN.md` D46).
 
+A stereo request may set `dark_every`, with 0 or absent for none. Every that many-th
+pair from the first is taken with the pattern light off and saved as `dark_000/left.png`
+and `dark_000/right.png` in place of `frame_` (D77).
+
 Pattern order follows the capture layouts of `docs/pipeline.md`. A scan set is the
 column Gray codes with their inverses, then the phase shifts (`gray_000` onward, then
 `phase_000` onward). A calibration set is white, then column and row Gray codes
@@ -70,7 +74,8 @@ column Gray codes with their inverses, then the phase shifts (`gray_000` onward,
     app/target/debug/sls-scan capture --set scan --pitch 16 --wait 30
 
 The stand-in renders a sweep around a part on a mat for stereo sets, about 2° per frame
-at 30 fps, and the next board pose for each calibration set. For phase-shift scan sets it
+at 30 fps, and the next board pose for each calibration set. With light-off pairs its mat
+has reference dots, and those pairs are rendered under room light. For phase-shift scan sets it
 renders the chosen scene with timestamps at 60 Hz. Captures land in the layouts that
 `slscan scan` and `slscan calibrate` read.
 
