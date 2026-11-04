@@ -1343,3 +1343,32 @@ calibration, pose error rises to 1.7 mm at the view opposite the first and falls
 0.2 mm at the last, and more ICP rounds leave it there. That shape seems likely to come
 from a fixed offset between recovered and true camera frames, since merged views stay
 consistent and both scale bars read within 0.13 mm. Phase 6 acceptance asks for 0.5 mm.
+
+## D72. Depth frame timings on one desktop (2026-11-03)
+
+One desktop ran each path on its GPU and on lavapipe: a Radeon RX 7900 GRE under RADV,
+and llvmpipe on a Ryzen 7 7700X with 16 threads. Both drivers are Mesa 26.2.4, llvmpipe on
+LLVM 23.1.1, in a release build. Kernel checks report the fastest of three runs. Stand-in
+frames come from `sls-scan depth` against `slscan node-sim` at an 8 px step with 25 px
+windows, timed once each, and the first frame of a run includes warm-up. A virtual
+machine on the host used about one core throughout.
+
+| Frame | Samples | RX 7900 GRE | llvmpipe, Ryzen 7 7700X |
+|---|---|---|---|
+| Plate, `depth-check` | 6,374 | 58.4 to 61.2 ms | 1,363 to 1,376 ms |
+| Ball bar, `depth-check` | 615 | 23.0 ms | 324 ms |
+| Sphere, `depth-check` | 303 | 18.6 ms | 270 ms |
+| Stand-in sweep frame | 15,760 to 16,307 | 106.7 to 109.8 ms | 2,632 to 2,778 ms |
+| Stand-in preview | 18,486 to 18,638 | 2.9 to 4.2 ms | 27.7 to 29.8 ms |
+| Decode, 1280 × 960 | | 6.6 ms | 21.1 ms |
+
+The plate frame keeps D38's 61 ms. Runs taken before a reboot, with the host loaded,
+gave 70 to 75 ms, and their selection stage took twice as long.
+
+A stand-in sweep frame has 2.5 times the plate's samples, and refinement takes 90% of
+it, about 6 µs per sample. It reaches 9 frames per second, short of Phase 4's 15 at
+1.6 MP. Meeting that rate on such frames needs fewer samples or faster refinement.
+
+On the CPU, previews reach about 34 per second, well over Phase 4's 3, where a hosted
+runner reached 7 in a debug build (D49). Full frames take 2.6 to 2.8 s, so D50's choice of
+previews on software adapters stands.
