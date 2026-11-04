@@ -139,6 +139,7 @@ measure steps, with `--order 1 --window 21` for affine windows.
 Ball bar spacing from one capture depends on where the rectified images sample the
 dots. With the true calibration, shifting both rectified images by a fraction of a
 pixel, which leaves the geometry unchanged, moved the affine result from -9 to -38 µm.
+Cubic in place of linear interpolation for rectification moved it from -12 to -36 µm.
 
 Window size and order trade curvature bias against noise. These runs use true
 calibration and a sample every 8 px, and times are for the plate view in NumPy and
