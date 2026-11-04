@@ -55,7 +55,12 @@ with `left.png` and `right.png` (D27), and `slscan fuse <sweep>` matches, tracks
 it into one PLY file.
 
 Given reference dots per frame, `track.fuse` pairs them with a map of dots seen so far
-and adds point-to-point terms to ICP, which keeps tracking along smooth panels (D67).
+and adds point-to-point terms to ICP, which keeps tracking along smooth panels (D67). A
+pair taken with the pattern light off is posed from its dots alone, and lit frames
+between such pairs keep a constant-velocity prediction along directions the surface
+leaves nearly free (D78). This serves smooth panels, and complex shapes stay
+geometry-only.
+
 `stereo.find_dots` finds the dots in a pair taken with the pattern light off. It pairs
 left and right dots by the depth that the pattern-lit pair next to it measured (D68). The
 application's ports, `dots::find_dots` and `fuse::Fusion::add_with_dots`, are checked
