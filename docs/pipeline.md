@@ -57,7 +57,8 @@ it into one PLY file.
 Given reference dots per frame, `track.fuse` pairs them with a map of dots seen so far
 and adds point-to-point terms to ICP, which keeps tracking along smooth panels (D67).
 `stereo.find_dots` finds the dots in a pair taken with the pattern light off. It pairs
-left and right dots by the depth that the pattern-lit pair next to it measured (D68).
+left and right dots by the depth that the pattern-lit pair next to it measured (D68). The
+application's port, `dots::find_dots`, is checked against it by `sls-scan dot-check` (D75).
 
 `slscan sweep-bench` runs a synthetic sweep through matching, tracking and fusion and
 compares poses and artifacts with the truth, and `--loop` sweeps a closed loop. The application runs a Rust port of both,

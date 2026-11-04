@@ -452,6 +452,37 @@ def cmd_fusion_vectors(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_dot_vectors(args: argparse.Namespace) -> int:
+    """Write a light-off stereo pair of a dotted plate, its rectification, the points of the
+    pattern-lit pair beside it and the dots NumPy finds, for the application's dot-check."""
+    import json
+
+    head = synthetic.stereo_head()
+    cal = synthetic.true_stereo_calibration(head, synthetic.SMALL_BOARD)
+    pattern = synthetic.random_dots(head.light.width, head.light.height, 3.0, 1.0,
+                                    np.random.default_rng(0))
+    us, vs = np.meshgrid(np.arange(-0.14, 0.141, 0.04), np.arange(-0.09, 0.091, 0.04))
+    plate = synthetic.Plate(np.array([0.013, 0.007, 0.5]), synthetic.rotation(8.0, 0.0), 0.16,
+                            0.11, 0.8, tuple(zip(us.ravel(), vs.ravel())), 0.002)
+    lit = synthetic.stereo_capture(head, [plate], pattern, np.random.default_rng(args.seed))
+    surface, rect = stereo.depth_points(cal, lit["left"], lit["right"], args.near, args.far,
+                                        step=12)
+    room = synthetic.stereo_room_view(head, [plate], np.random.default_rng(args.seed + 1))
+    dots = stereo.find_dots(cal, room["left"], room["right"], surface, args.near, args.far)
+    os.makedirs(args.out, exist_ok=True)
+    room["left"].tofile(os.path.join(args.out, "left-raw.bin"))
+    room["right"].tofile(os.path.join(args.out, "right-raw.bin"))
+    surface.astype("<f8").tofile(os.path.join(args.out, "surface.bin"))
+    dots.astype("<f8").tofile(os.path.join(args.out, "dots.bin"))
+    with open(os.path.join(args.out, "rectify.json"), "w", encoding="utf-8") as f:
+        json.dump(stereo.rectification_params(cal, rect), f)
+    with open(os.path.join(args.out, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump({"width": cal.left.width, "height": cal.left.height, "near": args.near,
+                   "far": args.far, "surface": int(len(surface)), "dots": int(len(dots))}, f)
+    print(f"dot vectors written to {args.out}: {len(dots)} dots, {len(surface)} surface points")
+    return 0
+
+
 def cmd_register_vectors(args: argparse.Namespace) -> int:
     """Write ray-cast views of the static test object as PLY files, with the poses the NumPy
     registration finds and the true poses, for the application's register-check."""
@@ -1190,6 +1221,14 @@ def main(argv=None) -> int:
     p.add_argument("--focal-limit", type=float, default=0.001, help="relative focal length change")
     p.add_argument("--baseline-limit-mm", type=float, default=0.2)
     p.set_defaults(func=cmd_calibration_repeat)
+
+    p = sub.add_parser("dot-vectors",
+                       help="write a light-off pair of a dotted plate with the dots NumPy finds")
+    p.add_argument("--out", default="data/dot-vectors")
+    p.add_argument("--near", type=float, default=0.45, help="nearest surface in metres")
+    p.add_argument("--far", type=float, default=0.55, help="farthest surface in metres")
+    p.add_argument("--seed", type=int, default=1)
+    p.set_defaults(func=cmd_dot_vectors)
 
     p = sub.add_parser("register-vectors",
                        help="write views of the static test object with NumPy and true poses")

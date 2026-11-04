@@ -1423,3 +1423,19 @@ head, and the live TSDF of D54 averages many frames over 1 mm voxels.
 
 Refinement kept about 25 ms that did not shrink with fewer samples under this load, so
 sparser sampling will not go much further. A run on a quiet machine will settle the rate.
+
+## D75. Dot finding in the application (2026-11-03)
+
+`dots.rs` ports D68's dot finding to Rust. The light-off pair goes through D31's GPU
+rectification. On the CPU, dark regions are found against a 61 px box mean with OpenCV's
+reflect-101 border and labelled 8-connected. Regions cut by the image border or the
+rectified image's edge are dropped, and the rest are centred by darkness. The valid area
+comes from that undistort-rectify map at its nearest pixel, shrunk by 3 px. Each left
+dot pairs with its one right partner on the row whose disparity lies within 10 mm of lit
+surface depth, and `depth::triangulate` places it.
+
+`slscan dot-vectors` writes D68's test pair, a dotted plate whose grid runs past both
+cameras' views, with the lit surface and the 9 dots NumPy finds. `sls-scan dot-check`
+finds those 9 within 0.079 µm on a Radeon RX 7900 GRE and 0.083 µm on llvmpipe, in 138
+to 155 ms of a debug build, and accepts 2 µm. Tracking from these dots in the
+application's fusion, and light-off frames over the capture protocol, come next.

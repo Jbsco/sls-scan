@@ -293,3 +293,14 @@ def test_register_vectors_command_writes_views_and_poses(tmp_path):
     for found, truth in zip(meta["numpy"], meta["truth"]):
         assert np.allclose(found["rotation"], truth["rotation"], atol=1e-4)
         assert np.linalg.norm(np.subtract(found["translation"], truth["translation"])) < 0.0001
+
+
+def test_dot_vectors_command_writes_a_dotted_pair(tmp_path):
+    out = str(tmp_path / "dots")
+    assert cli.main(["dot-vectors", "--out", out]) == 0
+    with open(os.path.join(out, "meta.json"), encoding="utf-8") as f:
+        meta = json.load(f)
+    dots = np.fromfile(os.path.join(out, "dots.bin"), dtype="<f8").reshape(-1, 3)
+    raw = np.fromfile(os.path.join(out, "left-raw.bin"), dtype=np.uint8)
+    assert len(dots) == meta["dots"] >= 9
+    assert len(raw) == meta["width"] * meta["height"]
