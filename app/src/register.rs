@@ -425,7 +425,7 @@ pub fn register(
     let normals = fuse::normals(&fine, NEIGHBOURS_SPACING * voxel / 4.0);
     let limits = [3.0 * voxel, voxel, voxel / 2.0, voxel / 4.0];
     let thinned = voxel_average(source, voxel / 4.0);
-    let (pose, rms) = fuse::icp_with(&thinned, &fine, &normals, coarse, &limits);
+    let (pose, rms) = fuse::icp_with(&thinned, &fine, &normals, coarse, &limits, &[]);
     (
         pose,
         Record {
@@ -472,7 +472,15 @@ pub fn register_views(views: &[Vec<Vec3>], voxel: f64, rounds: usize) -> (Vec<Po
                 target.extend(thinned[j].iter().map(|p| poses[j].apply(p)));
                 target_normals.extend(normals[j].iter().map(|n| mul_vec(&poses[j].rotation, n)));
             }
-            poses[k] = fuse::icp_with(&thinned[k], &target, &target_normals, poses[k], &limits).0;
+            poses[k] = fuse::icp_with(
+                &thinned[k],
+                &target,
+                &target_normals,
+                poses[k],
+                &limits,
+                &[],
+            )
+            .0;
         }
     }
     (poses, records)

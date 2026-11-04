@@ -12,6 +12,11 @@ const NEIGHBOURS: usize = 12;
 const LIMITS: [f64; 4] = [0.004, 0.002, 0.001, 0.0005];
 const ITERATIONS: usize = 10;
 const MIN_PAIRS: usize = 50;
+/// A frame's dot pairs with the nearest map dot within this, which must stay under half
+/// the dots' spacing, as `track.fuse` takes it.
+const DOT_RADIUS: f64 = 0.03;
+/// Fewest dot pairs that join a frame's ICP.
+const MIN_DOT_PAIRS: usize = 3;
 /// Fewest points a thread takes, so that small frames stay on one thread.
 const CHUNK: usize = 2048;
 
@@ -329,19 +334,18 @@ fn normal(grid: &Grid, points: &[Vec3], p: &Vec3) -> Vec3 {
     smallest_eigenvector(&cov)
 }
 
-/// Point-to-plane ICP of `source` onto `target` from `start`. Returns the pose and the RMS
-/// point-to-plane residual of the last matched pairs.
-fn icp(source: &[Vec3], target: &[Vec3], target_normals: &[Vec3], start: Pose) -> (Pose, f64) {
-    icp_with(source, target, target_normals, start, &LIMITS)
-}
-
-/// Point-to-plane ICP as `icp`, with match distances `limits`, coarse to fine.
+/// Point-to-plane ICP of `source` onto `target` from `start`, with match distances
+/// `limits`, coarse to fine. Each of `fixed`, a source point and its target such as a
+/// reference dot, adds point-to-point terms to every step, which fixes the motion a
+/// smooth surface leaves free. Returns the pose and the RMS point-to-plane residual of the
+/// last matched pairs.
 pub(crate) fn icp_with(
     source: &[Vec3],
     target: &[Vec3],
     target_normals: &[Vec3],
     start: Pose,
     limits: &[f64],
+    fixed: &[(Vec3, Vec3)],
 ) -> (Pose, f64) {
     let mut pose = start;
     let mut rms = f64::INFINITY;
@@ -388,6 +392,25 @@ pub(crate) fn icp_with(
             if pairs < MIN_PAIRS {
                 break;
             }
+            for (s, q) in fixed {
+                let p = pose.apply(s);
+                for k in 0..3 {
+                    let mut a = [0.0; 6];
+                    a[..3].copy_from_slice(&match k {
+                        0 => [0.0, p[2], -p[1]],
+                        1 => [-p[2], 0.0, p[0]],
+                        _ => [p[1], -p[0], 0.0],
+                    });
+                    a[3 + k] = 1.0;
+                    let b = q[k] - p[k];
+                    for r in 0..6 {
+                        for c in 0..6 {
+                            ata[r][c] += a[r] * a[c];
+                        }
+                        atb[r] += a[r] * b;
+                    }
+                }
+            }
             let Some(step) = solve6(ata, atb) else {
                 break;
             };
@@ -419,6 +442,8 @@ pub struct Fusion {
     pose: Pose,
     pub poses: Vec<Pose>,
     pub last_rms: Option<f64>,
+    dot_map: Vec<Vec3>,
+    dot_counts: Vec<f64>,
 }
 
 impl Fusion {
@@ -431,7 +456,34 @@ impl Fusion {
             pose: Pose::IDENTITY,
             poses: Vec::new(),
             last_rms: None,
+            dot_map: Vec::new(),
+            dot_counts: Vec::new(),
         }
+    }
+
+    /// Reference dots seen so far, in the model's frame.
+    pub fn dots(&self) -> &[Vec3] {
+        &self.dot_map
+    }
+
+    /// Pairs of a frame dot and the nearest map dot within `DOT_RADIUS` after `pose`.
+    fn match_dots(&self, dots: &[Vec3], pose: &Pose) -> Vec<(usize, usize)> {
+        dots.iter()
+            .enumerate()
+            .filter_map(|(i, d)| {
+                let q = pose.apply(d);
+                self.dot_map
+                    .iter()
+                    .enumerate()
+                    .map(|(j, m)| {
+                        let e = sub(m, &q);
+                        (dot(&e, &e).sqrt(), j)
+                    })
+                    .filter(|&(distance, _)| distance < DOT_RADIUS)
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+                    .map(|(_, j)| (i, j))
+            })
+            .collect()
     }
 
     /// Voxel averages, ordered by voxel.
@@ -442,14 +494,53 @@ impl Fusion {
     /// Align a frame's points (in its own camera frame) to the model, starting from the
     /// last pose, and add them. Returns the frame's pose.
     pub fn add(&mut self, points: &[Vec3]) -> Pose {
+        self.add_with_dots(points, &[])
+    }
+
+    /// Align a frame as `add` does, with its reference dots (in its camera frame) paired
+    /// to the map of dots seen so far as point-to-point terms of its ICP when three or more
+    /// pair. Paired dots then refine their map dot by averaging, and unpaired dots join the
+    /// map, following `track.fuse`.
+    pub fn add_with_dots(&mut self, points: &[Vec3], dots: &[Vec3]) -> Pose {
         if points.is_empty() {
             self.poses.push(self.pose);
             return self.pose;
         }
         if !self.model.is_empty() {
-            let (new, rms) = icp(points, &self.model, &self.normals, self.pose);
+            let matched = self.match_dots(dots, &self.pose);
+            let fixed: Vec<(Vec3, Vec3)> = if matched.len() >= MIN_DOT_PAIRS {
+                matched
+                    .iter()
+                    .map(|&(i, j)| (dots[i], self.dot_map[j]))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let (new, rms) = icp_with(
+                points,
+                &self.model,
+                &self.normals,
+                self.pose,
+                &LIMITS,
+                &fixed,
+            );
             self.pose = new;
             self.last_rms = Some(rms);
+        }
+        if !dots.is_empty() {
+            let mut paired = vec![false; dots.len()];
+            for (i, j) in self.match_dots(dots, &self.pose) {
+                let placed = self.pose.apply(&dots[i]);
+                let n = self.dot_counts[j];
+                self.dot_map[j] =
+                    [0, 1, 2].map(|k| (self.dot_map[j][k] * n + placed[k]) / (n + 1.0));
+                self.dot_counts[j] = n + 1.0;
+                paired[i] = true;
+            }
+            for (d, _) in dots.iter().zip(&paired).filter(|(_, &p)| !p) {
+                self.dot_map.push(self.pose.apply(d));
+                self.dot_counts.push(1.0);
+            }
         }
         self.poses.push(self.pose);
         for p in points {
@@ -508,6 +599,42 @@ pub fn drop_isolated(points: &[Vec3], step: f64, focal: f64, spacings: f64) -> V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dots_hold_a_slide_along_a_flat_plate() {
+        let plate: Vec<Vec3> = (0..6000)
+            .map(|k| {
+                [
+                    f64::from(k % 100) * 0.006 - 0.3,
+                    f64::from(k / 100) * 0.006 - 0.18,
+                    1.0,
+                ]
+            })
+            .collect();
+        let dots: Vec<Vec3> = (0..35)
+            .map(|k| {
+                [
+                    f64::from(k % 7) * 0.1 - 0.3,
+                    f64::from(k / 7) * 0.08 - 0.16,
+                    1.0,
+                ]
+            })
+            .collect();
+        let view = |points: &[Vec3], shift: f64| -> Vec<Vec3> {
+            points
+                .iter()
+                .map(|p| [p[0] - shift, p[1], p[2]])
+                .filter(|p| p[0].abs() < 0.2)
+                .collect()
+        };
+        let mut fusion = Fusion::new(0.004);
+        for i in 0..6 {
+            let shift = 0.01 * f64::from(i);
+            fusion.add_with_dots(&view(&plate, shift), &view(&dots, shift));
+        }
+        let last = fusion.poses[5].translation;
+        assert!((last[0] - 0.05).abs() < 1e-6, "slide tracked to {last:?}");
+    }
 
     #[test]
     fn drop_isolated_keeps_a_surface_and_drops_strays() {

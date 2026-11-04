@@ -1439,3 +1439,21 @@ cameras' views, with the lit surface and the 9 dots NumPy finds. `sls-scan dot-c
 finds those 9 within 0.079 µm on a Radeon RX 7900 GRE and 0.083 µm on llvmpipe, in 138
 to 155 ms of a debug build, and accepts 2 µm. Tracking from these dots in the
 application's fusion, and light-off frames over the capture protocol, come next.
+
+## D76. Dot tracking in the application (2026-11-03)
+
+`fuse::Fusion::add_with_dots` ports D67 to Rust. A frame's dots pair with the nearest map
+dot within 30 mm after the previous pose. Three or more pairs join that frame's ICP as
+point-to-point terms, three rows per pair beside its point-to-plane rows. After ICP,
+paired dots refine their map dot by averaging, and unpaired dots join the map.
+`Fusion::add` does the same with no dots.
+
+`slscan dot-fusion-vectors` writes 12 point frames and dot frames of a 120 mm slide along
+D67's cylindrical panel, about 10 mm per frame, with dots every 100 mm and NumPy's
+tracking with dots. NumPy's poses lie within 0.019 mm of truth. `sls-scan fusion-check`
+tracked them in Rust in 787 ms of a debug build and matched NumPy's poses and its 8,580
+model points to 0.000 µm.
+
+A Rust test slides 50 mm along a flat plate, which leaves the slide free without dots,
+and tracks it to 1 µm with them. Light-off frames from the capture node and dot tracking
+in the live view come next.
