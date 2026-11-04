@@ -1474,3 +1474,44 @@ second, more than the 15 depth frames per second the GPU keeps (D74).
 The stand-in puts reference dots every 30 mm on its sweep's mat when a request has
 light-off pairs, and renders those pairs under room light in both its one-shot and its
 paced stream. Without light-off pairs its mat stays bare, so earlier sweep figures stand.
+
+## D78. Tracking with dots from light-off pairs (2026-11-03)
+
+Dots are seen only in pairs taken with the pattern light off (D77), so lit frames have no
+dot positions. `track.fuse` takes such a pair as a frame of None with its dots. Its pose
+is the rigid fit of its dots to their map dots when three or more pair within 30 mm, and
+its dots then refine or join the map. Without light-off pairs, fusion is unchanged (D55).
+
+On D67's cylindrical panel, ICP without dots drifted about 9 mm per frame along the
+panel, so three lit frames could carry the next light-off pair's dots past their match
+radius. Once a light-off pair has been posed, each lit frame's ICP keeps its starting
+pose along directions whose normal-equation eigenvalue lies below 10⁻⁴ of the largest,
+and solves the others from the surface. On the panel, sliding along it and rolling about
+its axis sat at 1.4 × 10⁻⁶ and 3.0 × 10⁻⁶ of the largest, and the next at 7.3 × 10⁻⁴.
+
+Once two light-off pairs have been posed, a lit frame's starting pose continues the
+motion between the last two at constant velocity. The first pair of a sequence is dark,
+so the map is laid before the head moves. On the panel, every 4th frame light-off, with
+30 µm of point noise and 50 µm of dot noise:
+
+| Speed | Frames | Largest before the second fix | Largest after it | Median after it |
+|---|---|---|---|---|
+| 3 mm per frame | 100 | 9.00 mm | 0.215 mm | 0.063 mm |
+| 7 mm per frame | 40 | 21.00 mm | 0.206 mm | 0.073 mm |
+| 10 mm per frame | 48 | 70.00 mm | 570 mm | |
+
+Before the second fix, lit frames stay near the first pose along the panel, so their
+error is the motion so far. At 10 mm per frame the second light-off pair landed past the
+30 mm radius and tracking failed, so a scan with dots should start at hand speed or
+slower.
+
+We chose this for smooth panels only. On the stand-in's sweep, a small part on a dotted
+mat orbited at 2 degrees per frame, the same rule left lit frames 19 to 84 mm off, where
+geometry alone kept them within 0.4 mm. That part's weakest direction lay at 5 × 10⁻⁶
+of the largest, as weak as those two panel directions, and the orbit moves along it. The
+application's dots switch is for smooth panels, and complex shapes stay geometry-only
+(D64).
+
+`sls-scan fusion-check` runs `fuse::Fusion::add_dark` and the lit path on 16 panel
+frames and matched NumPy to 0.000 µm. A Rust test slides along a flat plate with every
+4th frame light-off and keeps frames after the second fix within 1 µm.
