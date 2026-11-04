@@ -81,7 +81,7 @@ def depth_parameters(cal: StereoCalibration, near_m: float, far_m: float, step: 
                      window: int = 25, iterations: int = 20, min_level: float = 6.0,
                      max_move: float = 3.0, min_correlation: float = 0.95, scale: int = 4,
                      block: int = 7, coarse_correlation: float = 0.6, margin: float = 0.05,
-                     fill: int = 2, preview_scale: int = 8, exit_px: float = 1e-5) -> dict:
+                     fill: int = 2, preview_scale: int = 8, exit_px: float = 1e-4) -> dict:
     """Return everything the application's depth frame takes for one calibration: image
     size, matching settings with the refinement exit, the block matching search and
     settings, the depth bounds and sampling, both cameras' rectification, and the

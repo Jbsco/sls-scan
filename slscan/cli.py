@@ -1148,7 +1148,7 @@ def main(argv=None) -> int:
     p.add_argument("--far", type=float, default=0.6, help="farthest surface in metres")
     p.add_argument("--step", type=int, default=8, help="sample spacing in pixels")
     p.add_argument("--window", type=int, default=25, help="matching window in pixels")
-    p.add_argument("--exit-px", type=float, default=1e-5,
+    p.add_argument("--exit-px", type=float, default=1e-4,
                    help="refinement stops when a step moves the match less than this")
     p.add_argument("--out", default="data/depth.json")
     p.add_argument("--json", action="store_true", help="print the result as one JSON object")
@@ -1234,7 +1234,7 @@ def main(argv=None) -> int:
     p.add_argument("--step", type=int, default=8, help="sample spacing in pixels")
     p.add_argument("--window", type=int, default=25, help="matching window in pixels")
     p.add_argument("--iterations", type=int, default=20)
-    p.add_argument("--exit-px", type=float, default=1e-5,
+    p.add_argument("--exit-px", type=float, default=1e-4,
                    help="refinement stops when a step moves the match less than this")
     p.add_argument("--seed", type=int, default=1)
     p.set_defaults(func=cmd_stereo_vectors)
