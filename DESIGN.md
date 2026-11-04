@@ -1515,3 +1515,32 @@ application's dots switch is for smooth panels, and complex shapes stay geometry
 `sls-scan fusion-check` runs `fuse::Fusion::add_dark` and the lit path on 16 panel
 frames and matched NumPy to 0.000 µm. A Rust test slides along a flat plate with every
 4th frame light-off and keeps frames after the second fix within 1 µm.
+
+## D79. Reference dots in the live view (2026-11-03)
+
+A "Reference dots (smooth panels)" switch in the configuration panel asks the node for
+every 4th pair with the pattern light off (D77). The depth worker keeps each light-off pair
+until the next lit pair's depth frame. It then rectifies that pair on the GPU, finds its
+dots against those points (D75) and poses it from them (D78) before the lit frame
+joins. Lit pairs are still skipped while the worker is busy, and light-off pairs never
+are, since the lit pair after one needs it.
+
+`sls-scan depth --dark-every 4` runs the same path without the window. It fails when a
+light-off pair after the first finds fewer than 3 dots.
+
+A dot now pairs with a map dot within 0.4 of the map's median dot spacing, at most 30 mm.
+The near head sees about 157 × 117 mm at 0.5 m, so its dots need to be about 35 mm apart
+for a dozen in each light-off pair. Dots between map dots, such as a grid of 35 mm moved
+18 mm, no longer pair with a wrong neighbour.
+
+For light-off requests the stand-in slides 2.5 mm per pair along a flat 0.6 × 0.3 m panel
+at 0.5 m with dots about 35 mm apart, in place of D77's dotted mat. Each light-off pair
+found 12 to 15 dots, and light-off poses followed the slide, reading 48.4 mm where the
+head moved 50 mm.
+
+That 3% shortfall comes from a calibration the application recovers from the
+stand-in's board poses, which fits a k2 of 1.77 and 3.65 where the cameras have none.
+Two light-off pairs 10 mm apart measured 9.95 mm with the true calibration and 9.73 mm
+with the recovered one. A pose from dots alone fits a small patch 0.5 m away, so a
+sub-pixel bias across the field becomes about 1 mrad of rotation and 0.5 mm of
+translation. Fixing k2 and k3 for narrow lenses would be a change of its own.
