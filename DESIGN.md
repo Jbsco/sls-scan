@@ -1756,3 +1756,23 @@ strip's own channel and 51 in the others. A real projector's channels overlap an
 LED output differs per channel, which the white card absorbs. A camera with a color
 filter array would see each field through it, so this rests on the mono Global Shutter
 camera of D25.
+
+## D89. Colors in the application (2026-11-05)
+
+The application takes the colors of D88. `slscan scan-params --color` sets the scan
+parameters to end scans with the projector's fields, and `--white` reads a white card's
+fields and writes its response per channel into them. `sls-scan scan` and the window
+request the fields, color each point from them as `colors.point_colors` does, rounding
+half to even as NumPy does, and write red, green and blue bytes per PLY vertex. The scene
+draws a colored scan in its colors.
+
+`slscan scan-vectors --color` writes the fields and NumPy's colors beside a scan, and
+`sls-scan scan-check` compares the application's colors byte for byte. On the plate of
+red, green and blue strips, none of 521,793 points differed, on the Radeon and on
+llvmpipe.
+
+From stand-ins serving that plate and a white card, the application captured the card
+with `sls-scan capture --color true` and wrote its balance into the scan parameters. Its
+scan then landed within 0.12 µm of `slscan scan --white` on the same frames, with no
+color byte differing. Each strip read 204 in its own channel and 51 in the others. The
+gate colors its strip scan and checks the color vectors.
