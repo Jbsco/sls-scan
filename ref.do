@@ -1,5 +1,5 @@
 #!/bin/bash
-# Reference gate: the Haskell reference of the decode core against the NumPy decode on
+# Reference gate: the Haskell reference of the decode and triangulation against NumPy on
 # synthetic scans, built from GHC's own libraries alone.
 exec >&2
 if ! command -v ghc >/dev/null 2>&1; then
@@ -20,4 +20,6 @@ for scene in plate sphere strips; do
     python3 -m slscan.cli decode-vectors --scene "$scene" --out "$WORK/$scene" >/dev/null
     "$WORK/sls-ref" decode-check "$WORK/$scene"
 done
+python3 -m slscan.cli scan-vectors --out "$WORK/scan" >/dev/null
+"$WORK/sls-ref" scan-check "$WORK/scan"
 echo "ref: all checks clean"

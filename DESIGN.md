@@ -1795,3 +1795,18 @@ It builds from GHC's own libraries, `base`, `bytestring`, `array` and `filepath`
 GHC installation runs it. `ref.do` builds it and runs the check in `verify.do`, and
 skips without GHC. Continuous integration does not install GHC yet. Triangulation is
 the next part of the reference.
+
+## D91. Triangulation in the Haskell reference (2026-11-05)
+
+`ref/Triangulate.hs` triangulates as `slscan/triangulate.py` does, with the undistortion
+of `cv2.undistortPoints` in its five fixed iterations and the projection of
+`cv2.projectPoints`. `sls-ref scan-check` meets each masked pixel's ray with its
+projector column's plane and compares the points with those of `slscan scan-vectors`,
+whose recovered calibration fits k2 of -0.11 in the camera and -0.40 in the projector.
+`ref/Json.hs` reads the nested scan parameters with nothing but `base`.
+
+Of 521,793 points, the pixels kept were the same, and in two runs 26 and 43 points
+differed at all, by at most 4.7 × 10⁻⁷ nm. NumPy forms the plane products through BLAS, which seems
+likely to sum them in another order, so the check allows 10 nm. Skipping the projector's
+undistortion moved points by up to 0.82 mm, and one refinement of the plane in place of
+three by up to 0.43 mm. `ref.do` runs this check after the decode checks.

@@ -155,7 +155,8 @@ largest phase modulation among those where it decoded, which is the longest expo
 that does not saturate there (D86).
 
 `ref/` decodes again in Haskell with NumPy's arithmetic in the same order, and
-`ref.do` compares its columns and masks with NumPy's on synthetic scans (D90).
+`ref.do` compares its columns and masks with NumPy's on synthetic scans (D90). It also
+triangulates the plate scan of `slscan scan-vectors` and compares its points (D91).
 
 ## Color
 
