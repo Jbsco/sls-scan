@@ -13,5 +13,6 @@ pub mod protocol;
 pub mod rectify;
 pub mod refine;
 pub mod register;
+pub mod scan;
 pub mod tsdf;
 pub mod ui;
