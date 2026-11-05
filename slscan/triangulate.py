@@ -42,11 +42,14 @@ def triangulate(columns: np.ndarray, mask: np.ndarray, cal: Calibration,
     return points[keep], pixels[keep]
 
 
-def scan_params(cal: Calibration, pitch: int, steps: int, exposures=None) -> dict:
+def scan_params(cal: Calibration, pitch: int, steps: int, exposures=None, color: bool = False,
+                white=None) -> dict:
     """Return a calibration and the decode settings of decode.decode_columns as the
     application takes them: each device's size, row-major matrix and five distortion
     coefficients, the camera-to-projector rotation (row-major) and translation, and the
-    decode settings, with exposures relative to the nominal one when there are several."""
+    decode settings, with exposures relative to the nominal one when there are several.
+    With color, scans end with the projector's fields, and white is a white card's
+    response per channel for point colors."""
     def device(intrinsics):
         distortion = np.zeros(5)
         coefficients = np.ravel(intrinsics.distortion)
@@ -62,4 +65,5 @@ def scan_params(cal: Calibration, pitch: int, steps: int, exposures=None) -> dic
             "decode": {"planes": patterns.bit_planes(cal.projector.width), "steps": int(steps),
                        "projector_width": int(cal.projector.width), "pitch": float(pitch),
                        "min_contrast": 10.0, "min_modulation": 10.0, "max_disagreement": 1.0,
-                       "exposures": [float(x) for x in exposures or []]}}
+                       "exposures": [float(x) for x in exposures or []], "color": bool(color),
+                       "white": [float(x) for x in white] if white is not None else []}}
