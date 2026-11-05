@@ -74,9 +74,10 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
 - Phase 10, open. Applications. An interior a few metres across, a pattern and the mold
   taken from it, small parts on a turntable with a known axis. Acceptance per job: scale
   bars within the Phase 6 figure and datum residuals within the Phase 7 figure.
-- Phase 11, candidates. Phase-shift static scans with a calibrated projector (D23, D24),
+- Phase 11, in progress. Phase-shift static scans with a calibrated projector (D23, D24),
   HDR capture, color texture, a third camera for occlusion, the Haskell reference core,
-  Futhark kernels.
+  Futhark kernels. The application takes phase-shift static scans, decoded on the GPU and
+  triangulated to match NumPy (D82, D83).
 
 ## Open questions
 
