@@ -320,6 +320,37 @@ def cmd_node_sim(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_hdr_bench(args: argparse.Namespace) -> int:
+    """Scan the strip plate with true calibration at each set of exposures and report, per
+    strip, the share of its lit pixels decoded and the RMS residual of its points from
+    their own plane, then the residual of the whole plate. It passes when the last set
+    decodes 99% of every strip."""
+    rig = synthetic.reference_rig()
+    cal = synthetic.true_calibration(rig, HEADS["reference"][2])
+    scene = synthetic.strip_scenes()["strips"]
+    sv = synthetic.scene_view(rig, scene)
+    albedo, lit = sv.albedo.reshape(sv.shape), sv.lit.reshape(sv.shape)
+    covered = False
+    for text in args.exposures.split(";"):
+        exposures = [float(x) for x in text.split(",")]
+        views = synthetic.exposure_captures(rig, scene, exposures, args.pitch, seed=args.seed)
+        columns, mask = decode.decode_exposures(views, rig.projector.width, args.pitch)
+        points, pixels = triangulate.triangulate(columns, mask, cal)
+        at = pixels.astype(np.int64)
+        parts = []
+        covered = True
+        for name, value in (("dark", 0.04), ("middle", 0.8), ("bright", 2.5)):
+            region = lit & np.isclose(albedo, value)
+            share = np.count_nonzero(mask & region) / np.count_nonzero(region)
+            covered &= share >= 0.99
+            mine = points[region[at[:, 1], at[:, 0]]]
+            rms = f", {1e6 * geometry.fit_plane(mine)[2]:.0f} µm" if len(mine) >= 100 else ""
+            parts.append(f"{name} {100.0 * share:.1f}%{rms}")
+        whole = geometry.fit_plane(points)[2]
+        print(f"exposures {text}: " + ", ".join(parts) + f"; plate {1e6 * whole:.0f} µm RMS")
+    return 0 if covered else 1
+
+
 def cmd_capture(args: argparse.Namespace) -> int:
     host, port = args.node.rsplit(":", 1)
     exposures = [float(x) for x in args.exposures.split(",")] if args.exposures else None
@@ -1432,6 +1463,14 @@ def main(argv=None) -> int:
                                               **synthetic.strip_scenes()}), default="plate")
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_node_sim)
+
+    p = sub.add_parser("hdr-bench", help="scan a plate of dark, middle and bright strips at "
+                                         "sets of exposures")
+    p.add_argument("--exposures", default="1;0.25,1,4;0.25,1,4,16",
+                   help="sets of exposures, sets separated by ; and exposures by ,")
+    p.add_argument("--pitch", type=int, default=16)
+    p.add_argument("--seed", type=int, default=0)
+    p.set_defaults(func=cmd_hdr_bench)
 
     p = sub.add_parser("capture", help="run one pattern sequence on a capture node and save it")
     p.add_argument("--node", default="127.0.0.1:5600", help="host:port of the capture node")
