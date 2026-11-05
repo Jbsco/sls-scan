@@ -18,7 +18,10 @@ PORT=${SLS_APP_PORT:-5604}
 SESSION=$(mktemp -d)
 python3 -m slscan.cli node-sim --port "$PORT" >/dev/null 2>&1 &
 NODE=$!
-trap 'kill "$NODE" 2>/dev/null || true; rm -rf "$SESSION"' EXIT
+STRIPS_PORT=$((PORT + 100))
+python3 -m slscan.cli node-sim --port "$STRIPS_PORT" --scene strips >/dev/null 2>&1 &
+STRIPS=$!
+trap 'kill "$NODE" "$STRIPS" 2>/dev/null || true; rm -rf "$SESSION"' EXIT
 RUN="cargo run --locked --quiet --manifest-path app/Cargo.toml --"
 $RUN capture --node "127.0.0.1:$PORT" --set scan --pitch 16 --wait 30
 $RUN capture --node "127.0.0.1:$PORT" --set calibration --wait 30
@@ -51,12 +54,20 @@ python3 -m slscan.cli measure "$SESSION/plate.ply" --shape plane
 (cd app && SLS_WINDOW_NODE="127.0.0.1:$PORT" SLS_WINDOW_SCAN_PARAMS="$SESSION/scan.json" \
     SLS_WINDOW_OUT="$SESSION/window.ply" SLS_WINDOW_REFERENCE="$SESSION/plate.ply" \
     cargo test --locked --quiet --lib window_scan)
+python3 -m slscan.cli scan-params --calibration "$SESSION/calibration.yaml" --pitch 16 \
+    --exposures 0.25,1,4,16 --out "$SESSION/strips.json" >/dev/null
+$RUN scan --node "127.0.0.1:$STRIPS_PORT" --params "$SESSION/strips.json" --wait 30 \
+    --out "$SESSION/strips.ply"
+python3 -m slscan.cli measure "$SESSION/strips.ply" --shape plane
 python3 -m slscan.cli decode-vectors --out "$SESSION/vectors" >/dev/null
 $RUN decode-check "$SESSION/vectors"
 python3 -m slscan.cli decode-vectors --exposure 4 --out "$SESSION/saturated" >/dev/null
 $RUN decode-check "$SESSION/saturated"
 python3 -m slscan.cli scan-vectors --out "$SESSION/scan-vectors" >/dev/null
 $RUN scan-check "$SESSION/scan-vectors"
+python3 -m slscan.cli scan-vectors --scene strips --exposures 0.25,1,4,16 \
+    --out "$SESSION/strip-vectors" >/dev/null
+$RUN scan-check "$SESSION/strip-vectors"
 python3 -m slscan.cli stereo-vectors --out "$SESSION/stereo" >/dev/null
 $RUN rectify-check "$SESSION/stereo"
 python3 -m slscan.cli dot-vectors --out "$SESSION/dots" >/dev/null
