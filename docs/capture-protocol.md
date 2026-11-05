@@ -16,7 +16,7 @@ Each message is a header followed by its payload. Integers are little-endian.
 | Type | Name | Direction | Payload |
 |---|---|---|---|
 | 1 | HELLO | node to application | JSON: node name, projector size and refresh rate, cameras with size and format |
-| 2 | SEQUENCE | application to node | JSON: set (`stereo`, `stereo-calibration`, `scan` or `calibration`), frame pairs, trigger rate and light-off spacing for a stereo set, phase pitch, phase steps |
+| 2 | SEQUENCE | application to node | JSON: set (`stereo`, `stereo-calibration`, `scan` or `calibration`), frame pairs, trigger rate and light-off spacing for a stereo set, phase pitch, phase steps, exposures for a scan set |
 | 3 | FRAME | node to application | frame header, then pixels row by row |
 | 4 | END | node to application | JSON: sequence number and frame count |
 | 5 | ERROR | node to application | JSON: message |
@@ -59,6 +59,11 @@ A stereo request may set `dark_every`, with 0 or absent for none. Every that man
 pair from the first is taken with the pattern light off and saved as `dark_000/left.png`
 and `dark_000/right.png` in place of `frame_` (D77).
 
+A scan request may carry `exposures`, a list of exposures relative to the node's nominal
+one. The node then takes each pattern at every exposure before the next pattern, names
+the frames `exposure_000/gray_000` onward, and sets each frame header's exposure field
+to the index in that list (D86).
+
 Pattern order follows the capture layouts of `docs/pipeline.md`. A scan set is the
 column Gray codes with their inverses, then the phase shifts (`gray_000` onward, then
 `phase_000` onward). A calibration set is white, then column and row Gray codes
@@ -78,8 +83,9 @@ The stand-in renders a sweep around a part on a mat for stereo sets, about 2° p
 at 30 fps, and the next board pose for each calibration set. With light-off pairs it
 slides 2.5 mm per pair along a flat panel with reference dots about 35 mm apart, and
 renders those pairs under room light (D79). For phase-shift scan sets it
-renders the chosen scene with timestamps at 60 Hz. Captures land in the layouts that
-`slscan scan` and `slscan calibrate` read.
+renders the chosen scene with timestamps at 60 Hz, at each requested exposure, and
+`--scene strips` serves a plate of dark, middle and bright strips. Captures land in the
+layouts that `slscan scan` and `slscan calibrate` read.
 
 The `Dockerfile` at the repository root packages the stand-in, so it runs on its own
 address the way the Pi does:

@@ -91,6 +91,22 @@ twelve synthetic board poses, with k2 at 0 for both devices (D84). Results from
 A synthetic pass checks the arithmetic. It says nothing about lens, projector gamma or
 rig flex, which only the bench measures.
 
+## Exposures
+
+The acceptance plate as three strips of albedo 0.04, 0.8 and 2.5 at 1 m, scanned by the
+virtual rig with true calibration at sets of exposures relative to the nominal one, as
+in `DESIGN.md` D86. Each strip's residual is from its own plane. Command:
+`slscan hdr-bench`.
+
+| Exposures | Dark strip | Middle strip | Bright strip | Whole plate |
+|---|---|---|---|---|
+| 1 | none decoded | 51 µm RMS | none decoded | 51 µm RMS |
+| 0.25, 1, 4 | 273 µm RMS | 51 µm RMS | 61 µm RMS | 174 µm RMS |
+| 0.25, 1, 4, 16 | 68 µm RMS | 51 µm RMS | 61 µm RMS | 61 µm RMS |
+
+Every strip decodes fully where a residual is listed. The dark strip's residual follows
+its modulation, 16 grey levels at an exposure of 4 and 64 at 16.
+
 ## Small-volume head
 
 These results are the small-volume head of `DESIGN.md` D23 on the virtual bench. The HQ
