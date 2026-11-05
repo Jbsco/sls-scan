@@ -344,6 +344,26 @@ def cmd_node_sim(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_occlusion_bench(args: argparse.Namespace) -> int:
+    """Report the share of a slot's floor and of all its surfaces that the near head's
+    camera pairs measure, with and without a third camera."""
+    from . import occlusion
+
+    rig = synthetic.stereo_head()
+    thirds = {"none": None, **occlusion.third_cameras()}
+    for depth_mm in (float(x) for x in args.depths.split(",")):
+        scene, points, normals = occlusion.channel(args.width_mm / 1000.0, depth_mm / 1000.0)
+        floor = (normals[:, 2] < -0.5) & (np.abs(points[:, 0]) < args.width_mm / 2000.0)
+        print(f"slot {args.width_mm:g} mm wide and {depth_mm:g} mm deep, across the baseline:")
+        for name, third in thirds.items():
+            whole = occlusion.coverage(scene, points, normals, rig, third, args.grazing)
+            bottom = occlusion.coverage(scene, points[floor], normals[floor], rig, third,
+                                        args.grazing)
+            print(f"  third camera {name}: floor {100.0 * bottom['any']:.1f}%, "
+                  f"all surfaces {100.0 * whole['any']:.1f}%")
+    return 0
+
+
 def cmd_hdr_bench(args: argparse.Namespace) -> int:
     """Scan the strip plate with true calibration at each set of exposures and report, per
     strip, the share of its lit pixels decoded and the RMS residual of its points from
@@ -1513,6 +1533,14 @@ def main(argv=None) -> int:
                                               **synthetic.color_scenes()}), default="plate")
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_node_sim)
+
+    p = sub.add_parser("occlusion-bench", help="share of a slot the near head measures, with "
+                                               "and without a third camera")
+    p.add_argument("--width-mm", type=float, default=20.0)
+    p.add_argument("--depths", default="10,20,40", help="slot depths in mm, comma separated")
+    p.add_argument("--grazing", type=float, default=75.0,
+                   help="largest angle from the surface normal a device sees, in degrees")
+    p.set_defaults(func=cmd_occlusion_bench)
 
     p = sub.add_parser("hdr-bench", help="scan a plate of dark, middle and bright strips at "
                                          "sets of exposures")
