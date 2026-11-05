@@ -77,7 +77,8 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
 - Phase 11, in progress. Phase-shift static scans with a calibrated projector (D23, D24),
   HDR capture, color texture, a third camera for occlusion, the Haskell reference core,
   Futhark kernels. The application takes phase-shift static scans, decoded on the GPU and
-  triangulated to match NumPy (D82, D83).
+  triangulated to match NumPy (D82, D83), at several exposures (D86, D87) and in color
+  (D88, D89). A Haskell reference decodes as NumPy does, bit for bit (D90).
 
 ## Open questions
 
