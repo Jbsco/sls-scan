@@ -346,6 +346,17 @@ def cmd_decode_vectors(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_scan_params(args: argparse.Namespace) -> int:
+    """Write a calibration and decode settings as JSON for the application's scans."""
+    import json
+
+    params = triangulate.scan_params(calibrate.load(args.calibration), args.pitch, args.steps)
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump(params, f, indent=1)
+    print(f"scan parameters written to {args.out}")
+    return 0
+
+
 def cmd_stereo_vectors(args: argparse.Namespace) -> int:
     """Write a stereo view with its rectification, its affine matches and their NumPy
     second-order refinement as raw files for the GPU kernels."""
@@ -1226,6 +1237,14 @@ def main(argv=None) -> int:
     p.add_argument("--pitch", type=int, default=16)
     p.add_argument("--speeds", default="0,1,2,5", help="sweep speeds in mm/s, comma separated")
     p.set_defaults(func=cmd_motion_error)
+
+    p = sub.add_parser("scan-params", help="write a calibration and decode settings as JSON "
+                                           "for the application's scans")
+    p.add_argument("--calibration", required=True)
+    p.add_argument("--pitch", type=int, default=16, help="phase shift pitch in projector pixels")
+    p.add_argument("--steps", type=int, default=4, help="phase steps")
+    p.add_argument("--out", required=True)
+    p.set_defaults(func=cmd_scan_params)
 
     p = sub.add_parser("decode-vectors", help="write a synthetic scan and its reference decode")
     p.add_argument("--out", default="data/decode-vectors")
