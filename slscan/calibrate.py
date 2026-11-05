@@ -6,7 +6,6 @@ decoded projector columns and rows give a local homography, which maps the corne
 the projector image at a fraction of a projector pixel.
 """
 
-import math
 from dataclasses import asdict, dataclass
 
 import cv2
@@ -117,22 +116,27 @@ def projector_corners(corners: np.ndarray, columns: np.ndarray, rows: np.ndarray
     return keep, out
 
 
-NARROW_FIELD = 0.3
+K2_MIN_SHIFT_PX = 10.0
 
 
-def half_field(size: tuple[int, int], matrix: np.ndarray) -> float:
-    """Return the tangent of a device's half-diagonal field of view."""
-    return math.hypot(*size) / 2.0 / matrix[0, 0]
+def k2_shift_px(images: list, matrix: np.ndarray) -> float:
+    """Return the pixels a unit of k2 moves the board point seen farthest from the
+    principal point, r⁵ f for that point's normalized radius r."""
+    points = np.vstack([np.asarray(i, dtype=np.float64).reshape(-1, 2) for i in images])
+    radius = np.max(np.hypot((points[:, 0] - matrix[0, 2]) / matrix[0, 0],
+                             (points[:, 1] - matrix[1, 2]) / matrix[1, 1]))
+    return float(radius ** 5 * matrix[0, 0])
 
 
 def calibrate_intrinsics(objects: list, images: list, size: tuple[int, int]) -> Intrinsics:
-    """Calibrate one pinhole device with radial and tangential distortion, k3 fixed. A
-    device whose half_field is under NARROW_FIELD keeps k2 at 0 as well (D80)."""
+    """Calibrate one pinhole device with radial and tangential distortion, k3 fixed. k2
+    stays at 0 unless the board points reach far enough that k2_shift_px is at least
+    K2_MIN_SHIFT_PX (D84)."""
     objects = [o.astype(np.float32) for o in objects]
     images = [i.astype(np.float32) for i in images]
     rms, matrix, distortion, _, _ = cv2.calibrateCamera(
         objects, images, size, None, None, flags=cv2.CALIB_FIX_K3 | cv2.CALIB_FIX_K2)
-    if half_field(size, matrix) >= NARROW_FIELD:
+    if k2_shift_px(images, matrix) >= K2_MIN_SHIFT_PX:
         rms, matrix, distortion, _, _ = cv2.calibrateCamera(
             objects, images, size, None, None, flags=cv2.CALIB_FIX_K3)
     return Intrinsics(size[0], size[1], matrix, distortion.reshape(-1), float(rms))

@@ -1655,3 +1655,29 @@ thread of its own once its last frame arrives. Its points replace the scene's mo
 "Save points" writes them as PLY. The scene draws at most 20,000 points, every so many
 of a larger cloud, since a scan at 1280 × 960 has about half a million. No automated test
 drives the window. The functions it calls are those of `sls-scan scan` and its gate run.
+
+## D84. k2 where the board reaches (2026-11-04)
+
+Calibration now fits k2 only when a unit of it moves the board point seen farthest from
+the principal point by 10 px or more. That shift is r⁵ f for the point's normalized
+radius r, the measure of D80 taken at the board's reach in place of the image corner.
+This replaces D80's rule of a 0.3 tangent for the half-diagonal field.
+
+Board views reach 0.45 of the reference rig's half-diagonal at 1 m, where a unit of k2
+moves the farthest point 1.2 px in the camera and 0.4 px in the projector. Twelve poses
+fitted k2 of about -0.1 and -0.4 there, where both devices have none, and the plate
+measured 0.155 to 0.196 mm RMS over six seeds against 0.051 mm with true calibration.
+With k2 at 0 it measured 0.085 to 0.092 mm.
+
+Other heads keep their D80 outcome. The metre head's board moves its farthest points
+13.9 and 14.7 px per unit of k2, so it still fits k2, and its bench figures are
+unchanged. The near head, the small-volume head and the 12 mm lens of D80 stay at
+1.12 px or under. An 8 mm lens at 1 m, at 4.9 and 6.8 px, now keeps k2 at 0, which
+D80's bench favoured there. A real
+calibration whose board reaches a wide lens's corners fits k2.
+
+On a stand-in that had served one scan set and one calibration set, the application's
+camera and projector calibration now measures the plate at 0.126 mm RMS with six poses
+and 0.092 mm with twelve. The gate takes twelve poses, 13 s of calibration, and checks
+the scan against the Phase 2 limit of 0.2 mm in place of D83's 1 mm. In the full gate
+run the plate measured 0.088 mm.
