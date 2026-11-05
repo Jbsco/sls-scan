@@ -147,8 +147,12 @@ saves one sequence in the layouts above.
 `decode.py` binarizes each Gray code plane against its inverse and decodes the bits into
 a column index per pixel. Phase shift images give a wrapped phase and a modulation per
 pixel. The float column is the phase column nearest the Gray code column. A pixel is
-masked when a pair lacks contrast, the sinusoid lacks modulation, or the two columns
-disagree by more than a pixel (`DESIGN.md` D16).
+masked when a pair lacks contrast, a phase sample saturates at 255, the sinusoid lacks
+modulation, or the two columns disagree by more than a pixel (`DESIGN.md` D16, D86).
+
+A view at several exposures decodes each exposure and gives each pixel the one with the
+largest phase modulation among those where it decoded, which is the longest exposure
+that does not saturate there (D86).
 
 ## Triangulate
 

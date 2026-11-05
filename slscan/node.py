@@ -73,12 +73,13 @@ def is_dark(pair: int, dark_every: int) -> bool:
 
 
 def pattern_names(pattern_set: str, width: int, height: int, steps: int,
-                  frames: int = 1, dark_every: int = 0) -> list[str]:
+                  frames: int = 1, dark_every: int = 0, exposures: int = 1) -> list[str]:
     """Return the capture file names of a pattern set, in sequence order.
 
     A stereo set is frames pairs, left then right, each pair from one trigger, and a pair
     taken with the pattern light off is named dark_ in place of frame_. A
-    stereo-calibration set is one board pair."""
+    stereo-calibration set is one board pair. A scan set at several exposures takes each
+    pattern at every exposure before the next pattern, under exposure_000/ onward."""
     if pattern_set == "stereo":
         return [f"{'dark' if is_dark(i, dark_every) else 'frame'}_{i:03d}/{side}"
                 for i in range(frames) for side in ("left", "right")]
@@ -88,8 +89,11 @@ def pattern_names(pattern_set: str, width: int, height: int, steps: int,
         return (["white"] + [f"columns_{i:03d}" for i in range(2 * patterns.bit_planes(width))]
                 + [f"rows_{i:03d}" for i in range(2 * patterns.bit_planes(height))])
     if pattern_set == "scan":
-        return ([f"gray_{i:03d}" for i in range(2 * patterns.bit_planes(width))]
-                + [f"phase_{i:03d}" for i in range(steps)])
+        names = ([f"gray_{i:03d}" for i in range(2 * patterns.bit_planes(width))]
+                 + [f"phase_{i:03d}" for i in range(steps)])
+        if exposures > 1:
+            return [f"exposure_{e:03d}/{name}" for name in names for e in range(exposures)]
+        return names
     raise ValueError(f"unknown pattern set {pattern_set}")
 
 
@@ -117,19 +121,22 @@ def connect(host: str, port: int, wait: float = 0.0,
 
 def capture(host: str, port: int, pattern_set: str, out: str, pitch: int = 32,
             steps: int = 4, timeout: float = 60.0, wait: float = 0.0, frames: int = 1,
-            rate_hz: float = 0.0, dark_every: int = 0) -> dict:
+            rate_hz: float = 0.0, dark_every: int = 0, exposures=None) -> dict:
     """Run one sequence on a node and save its frames as PNG files under out. A rate asks
-    a stereo set to be triggered at that many pairs per second, and dark_every asks for
-    every dark_every-th pair with the pattern light off."""
+    a stereo set to be triggered at that many pairs per second, dark_every asks for
+    every dark_every-th pair with the pattern light off, and exposures asks for a scan
+    set at each of those exposures relative to the nominal one."""
     import cv2
 
     sock, hello = connect(host, port, wait, timeout)
     with sock:
         projector = hello["projector"]
         names = pattern_names(pattern_set, projector["width"], projector["height"], steps, frames,
-                              dark_every)
+                              dark_every, len(exposures) if exposures else 1)
         request = {"set": pattern_set, "pitch": pitch, "steps": steps, "frames": frames,
                    "rate_hz": rate_hz, "dark_every": dark_every}
+        if exposures:
+            request["exposures"] = [float(x) for x in exposures]
         send(sock, SEQUENCE, json.dumps(request).encode())
         os.makedirs(out, exist_ok=True)
         indices, stamps = [], []
@@ -161,7 +168,7 @@ class StandIn(socketserver.ThreadingTCPServer):
     def __init__(self, address, scene: str = "plate", seed: int = 0):
         self.rig = synthetic.reference_rig()
         self.spec = calibrate.BoardSpec(9, 6, 0.04, 0.03)
-        self.scene = synthetic.acceptance_scenes()[scene]
+        self.scene = {**synthetic.acceptance_scenes(), **synthetic.strip_scenes()}[scene]
         self.poses = synthetic.board_poses(self.spec)
         self.next_pose = 0
         self.stereo = synthetic.stereo_head()
@@ -187,8 +194,9 @@ class StandIn(socketserver.ThreadingTCPServer):
                             {"name": "right", "width": self.stereo.right.width,
                              "height": self.stereo.right.height, "format": "mono8"}]}
 
-    def frames(self, request: dict) -> tuple[list, list]:
-        """Return the images of a sequence and the timestamp of each, in nanoseconds."""
+    def frames(self, request: dict) -> tuple[list, list, list]:
+        """Return the images of a sequence, the timestamp of each in nanoseconds and the
+        exposure index of each."""
         if request["set"] == "stereo":
             count = int(request.get("frames", 1))
             dark_every = int(request.get("dark_every", 0))
@@ -199,14 +207,14 @@ class StandIn(socketserver.ThreadingTCPServer):
             for i, pair in enumerate(captures):
                 images += [pair["left"], pair["right"]]
                 stamps += [i * STEREO_PERIOD_NS] * 2
-            return images, stamps
+            return images, stamps, [0] * len(images)
         if request["set"] == "stereo-calibration":
             r, t = self.stereo_poses[self.next_stereo_pose % len(self.stereo_poses)]
             self.next_stereo_pose += 1
             pair = synthetic.stereo_board_view(self.stereo, self.stereo_spec, r, t, self.rng)
-            return [pair["left"], pair["right"]], [0, 0]
-        images = self._pattern_frames(request)
-        return images, [i * FRAME_PERIOD_NS for i in range(len(images))]
+            return [pair["left"], pair["right"]], [0, 0], [0, 0]
+        images, exposures = self._pattern_frames(request)
+        return images, [i * FRAME_PERIOD_NS for i in range(len(images))], exposures
 
     @staticmethod
     def stereo_sequence(count: int, dark_every: int) -> tuple[dict, list]:
@@ -247,16 +255,21 @@ class StandIn(socketserver.ThreadingTCPServer):
             left, right = self.cycle[2 if is_dark(i, dark_every) else 1][i % PACED_CYCLE]
             yield i, left, right, int(round(i * period * 1e9))
 
-    def _pattern_frames(self, request: dict) -> list:
+    def _pattern_frames(self, request: dict) -> tuple[list, list]:
         if request["set"] == "calibration":
             r, t = self.poses[self.next_pose % len(self.poses)]
             self.next_pose += 1
             view = synthetic.calibration_view(self.rig, self.spec, r, t, self.rng)
-            return [view["white"]] + list(view["columns"]) + list(view["rows"])
+            images = [view["white"]] + list(view["columns"]) + list(view["rows"])
+            return images, [0] * len(images)
         if request["set"] == "scan":
-            captures, _ = synthetic.scan_captures(self.rig, self.scene, int(request["pitch"]),
-                                                  int(request["steps"]), self.seed)
-            return list(captures["gray"]) + list(captures["phase"])
+            exposures = [float(x) for x in request.get("exposures", [1.0])] or [1.0]
+            views = synthetic.exposure_captures(self.rig, self.scene, exposures,
+                                                int(request["pitch"]), int(request["steps"]),
+                                                self.seed)
+            stacks = [list(v["gray"]) + list(v["phase"]) for v in views]
+            images = [stack[k] for k in range(len(stacks[0])) for stack in stacks]
+            return images, [e for _ in range(len(stacks[0])) for e in range(len(stacks))]
         raise ValueError(f"unknown pattern set {request['set']}")
 
 
@@ -287,11 +300,11 @@ class _Handler(socketserver.BaseRequestHandler):
                 sequence += 1
                 continue
             try:
-                frames, stamps = server.frames(request)
+                frames, stamps, exposures = server.frames(request)
             except (ValueError, KeyError) as e:
                 send(self.request, ERROR, json.dumps({"message": str(e)}).encode())
                 continue
-            for index, (image, stamp) in enumerate(zip(frames, stamps)):
-                send(self.request, FRAME, frame_payload(sequence, index, 0, stamp, image))
+            for index, (image, stamp, exposure) in enumerate(zip(frames, stamps, exposures)):
+                send(self.request, FRAME, frame_payload(sequence, index, exposure, stamp, image))
             send(self.request, END, json.dumps({"sequence": sequence, "frames": len(frames)}).encode())
             sequence += 1

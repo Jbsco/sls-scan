@@ -54,8 +54,13 @@ PLATE_LIMIT_M = 0.0002
 
 
 def read_scan(directory: str) -> dict:
-    """Read a view written with the file names of slscan patterns: gray_*.png and phase_*.png."""
+    """Read a view written with the file names of slscan patterns: gray_*.png and phase_*.png,
+    or a view at several exposures as exposure_*/ directories of them, as {"exposures": views}."""
     import cv2
+
+    levels = sorted(glob.glob(os.path.join(directory, "exposure_*")))
+    if levels:
+        return {"exposures": [read_scan(level) for level in levels]}
 
     def stack(name):
         files = sorted(glob.glob(os.path.join(directory, f"{name}_*.png")))
@@ -73,8 +78,12 @@ def write_scan(directory: str, captures: dict) -> None:
 def cmd_scan(args: argparse.Namespace) -> int:
     cal = calibrate.load(args.calibration)
     view = read_scan(args.view)
-    columns, mask = decode.decode_columns(view["gray"], view["phase"], cal.projector.width,
-                                          args.pitch)
+    if "exposures" in view:
+        columns, mask = decode.decode_exposures(view["exposures"], cal.projector.width,
+                                                args.pitch)
+    else:
+        columns, mask = decode.decode_columns(view["gray"], view["phase"], cal.projector.width,
+                                              args.pitch)
     points, _ = triangulate.triangulate(columns, mask, cal)
     geometry.write_ply(args.out, points)
     print(f"{len(points)} points written to {args.out}")
@@ -311,10 +320,43 @@ def cmd_node_sim(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_hdr_bench(args: argparse.Namespace) -> int:
+    """Scan the strip plate with true calibration at each set of exposures and report, per
+    strip, the share of its lit pixels decoded and the RMS residual of its points from
+    their own plane, then the residual of the whole plate. It passes when the last set
+    decodes 99% of every strip."""
+    rig = synthetic.reference_rig()
+    cal = synthetic.true_calibration(rig, HEADS["reference"][2])
+    scene = synthetic.strip_scenes()["strips"]
+    sv = synthetic.scene_view(rig, scene)
+    albedo, lit = sv.albedo.reshape(sv.shape), sv.lit.reshape(sv.shape)
+    covered = False
+    for text in args.exposures.split(";"):
+        exposures = [float(x) for x in text.split(",")]
+        views = synthetic.exposure_captures(rig, scene, exposures, args.pitch, seed=args.seed)
+        columns, mask = decode.decode_exposures(views, rig.projector.width, args.pitch)
+        points, pixels = triangulate.triangulate(columns, mask, cal)
+        at = pixels.astype(np.int64)
+        parts = []
+        covered = True
+        for name, value in (("dark", 0.04), ("middle", 0.8), ("bright", 2.5)):
+            region = lit & np.isclose(albedo, value)
+            share = np.count_nonzero(mask & region) / np.count_nonzero(region)
+            covered &= share >= 0.99
+            mine = points[region[at[:, 1], at[:, 0]]]
+            rms = f", {1e6 * geometry.fit_plane(mine)[2]:.0f} µm" if len(mine) >= 100 else ""
+            parts.append(f"{name} {100.0 * share:.1f}%{rms}")
+        whole = geometry.fit_plane(points)[2]
+        print(f"exposures {text}: " + ", ".join(parts) + f"; plate {1e6 * whole:.0f} µm RMS")
+    return 0 if covered else 1
+
+
 def cmd_capture(args: argparse.Namespace) -> int:
     host, port = args.node.rsplit(":", 1)
+    exposures = [float(x) for x in args.exposures.split(",")] if args.exposures else None
     result = node.capture(host, int(port), args.set, args.out, args.pitch, args.steps,
-                          wait=args.wait, frames=args.frames, dark_every=args.dark_every)
+                          wait=args.wait, frames=args.frames, dark_every=args.dark_every,
+                          exposures=exposures)
     print(f"{result['frames']} frames from {result['node']['node']} written to {args.out}")
     if result["missing"] or not result["in_order"]:
         print(f"missing frames {result['missing']}, in order: {result['in_order']}")
@@ -328,7 +370,8 @@ def cmd_decode_vectors(args: argparse.Namespace) -> int:
 
     rig = synthetic.reference_rig()
     captures, _ = synthetic.scan_captures(rig, synthetic.acceptance_scenes()[args.scene],
-                                          pitch=args.pitch, seed=args.seed)
+                                          pitch=args.pitch, seed=args.seed,
+                                          exposure=args.exposure)
     columns, mask = decode.decode_columns(captures["gray"], captures["phase"],
                                           rig.projector.width, args.pitch)
     os.makedirs(args.out, exist_ok=True)
@@ -1287,6 +1330,8 @@ def main(argv=None) -> int:
     p.add_argument("--scene", choices=sorted(synthetic.acceptance_scenes()), default="plate")
     p.add_argument("--pitch", type=int, default=16)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--exposure", type=float, default=1.0,
+                   help="exposure relative to the nominal one; 4 saturates the plate")
     p.set_defaults(func=cmd_decode_vectors)
 
     p = sub.add_parser("depth-params",
@@ -1414,9 +1459,18 @@ def main(argv=None) -> int:
     p = sub.add_parser("node-sim", help="run a stand-in capture node serving synthetic frames")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=5600)
-    p.add_argument("--scene", choices=sorted(synthetic.acceptance_scenes()), default="plate")
+    p.add_argument("--scene", choices=sorted({**synthetic.acceptance_scenes(),
+                                              **synthetic.strip_scenes()}), default="plate")
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_node_sim)
+
+    p = sub.add_parser("hdr-bench", help="scan a plate of dark, middle and bright strips at "
+                                         "sets of exposures")
+    p.add_argument("--exposures", default="1;0.25,1,4;0.25,1,4,16",
+                   help="sets of exposures, sets separated by ; and exposures by ,")
+    p.add_argument("--pitch", type=int, default=16)
+    p.add_argument("--seed", type=int, default=0)
+    p.set_defaults(func=cmd_hdr_bench)
 
     p = sub.add_parser("capture", help="run one pattern sequence on a capture node and save it")
     p.add_argument("--node", default="127.0.0.1:5600", help="host:port of the capture node")
@@ -1427,6 +1481,8 @@ def main(argv=None) -> int:
                    help="take every this many-th stereo pair with the pattern light off")
     p.add_argument("--pitch", type=int, default=32)
     p.add_argument("--steps", type=int, default=4)
+    p.add_argument("--exposures", help="a scan set at these exposures relative to the nominal "
+                                       "one, comma separated")
     p.add_argument("--wait", type=float, default=0.0, help="seconds to retry while the node starts")
     p.add_argument("--out", default="data/view")
     p.set_defaults(func=cmd_capture)

@@ -44,6 +44,35 @@ def test_scan_sequence_over_the_protocol(stand_in, tmp_path, rig, spec):
     assert geometry.fit_plane(points)[2] < 0.0001
 
 
+def test_pattern_names_take_each_pattern_at_every_exposure():
+    names = node.pattern_names("scan", 1024, 768, 4, exposures=3)
+    assert names[:4] == ["exposure_000/gray_000", "exposure_001/gray_000",
+                         "exposure_002/gray_000", "exposure_000/gray_001"]
+    assert names[-1] == "exposure_002/phase_003" and len(names) == 72
+
+
+def test_scan_at_several_exposures_over_the_protocol(tmp_path, rig, spec):
+    server = node.StandIn(("127.0.0.1", 0), scene="strips")
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        host, port = server.server_address
+        result = node.capture(host, port, "scan", str(tmp_path / "strips"), pitch=16,
+                              exposures=[0.25, 1.0, 4.0, 16.0])
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert result["missing"] == [] and result["in_order"]
+    view = cli.read_scan(str(tmp_path / "strips"))
+    assert len(view["exposures"]) == 4
+    columns, mask = decode.decode_exposures(view["exposures"], rig.projector.width, 16)
+    single, single_mask = decode.decode_columns(view["exposures"][1]["gray"],
+                                                view["exposures"][1]["phase"],
+                                                rig.projector.width, 16)
+    assert np.count_nonzero(mask) > 1.4 * np.count_nonzero(single_mask)
+    points, _ = triangulate.triangulate(columns, mask, synthetic.true_calibration(rig, spec))
+    assert geometry.fit_plane(points)[2] < 0.0001
+
+
 def test_calibration_sequence_writes_a_pose(stand_in, tmp_path):
     host, port = stand_in
     result = node.capture(host, port, "calibration", str(tmp_path / "pose_000"))
