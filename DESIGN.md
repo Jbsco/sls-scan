@@ -1635,3 +1635,23 @@ recovered from board views, whose camera and projector fit k2 of -0.11 and -0.40
 columns, 521,793 points matched within 0.1 nm in 23 to 39 ms on 16 threads. From the
 GPU decode they matched within 0.154 µm, with every pixel kept by both, on the Radeon and
 on llvmpipe.
+
+## D83. Phase-shift scans from the application (2026-11-04)
+
+`sls-scan scan` asks a node for a scan set at the pitch and steps that
+`slscan scan-params` wrote, decodes it on the GPU and triangulates it into a PLY file.
+With `--save` it also writes the frames in the layout `slscan scan` reads. On the
+stand-in's plate at 1 m, the application and `slscan scan` gave the same 521,793 points
+from the same frames, within 0.12 µm, which float vertices in PLY explain. Decode took
+21 to 32 ms and triangulation 39 to 43 ms on the Radeon and 16 threads.
+
+That plate's flatness follows the calibration. With six stand-in board poses solved
+through the application it measured 0.471 mm RMS, and with twelve 0.170 mm, against
+the Phase 2 limit of 0.2 mm. The gate keeps six poses for time and checks this scan
+against a 1 mm limit, and `scan-check` compares its points with NumPy.
+
+In the window, a scan set run with a scan parameter file decodes and triangulates on a
+thread of its own once its last frame arrives. Its points replace the scene's model, and
+"Save points" writes them as PLY. The scene draws at most 20,000 points, every so many
+of a larger cloud, since a scan at 1280 × 960 has about half a million. No automated test
+drives the window. The functions it calls are those of `sls-scan scan` and its gate run.
