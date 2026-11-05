@@ -1810,3 +1810,29 @@ differed at all, by at most 4.7 × 10⁻⁷ nm. NumPy forms the plane products t
 likely to sum them in another order, so the check allows 10 nm. Skipping the projector's
 undistortion moved points by up to 0.82 mm, and one refinement of the plane in place of
 three by up to 0.43 mm. `ref.do` runs this check after the decode checks.
+
+## D92. A third camera against occlusion, measured (2026-11-05)
+
+`slscan occlusion-bench` measures how much of a slot the near head can see in one view.
+A pair of cameras counts a surface point when both cameras and the pattern light see it,
+inside their images and within 75° of its normal. `slscan/occlusion.py` ray-casts this
+against the scene with no matching, so it measures geometry alone. The slot is 20 mm
+wide, cut across the baseline into a flat top at 0.5 m.
+
+| Slot depth | Floor, pair alone | Floor, third camera 0.1 m above the light | Floor, third camera 0.05 m beside it |
+|---|---|---|---|
+| 10 mm | 80.0% | 100.0% | 95.0% |
+| 20 mm | 65.0% | 100.0% | 92.5% |
+| 40 mm | 30.0% | 100.0% | 85.0% |
+
+The pair loses the floor beside each wall, where one camera cannot see past it. A third
+camera above or below the light sees the whole floor with the left or right camera,
+over a baseline of 0.141 m against 0.2 m. Depth noise scales with 1/b, so those pairs
+would read 1.41 times noisier. Each wall stays visible to one camera only, so all
+surfaces gain less: 66.4% to 71.4% at 20 mm deep.
+
+A slot along the baseline loses none of its floor to the pair at these depths. Turning
+the head a quarter turn therefore reaches the same floor in a second view, and a
+continuous sweep does so as it moves. This is a measurement for the rig of Phase 8, not
+a choice of it. A third camera adds a capture channel and matching for two more pairs
+per frame.
