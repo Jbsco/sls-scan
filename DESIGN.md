@@ -1695,3 +1695,25 @@ so `cargo test` alone does not need the stand-in.
 On the stand-in, the window saved 521,793 points equal to the headless scan's, and the
 test took 0.7 s after calibration. This closes the gap D83 left, where no test drove
 the window.
+
+## D86. Exposures for phase-shift scans (2026-11-04)
+
+Decode now drops a pixel when any of its phase samples reaches 255, in NumPy and in the
+GPU kernel. A clipped sinusoid keeps its modulation and decodes to a wrong column: on a
+strip of albedo 2.5 at the nominal exposure every pixel decoded, and its points lay
+0.724 mm RMS from their plane. `slscan decode-vectors --exposure 4` renders the plate
+saturated, and the gate compares the kernel with NumPy on it. The earlier kernel
+disagreed with NumPy on 40% of its pixels there.
+
+A scan request may now list exposures relative to the node's nominal one. The node takes
+each pattern at every exposure before the next pattern, so the projector changes pattern
+once per pattern, and the frame header's exposure field gives the index.
+`decode.decode_exposures` gives each pixel the exposure with the largest phase modulation
+among those where it decoded. Modulation grows with exposure, so this is the longest
+exposure that does not saturate there, and it needs no exposure values. `slscan scan`
+decodes a view of `exposure_` directories this way.
+
+`slscan hdr-bench` scans the acceptance plate as dark, middle and bright strips. One
+exposure decodes only the middle strip. Exposures of 0.25, 1, 4 and 16 decode all
+three, the dark strip at 68 µm RMS, and the whole plate at 61 µm RMS against 51 µm for
+the middle strip alone. The application takes these scans next.
