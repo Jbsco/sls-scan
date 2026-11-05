@@ -163,6 +163,10 @@ white balance, and `slscan scan --white` divides by it so a white surface reads 
 every channel. `geometry.write_ply` keeps red, green and blue bytes per vertex, which
 `read_ply_colors` reads back.
 
+`slscan scan-params --color --white` puts the fields and the white balance into the
+application's scan parameters, and `sls-scan scan` and the window then color their
+points the same way (D89).
+
 ## Triangulate
 
 Each pixel's ray comes from the camera matrix and distortion, each column's plane from

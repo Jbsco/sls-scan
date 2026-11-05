@@ -67,7 +67,9 @@ scan parameter file (D87).
 
 A scan request may set `color`. The node then ends the set with the camera under the
 projector's black field and its full red, green and blue fields, saved as `color/black.png`,
-`color/red.png`, `color/green.png` and `color/blue.png` (D88).
+`color/red.png`, `color/green.png` and `color/blue.png` (D88). The application requests
+them when its scan parameters say so, and `sls-scan capture --color true` asks for them
+(D89).
 
 Pattern order follows the capture layouts of `docs/pipeline.md`. A scan set is the
 column Gray codes with their inverses, then the phase shifts (`gray_000` onward, then
