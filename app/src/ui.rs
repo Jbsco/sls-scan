@@ -1025,3 +1025,72 @@ impl eframe::App for ScanApp {
         egui::CentralPanel::default().show_inside(ui, |ui| self.preview(ui));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+    use egui_kittest::Harness;
+    use std::time::Instant;
+
+    /// Run a scan set from the stand-in at `SLS_WINDOW_NODE` through the window with the
+    /// scan parameters at `SLS_WINDOW_SCAN_PARAMS`, save its points to `SLS_WINDOW_OUT`
+    /// and compare them with `sls-scan scan`'s points at `SLS_WINDOW_REFERENCE`. Skipped
+    /// unless `SLS_WINDOW_NODE` is set, as the application gate sets it.
+    #[test]
+    fn window_scan_matches_the_headless_scan() -> Result<(), String> {
+        let Ok(node) = std::env::var("SLS_WINDOW_NODE") else {
+            return Ok(());
+        };
+        let var = |name: &str| std::env::var(name).map_err(|_| format!("{name} not set"));
+        let (params, out, reference) = (
+            var("SLS_WINDOW_SCAN_PARAMS")?,
+            var("SLS_WINDOW_OUT")?,
+            var("SLS_WINDOW_REFERENCE")?,
+        );
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1600.0, 1200.0))
+            .build_eframe(|_| ScanApp::default());
+        {
+            let app = harness.state_mut();
+            app.node = node;
+            app.scan_params_path = params;
+            app.points_path = out.clone();
+        }
+        harness.run_steps(2);
+        harness.get_by_label("Run sequence").click();
+        let start = Instant::now();
+        loop {
+            harness.run_steps(1);
+            let app = harness.state();
+            if !app.busy() && !app.cloud.is_empty() {
+                break;
+            }
+            if start.elapsed() > Duration::from_secs(180) {
+                return Err(format!(
+                    "no scan after 180 s: {}, {}",
+                    app.status, app.scan_status
+                ));
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        harness.get_by_label("Save points").click();
+        harness.run_steps(2);
+        let saved = crate::register::read_ply(Path::new(&out)).map_err(|e| e.to_string())?;
+        let expected =
+            crate::register::read_ply(Path::new(&reference)).map_err(|e| e.to_string())?;
+        println!(
+            "window scan: {} points, {}",
+            saved.len(),
+            harness.state().scan_status
+        );
+        if saved != expected {
+            return Err(format!(
+                "window saved {} points, headless scan {}",
+                saved.len(),
+                expected.len()
+            ));
+        }
+        Ok(())
+    }
+}
