@@ -1776,3 +1776,22 @@ with `sls-scan capture --color true` and wrote its balance into the scan paramet
 scan then landed within 0.12 µm of `slscan scan --white` on the same frames, with no
 color byte differing. Each strip read 204 in its own channel and 51 in the others. The
 gate colors its strip scan and checks the color vectors.
+
+## D90. A Haskell reference of the decode (2026-11-05)
+
+`ref/` contains a second implementation of the decode of D16 and D86 in Haskell, as the
+reference core of D11 proposed. It decodes each pixel from the Gray code and phase
+stacks with NumPy's arithmetic in the same order: sums from the first sample, the
+wrapped phase as `np.mod` gives it, `hypot` from the C library, and rounding half to
+even. `sls-ref decode-check` compares its columns and masks with the vectors of
+`slscan decode-vectors`, which the GPU kernel already matches (D22).
+
+On the plate, the sphere and the strip plate, whose bright strip saturates and whose
+dark strip lacks modulation, no mask differed and every shared column was equal to the
+last bit of a float. Truncating in place of rounding made 259,279 masks differ, and
+dropping the saturation rule made 151,187 differ.
+
+It builds from GHC's own libraries, `base`, `bytestring`, `array` and `filepath`, so any
+GHC installation runs it. `ref.do` builds it and runs the check in `verify.do`, and
+skips without GHC. Continuous integration does not install GHC yet. Triangulation is
+the next part of the reference.
