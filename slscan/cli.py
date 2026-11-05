@@ -393,7 +393,9 @@ def cmd_scan_params(args: argparse.Namespace) -> int:
     """Write a calibration and decode settings as JSON for the application's scans."""
     import json
 
-    params = triangulate.scan_params(calibrate.load(args.calibration), args.pitch, args.steps)
+    exposures = [float(x) for x in args.exposures.split(",")] if args.exposures else None
+    params = triangulate.scan_params(calibrate.load(args.calibration), args.pitch, args.steps,
+                                     exposures)
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(params, f, indent=1)
     print(f"scan parameters written to {args.out}")
@@ -409,21 +411,22 @@ def cmd_scan_vectors(args: argparse.Namespace) -> int:
     spec = HEADS["reference"][2]
     cal = calibrate.calibrate(list(synthetic.calibration_views(rig, spec, args.seed)), spec,
                               (rig.projector.width, rig.projector.height))
-    captures, _ = synthetic.scan_captures(rig, synthetic.acceptance_scenes()[args.scene],
-                                          pitch=args.pitch, seed=args.seed)
-    columns, mask = decode.decode_columns(captures["gray"], captures["phase"],
-                                          rig.projector.width, args.pitch)
+    scene = {**synthetic.acceptance_scenes(), **synthetic.strip_scenes()}[args.scene]
+    exposures = [float(x) for x in args.exposures.split(",")] if args.exposures else [1.0]
+    views = synthetic.exposure_captures(rig, scene, exposures, args.pitch, seed=args.seed)
+    columns, mask = decode.decode_exposures(views, rig.projector.width, args.pitch)
     columns = columns.astype("<f4")
     points, pixels = triangulate.triangulate(columns, mask, cal)
     os.makedirs(args.out, exist_ok=True)
-    captures["gray"].tofile(os.path.join(args.out, "gray.bin"))
-    captures["phase"].tofile(os.path.join(args.out, "phase.bin"))
+    np.concatenate([v["gray"] for v in views]).tofile(os.path.join(args.out, "gray.bin"))
+    np.concatenate([v["phase"] for v in views]).tofile(os.path.join(args.out, "phase.bin"))
     columns.tofile(os.path.join(args.out, "columns.bin"))
     mask.astype(np.uint8).tofile(os.path.join(args.out, "mask.bin"))
     points.astype("<f8").tofile(os.path.join(args.out, "points.bin"))
     pixels.astype("<u4").tofile(os.path.join(args.out, "pixels.bin"))
     with open(os.path.join(args.out, "scan.json"), "w", encoding="utf-8") as f:
-        json.dump(triangulate.scan_params(cal, args.pitch, int(captures["phase"].shape[0])), f)
+        json.dump(triangulate.scan_params(cal, args.pitch, int(views[0]["phase"].shape[0]),
+                                          exposures if len(exposures) > 1 else None), f)
     print(f"scan vectors of the {args.scene} scene written to {args.out}: {len(points)} points")
     return 0
 
@@ -1314,13 +1317,17 @@ def main(argv=None) -> int:
     p.add_argument("--calibration", required=True)
     p.add_argument("--pitch", type=int, default=16, help="phase shift pitch in projector pixels")
     p.add_argument("--steps", type=int, default=4, help="phase steps")
+    p.add_argument("--exposures", help="scan at these exposures relative to the nominal one, "
+                                       "comma separated")
     p.add_argument("--out", required=True)
     p.set_defaults(func=cmd_scan_params)
 
     p = sub.add_parser("scan-vectors", help="write a synthetic scan with a recovered calibration "
                                             "and its NumPy decode and points")
     p.add_argument("--out", default="data/scan-vectors")
-    p.add_argument("--scene", choices=sorted(synthetic.acceptance_scenes()), default="plate")
+    p.add_argument("--scene", choices=sorted({**synthetic.acceptance_scenes(),
+                                              **synthetic.strip_scenes()}), default="plate")
+    p.add_argument("--exposures", help="exposures relative to the nominal one, comma separated")
     p.add_argument("--pitch", type=int, default=16)
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_scan_vectors)

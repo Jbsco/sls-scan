@@ -80,6 +80,10 @@ def test_scan_params_command_writes_the_calibration(tmp_path, calibration):
     assert np.allclose(np.reshape(params["rotation"], (3, 3)), calibration.stereo.rotation)
     assert params["decode"]["planes"] == patterns.bit_planes(calibration.projector.width)
     assert params["decode"]["pitch"] == 16
+    assert params["decode"]["exposures"] == []
+    assert cli.main(["scan-params", "--calibration", path, "--exposures", "0.25,1,4",
+                     "--out", str(out)]) == 0
+    assert json.loads(out.read_text())["decode"]["exposures"] == [0.25, 1.0, 4.0]
 
 
 def test_detect_command_counts_corners(tmp_path):
