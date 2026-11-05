@@ -55,12 +55,15 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     ok = ok && column < params.projector_width;
     var num = 0.0;
     var den = 0.0;
+    var saturated = false;
     for (var i = 0u; i < params.steps; i++) {
         let v = phase_at(i * n + p);
+        saturated = saturated || v >= 255.0;
         let angle = TAU * f32(i) / f32(params.steps);
         num += v * sin(angle);
         den += v * cos(angle);
     }
+    ok = ok && !saturated;
     ok = ok && 2.0 / f32(params.steps) * sqrt(num * num + den * den) >= params.min_modulation;
     let negated = -atan2(num, den);
     let wrapped = negated - TAU * floor(negated / TAU);

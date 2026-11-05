@@ -36,6 +36,16 @@ def test_decode_recovers_projector_columns(rig):
     assert np.median(error) < 0.03 and error.max() < 0.3
 
 
+def test_decode_drops_saturated_phase_samples(rig):
+    captures, view = synthetic.scan_captures(rig, [plate()], pitch=PITCH, exposure=4.0)
+    columns, mask = decode.decode_columns(captures["gray"], captures["phase"],
+                                          rig.projector.width, PITCH)
+    saturated = captures["phase"].max(axis=0) >= decode.SATURATED
+    lit = view.lit.reshape(view.shape)
+    assert np.count_nonzero(saturated & lit) > 0.5 * np.count_nonzero(lit)
+    assert not (mask & saturated).any()
+
+
 def test_true_calibration_places_points_on_the_plate(rig, spec):
     p = plate()
     points, *_ = scan(rig, synthetic.true_calibration(rig, spec), [p])
