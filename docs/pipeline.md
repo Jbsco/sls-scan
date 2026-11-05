@@ -220,6 +220,9 @@ decode settings it reads. `sls-scan scan` captures a scan set from a node, decod
 triangulates it, and writes the points as PLY (D83). In the window, a scan set run with
 a scan parameter file shows its points in the scene, and "Save points" writes them.
 
+The application gate runs a scan through the window and compares its points with
+`sls-scan scan` (D85).
+
 Rectification runs in `app/src/rectify.wgsl` from each camera's rectification parameters
 and matches `cv2.remap` within one grey level (D31). Block disparity runs in
 `app/src/coarse.wgsl` and matches `block_disparity_small` (D35). Second-order refinement runs in

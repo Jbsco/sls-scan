@@ -48,6 +48,9 @@ python3 -m slscan.cli scan-params --calibration "$SESSION/calibration.yaml" --pi
     --out "$SESSION/scan.json" >/dev/null
 $RUN scan --node "127.0.0.1:$PORT" --params "$SESSION/scan.json" --wait 30 --out "$SESSION/plate.ply"
 python3 -m slscan.cli measure "$SESSION/plate.ply" --shape plane
+(cd app && SLS_WINDOW_NODE="127.0.0.1:$PORT" SLS_WINDOW_SCAN_PARAMS="$SESSION/scan.json" \
+    SLS_WINDOW_OUT="$SESSION/window.ply" SLS_WINDOW_REFERENCE="$SESSION/plate.ply" \
+    cargo test --locked --quiet --lib window_scan)
 python3 -m slscan.cli decode-vectors --out "$SESSION/vectors" >/dev/null
 $RUN decode-check "$SESSION/vectors"
 python3 -m slscan.cli scan-vectors --out "$SESSION/scan-vectors" >/dev/null

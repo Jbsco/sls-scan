@@ -1681,3 +1681,17 @@ camera and projector calibration now measures the plate at 0.126 mm RMS with six
 and 0.092 mm with twelve. The gate takes twelve poses, 13 s of calibration, and checks
 the scan against the Phase 2 limit of 0.2 mm in place of D83's 1 mm. In the full gate
 run the plate measured 0.088 mm.
+
+## D85. A window scan in the gate (2026-11-04)
+
+The application gate now drives a phase-shift scan through the window. A test in
+`app/src/ui.rs` builds the application in `egui_kittest`, the egui project's test harness,
+added as a development dependency only. It points the window at the stand-in and at the
+gate's scan parameters, clicks "Run sequence" and steps frames until the scan's points
+arrive. It then clicks "Save points" and requires the saved points to equal those of
+`sls-scan scan` on the same plate. It is skipped unless `SLS_WINDOW_NODE` names a node,
+so `cargo test` alone does not need the stand-in.
+
+On the stand-in, the window saved 521,793 points equal to the headless scan's, and the
+test took 0.7 s after calibration. This closes the gap D83 left, where no test drove
+the window.
