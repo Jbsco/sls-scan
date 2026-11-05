@@ -743,6 +743,149 @@ fn decode_check(args: &[String]) -> ExitCode {
     }
 }
 
+/// Capture a phase-shift scan set from a node, decode it on the GPU, triangulate it and
+/// write the points as PLY, with the scan parameters `slscan scan-params` writes.
+fn headless_scan(args: &[String]) -> ExitCode {
+    let mut node = "127.0.0.1:5600".to_owned();
+    let mut wait = Duration::ZERO;
+    let mut params_path: Option<PathBuf> = None;
+    let mut out = PathBuf::from("scan.ply");
+    let mut save: Option<PathBuf> = None;
+    let mut fallback = false;
+    let mut rest = args.iter();
+    while let Some(key) = rest.next() {
+        if key == "--fallback" {
+            fallback = true;
+            continue;
+        }
+        let Some(value) = rest.next() else {
+            eprintln!("{key} takes a value");
+            return ExitCode::FAILURE;
+        };
+        match key.as_str() {
+            "--node" => node.clone_from(value),
+            "--params" => params_path = Some(PathBuf::from(value)),
+            "--out" => out = PathBuf::from(value),
+            "--save" => save = Some(PathBuf::from(value)),
+            "--wait" => match value.parse::<f64>() {
+                Ok(seconds) if seconds >= 0.0 => wait = Duration::from_secs_f64(seconds),
+                _ => {
+                    eprintln!("--wait takes seconds");
+                    return ExitCode::FAILURE;
+                }
+            },
+            _ => {
+                eprintln!("unknown argument {key}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let Some(params_path) = params_path else {
+        eprintln!("usage: sls-scan scan --params <scan.json> [--node host:port] [--wait seconds] [--out points.ply] [--save directory] [--fallback]");
+        return ExitCode::FAILURE;
+    };
+    let params: scan::ScanParams = match std::fs::read(&params_path)
+        .map_err(|e| e.to_string())
+        .and_then(|b| serde_json::from_slice(&b).map_err(|e| e.to_string()))
+    {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("{}: {e}", params_path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let decoder = match gpu::Decoder::new(fallback) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("no GPU adapter: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let request = SequenceRequest {
+        set: "scan".to_owned(),
+        pitch: params.decode.pitch.round() as u32,
+        steps: params.decode.steps,
+        frames: 1,
+        rate_hz: 0,
+        dark_every: 0,
+    };
+    let mut frames = std::collections::HashMap::new();
+    let mut size_ok = true;
+    let captured = client::capture(&node, &request, wait, |event| match event {
+        Event::Connected(hello) => println!("connected to {} at {node}", hello.node),
+        Event::Frame {
+            header,
+            name,
+            pixels,
+        } => {
+            size_ok &= u32::from(header.width) == params.camera.width
+                && u32::from(header.height) == params.camera.height;
+            frames.insert(name, pixels);
+        }
+        _ => {}
+    });
+    if let Err(e) = captured {
+        eprintln!("capture failed: {e}");
+        return ExitCode::FAILURE;
+    }
+    if !size_ok {
+        eprintln!(
+            "frames do not match the calibrated camera of {} × {}",
+            params.camera.width, params.camera.height
+        );
+        return ExitCode::FAILURE;
+    }
+    let Some((gray, phase)) = scan::stacks(&frames, &params.decode) else {
+        eprintln!("the node sent fewer frames than the scan parameters need");
+        return ExitCode::FAILURE;
+    };
+    if let Some(dir) = &save {
+        let mut names: Vec<_> = frames.keys().cloned().collect();
+        names.sort();
+        for name in names {
+            let path = dir.join(format!("{name}.png"));
+            if let Err(e) = std::fs::create_dir_all(dir).and_then(|()| {
+                calibration::write_png(
+                    &path,
+                    params.camera.width,
+                    params.camera.height,
+                    &frames[&name],
+                )
+            }) {
+                eprintln!("{}: {e}", path.display());
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    let start = Instant::now();
+    let (columns, mask) = match decoder.decode(&params.decode_params(), &gray, &phase) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("decode failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let decoded = start.elapsed().as_secs_f64() * 1000.0;
+    let start = Instant::now();
+    let (points, _) = scan::triangulate(&columns, &mask, &params);
+    let triangulated = start.elapsed().as_secs_f64() * 1000.0;
+    if let Err(e) = depth::write_ply(&out, &points) {
+        eprintln!("{}: {e}", out.display());
+        return ExitCode::FAILURE;
+    }
+    println!(
+        "{} points on {}, decoded in {decoded:.1} ms and triangulated in {triangulated:.1} ms, written to {}",
+        points.len(),
+        decoder.adapter,
+        out.display()
+    );
+    if points.is_empty() {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
 /// Triangulate the scan `slscan scan-vectors` wrote from its NumPy columns and from the
 /// GPU decode of its stacks, and compare both with the NumPy points.
 fn scan_check(args: &[String]) -> ExitCode {
@@ -2419,6 +2562,7 @@ fn main() -> ExitCode {
         Some("calibrate") => return headless_calibrate(&args[2..]),
         Some("depth") => return headless_depth(&args[2..]),
         Some("decode-check") => return decode_check(&args[2..]),
+        Some("scan") => return headless_scan(&args[2..]),
         Some("scan-check") => return scan_check(&args[2..]),
         Some("refine-check") => return refine_check(&args[2..]),
         Some("rectify-check") => return rectify_check(&args[2..]),

@@ -5,14 +5,17 @@ use crate::client::{self, Event, Stats};
 use crate::depth::{DepthFrame, DepthResult, DepthSetup};
 use crate::fuse::{self, Fusion, Vec3};
 use crate::protocol::{FrameHeader, Hello, Projector, SequenceRequest};
-use crate::{mesh, tsdf};
+use crate::scan::{self, ScanParams};
+use crate::{depth, gpu, mesh, tsdf};
 use eframe::egui;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::Duration;
 
 type StereoDetection = Result<(Detection, Detection), String>;
+type ScanResult = Result<(Vec<[f64; 3]>, String), String>;
 
 enum CalibrationEvent {
     Pose(String, Result<Detection, String>, Projector),
@@ -36,6 +39,8 @@ const FUSION_VOXEL_M: f64 = 0.0005;
 /// With reference dots on, every this many-th stereo pair is taken with the pattern
 /// light off (`DESIGN.md` D77).
 const DARK_EVERY: u32 = 4;
+/// Points drawn in the scene at most, every so many of a larger cloud.
+const MAX_DRAWN: usize = 20_000;
 
 enum DepthJob {
     Pair(Vec<u8>, Vec<u8>),
@@ -102,6 +107,12 @@ pub struct ScanApp {
     mesh_faces: u32,
     export: Option<Receiver<Result<(usize, usize), String>>>,
     export_status: String,
+    scan_params_path: String,
+    scan_params: Option<ScanParams>,
+    scan_frames: HashMap<String, Vec<u8>>,
+    scan_job: Option<Receiver<ScanResult>>,
+    scan_status: String,
+    points_path: String,
 }
 
 impl Default for ScanApp {
@@ -142,6 +153,12 @@ impl Default for ScanApp {
             mesh_faces: 0,
             export: None,
             export_status: String::new(),
+            scan_params_path: "data/scan.json".to_owned(),
+            scan_params: None,
+            scan_frames: HashMap::new(),
+            scan_job: None,
+            scan_status: String::new(),
+            points_path: "data/scan.ply".to_owned(),
         }
     }
 }
@@ -266,6 +283,25 @@ impl ScanApp {
         }
         self.cloud.clear();
         self.fusion_status.clear();
+        self.scan_frames.clear();
+        self.scan_params = None;
+        self.scan_status.clear();
+        if self.set == "scan" {
+            match std::fs::read(&self.scan_params_path)
+                .map_err(|e| e.to_string())
+                .and_then(|b| serde_json::from_slice::<ScanParams>(&b).map_err(|e| e.to_string()))
+            {
+                Ok(params) => {
+                    self.pitch = params.decode.pitch.round() as u32;
+                    self.steps = params.decode.steps;
+                    self.scan_params = Some(params);
+                }
+                Err(e) => {
+                    self.scan_status =
+                        format!("frames only, no points: {}: {e}", self.scan_params_path);
+                }
+            }
+        }
         let (tx, rx) = mpsc::channel();
         let node = self.node.clone();
         let request = SequenceRequest {
@@ -294,7 +330,65 @@ impl ScanApp {
     }
 
     fn busy(&self) -> bool {
-        self.events.is_some() || self.calibration_events.is_some()
+        self.events.is_some() || self.calibration_events.is_some() || self.scan_job.is_some()
+    }
+
+    /// Decode and triangulate the scan set just received on a thread of its own, with a
+    /// device made for it.
+    fn start_scan(&mut self, ctx: &egui::Context) {
+        let Some(params) = self.scan_params.clone() else {
+            return;
+        };
+        let Some((gray, phase)) = scan::stacks(&self.scan_frames, &params.decode) else {
+            self.scan_status = "the node sent fewer frames than the scan parameters need".into();
+            return;
+        };
+        self.scan_frames.clear();
+        let (tx, rx) = mpsc::channel();
+        let repaint = ctx.clone();
+        thread::spawn(move || {
+            let result = gpu::Decoder::new(false).and_then(|decoder| {
+                let start = std::time::Instant::now();
+                let (columns, mask) = decoder.decode(&params.decode_params(), &gray, &phase)?;
+                let decoded = start.elapsed().as_secs_f64() * 1000.0;
+                let start = std::time::Instant::now();
+                let (points, _) = scan::triangulate(&columns, &mask, &params);
+                let note = format!(
+                    "{} points, decoded in {decoded:.0} ms and triangulated in {:.0} ms",
+                    points.len(),
+                    start.elapsed().as_secs_f64() * 1000.0
+                );
+                Ok((points, note))
+            });
+            let _ = tx.send(result);
+            repaint.request_repaint();
+        });
+        self.scan_job = Some(rx);
+        self.scan_status = "decoding the scan".to_owned();
+    }
+
+    fn poll_scan(&mut self) {
+        let Some(rx) = &self.scan_job else {
+            return;
+        };
+        if let Ok(result) = rx.try_recv() {
+            match result {
+                Ok((points, note)) => {
+                    self.cloud = points;
+                    self.scan_status = note;
+                }
+                Err(e) => self.scan_status = format!("scan failed: {e}"),
+            }
+            self.scan_job = None;
+        }
+    }
+
+    fn save_points(&mut self) {
+        let path = PathBuf::from(&self.points_path);
+        self.scan_status = match depth::write_ply(&path, &self.cloud) {
+            Ok(()) => format!("{} points written to {}", self.cloud.len(), path.display()),
+            Err(e) => format!("{}: {e}", path.display()),
+        };
     }
 
     fn capture_stereo_pose(&mut self, ctx: &egui::Context) {
@@ -668,6 +762,8 @@ impl ScanApp {
                     self.frames += 1;
                     if self.set == "stereo" {
                         self.pair_frame(&name, pixels);
+                    } else if self.set == "scan" && self.scan_params.is_some() {
+                        self.scan_frames.insert(name.clone(), pixels);
                     }
                     self.last = Some((name, header));
                 }
@@ -675,6 +771,9 @@ impl ScanApp {
                     self.status = format!("finished, {} frames", stats.frames);
                     self.stats = Some(stats);
                     done = true;
+                    if self.set == "scan" {
+                        self.start_scan(ctx);
+                    }
                 }
                 Event::Failed(message) => {
                     self.status = format!("failed: {message}");
@@ -705,6 +804,11 @@ impl ScanApp {
             ui.text_edit_singleline(&mut self.params_path);
             ui.checkbox(&mut self.dots, "Reference dots (smooth panels)")
                 .on_hover_text("Take every 4th pair with the pattern light off and track from the dots seen in it");
+        }
+        if self.set == "scan" {
+            ui.label("Scan parameters")
+                .on_hover_text("Written by slscan scan-params from a camera and projector calibration; their pitch and steps replace the ones below");
+            ui.text_edit_singleline(&mut self.scan_params_path);
         }
         ui.add(
             egui::DragValue::new(&mut self.pitch)
@@ -768,6 +872,9 @@ impl ScanApp {
         if !self.fusion_status.is_empty() {
             ui.label(&self.fusion_status);
         }
+        if !self.scan_status.is_empty() {
+            ui.label(&self.scan_status);
+        }
         if let Some(texture) = &self.preview {
             ui.add(egui::Image::new(texture).shrink_to_fit());
         }
@@ -826,7 +933,8 @@ impl ScanApp {
         }
     }
 
-    /// Draw the fused model from the front, shaded by depth, and export it as a mesh.
+    /// Draw the fused model or the last scan from the front, shaded by depth, export the
+    /// model as a mesh and save the points.
     fn scene(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.heading("Scene");
         ui.horizontal(|ui| {
@@ -855,6 +963,16 @@ impl ScanApp {
         if !self.export_status.is_empty() {
             ui.label(&self.export_status);
         }
+        ui.horizontal(|ui| {
+            ui.label("Points");
+            ui.text_edit_singleline(&mut self.points_path);
+        });
+        if ui
+            .add_enabled(!self.cloud.is_empty(), egui::Button::new("Save points"))
+            .clicked()
+        {
+            self.save_points();
+        }
         if self.cloud.is_empty() {
             ui.label("No model yet.");
             return;
@@ -878,7 +996,8 @@ impl ScanApp {
         let rect = response.rect.shrink(4.0);
         let span = [0, 1, 2].map(|i| (hi[i] - lo[i]).max(1e-9));
         let scale = (f64::from(rect.width()) / span[0]).min(f64::from(rect.height()) / span[1]);
-        for p in &self.cloud {
+        let stride = self.cloud.len().div_ceil(MAX_DRAWN).max(1);
+        for p in self.cloud.iter().step_by(stride) {
             let x = rect.left() + ((p[0] - lo[0]) * scale) as f32;
             let y = rect.top() + ((p[1] - lo[1]) * scale) as f32;
             let shade = (255.0 - 160.0 * (p[2] - lo[2]) / span[2]) as u8;
@@ -894,6 +1013,7 @@ impl eframe::App for ScanApp {
         self.poll_calibration();
         self.poll_depth();
         self.poll_export();
+        self.poll_scan();
         egui::Panel::left("configuration")
             .default_size(300.0)
             .show_inside(ui, |ui| {

@@ -4,6 +4,7 @@
 use crate::fuse::chunked;
 use crate::gpu::DecodeParams;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 /// A pinhole device as `slscan scan-params` writes it: size, row-major matrix and the
 /// distortion coefficients k1, k2, p1, p2, k3.
@@ -86,6 +87,25 @@ impl Device {
         let yd = y * radial + p1 * (r2 + 2.0 * y * y) + 2.0 * p2 * x * y;
         (m[0] * xd + m[2], m[4] * yd + m[5])
     }
+}
+
+/// The Gray code and phase stacks of a scan set's frames, keyed by capture name, in the
+/// plane-major layout the decode kernel takes, or none when a frame is missing.
+pub fn stacks(
+    frames: &HashMap<String, Vec<u8>>,
+    decode: &DecodeSettings,
+) -> Option<(Vec<u8>, Vec<u8>)> {
+    let stack = |prefix: &str, n: u32| -> Option<Vec<u8>> {
+        let mut bytes = Vec::new();
+        for i in 0..n {
+            bytes.extend_from_slice(frames.get(&format!("{prefix}_{i:03}"))?);
+        }
+        Some(bytes)
+    };
+    Some((
+        stack("gray", 2 * decode.planes)?,
+        stack("phase", decode.steps)?,
+    ))
 }
 
 fn point_of(params: &ScanParams, x: usize, y: usize, column: f64) -> Option<[f64; 3]> {
