@@ -54,8 +54,13 @@ PLATE_LIMIT_M = 0.0002
 
 
 def read_scan(directory: str) -> dict:
-    """Read a view written with the file names of slscan patterns: gray_*.png and phase_*.png."""
+    """Read a view written with the file names of slscan patterns: gray_*.png and phase_*.png,
+    or a view at several exposures as exposure_*/ directories of them, as {"exposures": views}."""
     import cv2
+
+    levels = sorted(glob.glob(os.path.join(directory, "exposure_*")))
+    if levels:
+        return {"exposures": [read_scan(level) for level in levels]}
 
     def stack(name):
         files = sorted(glob.glob(os.path.join(directory, f"{name}_*.png")))
@@ -73,8 +78,12 @@ def write_scan(directory: str, captures: dict) -> None:
 def cmd_scan(args: argparse.Namespace) -> int:
     cal = calibrate.load(args.calibration)
     view = read_scan(args.view)
-    columns, mask = decode.decode_columns(view["gray"], view["phase"], cal.projector.width,
-                                          args.pitch)
+    if "exposures" in view:
+        columns, mask = decode.decode_exposures(view["exposures"], cal.projector.width,
+                                                args.pitch)
+    else:
+        columns, mask = decode.decode_columns(view["gray"], view["phase"], cal.projector.width,
+                                              args.pitch)
     points, _ = triangulate.triangulate(columns, mask, cal)
     geometry.write_ply(args.out, points)
     print(f"{len(points)} points written to {args.out}")
