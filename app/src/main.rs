@@ -9,6 +9,7 @@ use slscan_app::protocol::SequenceRequest;
 use slscan_app::rectify;
 use slscan_app::refine;
 use slscan_app::register;
+use slscan_app::scan;
 use slscan_app::tsdf;
 use slscan_app::ui::ScanApp;
 use std::path::{Path, PathBuf};
@@ -738,6 +739,135 @@ fn decode_check(args: &[String]) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         println!("decode check: GPU differs from the NumPy reference");
+        ExitCode::FAILURE
+    }
+}
+
+/// Triangulate the scan `slscan scan-vectors` wrote from its NumPy columns and from the
+/// GPU decode of its stacks, and compare both with the NumPy points.
+fn scan_check(args: &[String]) -> ExitCode {
+    let Some(dir) = args.first().map(PathBuf::from) else {
+        eprintln!("usage: sls-scan scan-check <vector directory> [--fallback]");
+        return ExitCode::FAILURE;
+    };
+    let fallback = args.iter().any(|a| a == "--fallback");
+    let read = |name: &str| std::fs::read(dir.join(name));
+    let (Ok(json), Ok(gray), Ok(phase), Ok(columns), Ok(mask), Ok(points), Ok(pixels)) = (
+        read("scan.json"),
+        read("gray.bin"),
+        read("phase.bin"),
+        read("columns.bin"),
+        read("mask.bin"),
+        read("points.bin"),
+        read("pixels.bin"),
+    ) else {
+        eprintln!("scan vectors missing in {}", dir.display());
+        return ExitCode::FAILURE;
+    };
+    let params: scan::ScanParams = match serde_json::from_slice(&json) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("scan.json: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let columns: Vec<f32> = columns
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    let mask: Vec<bool> = mask.iter().map(|&m| m != 0).collect();
+    let reference: Vec<[f64; 3]> = points
+        .chunks_exact(24)
+        .map(|b| {
+            let f = |k: usize| {
+                let mut w = [0u8; 8];
+                w.copy_from_slice(&b[8 * k..8 * k + 8]);
+                f64::from_le_bytes(w)
+            };
+            [f(0), f(1), f(2)]
+        })
+        .collect();
+    let reference_pixels: Vec<[u32; 2]> = pixels
+        .chunks_exact(8)
+        .map(|b| {
+            [
+                u32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+                u32::from_le_bytes([b[4], b[5], b[6], b[7]]),
+            ]
+        })
+        .collect();
+    let start = Instant::now();
+    let (found, found_pixels) = scan::triangulate(&columns, &mask, &params);
+    let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+    if found_pixels != reference_pixels {
+        println!(
+            "scan check: {} points from NumPy columns where NumPy kept {}",
+            found.len(),
+            reference.len()
+        );
+        return ExitCode::FAILURE;
+    }
+    let largest = |a: &[[f64; 3]], b: &[[f64; 3]]| {
+        a.iter()
+            .zip(b)
+            .map(|(p, q)| {
+                ((p[0] - q[0]).powi(2) + (p[1] - q[1]).powi(2) + (p[2] - q[2]).powi(2)).sqrt()
+            })
+            .fold(0.0f64, f64::max)
+    };
+    let exact = largest(&found, &reference);
+    println!(
+        "{} points triangulated from NumPy columns in {elapsed:.1} ms, largest difference {:.4} µm",
+        found.len(),
+        1e6 * exact
+    );
+    let mut ok = exact < 1e-8;
+    match gpu::Decoder::new(fallback) {
+        Ok(decoder) => match decoder.decode(&params.decode_params(), &gray, &phase) {
+            Ok((decoded, decoded_mask)) => {
+                let start = Instant::now();
+                let (gpu_points, gpu_pixels) = scan::triangulate(&decoded, &decoded_mask, &params);
+                let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+                let index: std::collections::HashMap<[u32; 2], usize> = reference_pixels
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| (*p, i))
+                    .collect();
+                let mut shared = 0usize;
+                let mut worst = 0.0f64;
+                for (p, px) in gpu_points.iter().zip(&gpu_pixels) {
+                    if let Some(&i) = index.get(px) {
+                        shared += 1;
+                        worst = worst.max(largest(&[*p], &[reference[i]]));
+                    }
+                }
+                let missing = reference.len() - shared + (gpu_points.len() - shared);
+                println!(
+                    "adapter {}: {} points from the GPU decode in {elapsed:.1} ms, {missing} not shared with NumPy, largest difference {:.4} µm",
+                    decoder.adapter,
+                    gpu_points.len(),
+                    1e6 * worst
+                );
+                ok &= worst < 1e-6 && missing as f64 <= 1e-4 * reference.len() as f64;
+            }
+            Err(e) => {
+                eprintln!("decode failed: {e}");
+                return ExitCode::FAILURE;
+            }
+        },
+        Err(e) if std::env::var_os("SLS_REQUIRE_GPU").is_none() => {
+            println!("no GPU adapter, GPU decode skipped: {e}");
+        }
+        Err(e) => {
+            eprintln!("no GPU adapter: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
+    if ok {
+        println!("scan check: triangulation matches the NumPy reference");
+        ExitCode::SUCCESS
+    } else {
+        println!("scan check: triangulation differs from the NumPy reference");
         ExitCode::FAILURE
     }
 }
@@ -2289,6 +2419,7 @@ fn main() -> ExitCode {
         Some("calibrate") => return headless_calibrate(&args[2..]),
         Some("depth") => return headless_depth(&args[2..]),
         Some("decode-check") => return decode_check(&args[2..]),
+        Some("scan-check") => return scan_check(&args[2..]),
         Some("refine-check") => return refine_check(&args[2..]),
         Some("rectify-check") => return rectify_check(&args[2..]),
         Some("dot-check") => return dot_check(&args[2..]),
