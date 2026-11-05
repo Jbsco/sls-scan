@@ -311,6 +311,12 @@ impl ScanApp {
             frames: if stereo { self.stereo_frames } else { 1 },
             rate_hz: 0,
             dark_every: if stereo && self.dots { DARK_EVERY } else { 0 },
+            exposures: self
+                .scan_params
+                .as_ref()
+                .filter(|_| self.set == "scan")
+                .map(|p| p.decode.exposures.clone())
+                .unwrap_or_default(),
         };
         let repaint = ctx.clone();
         thread::spawn(move || {
@@ -339,7 +345,7 @@ impl ScanApp {
         let Some(params) = self.scan_params.clone() else {
             return;
         };
-        let Some((gray, phase)) = scan::stacks(&self.scan_frames, &params.decode) else {
+        let Some(stacks) = scan::stacks(&self.scan_frames, &params.decode) else {
             self.scan_status = "the node sent fewer frames than the scan parameters need".into();
             return;
         };
@@ -349,7 +355,7 @@ impl ScanApp {
         thread::spawn(move || {
             let result = gpu::Decoder::new(false).and_then(|decoder| {
                 let start = std::time::Instant::now();
-                let (columns, mask) = decoder.decode(&params.decode_params(), &gray, &phase)?;
+                let (columns, mask) = scan::decode_scan(&decoder, &params, &stacks)?;
                 let decoded = start.elapsed().as_secs_f64() * 1000.0;
                 let start = std::time::Instant::now();
                 let (points, _) = scan::triangulate(&columns, &mask, &params);

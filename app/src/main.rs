@@ -27,11 +27,12 @@ fn headless_capture(args: &[String]) -> ExitCode {
         frames: 1,
         rate_hz: 0,
         dark_every: 0,
+        exposures: Vec::new(),
     };
     for pair in args.chunks(2) {
         let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
             eprintln!(
-                "arguments come in pairs: --node, --set, --pitch, --steps, --frames, --rate, --dark-every, --wait, --out"
+                "arguments come in pairs: --node, --set, --pitch, --steps, --frames, --rate, --dark-every, --exposures, --wait, --out"
             );
             return ExitCode::FAILURE;
         };
@@ -49,6 +50,16 @@ fn headless_capture(args: &[String]) -> ExitCode {
             "--frames" => value.parse().map(|v| request.frames = v),
             "--rate" => value.parse().map(|v| request.rate_hz = v),
             "--dark-every" => value.parse().map(|v| request.dark_every = v),
+            "--exposures" => match value.split(',').map(str::parse::<f64>).collect() {
+                Ok(exposures) => {
+                    request.exposures = exposures;
+                    Ok(())
+                }
+                Err(_) => {
+                    eprintln!("--exposures takes numbers separated by commas");
+                    return ExitCode::FAILURE;
+                }
+            },
             "--out" => {
                 out = Some(PathBuf::from(value));
                 Ok(())
@@ -243,6 +254,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
         frames,
         rate_hz: 0,
         dark_every,
+        exposures: Vec::new(),
     };
     let mut left: Option<Vec<u8>> = None;
     let mut results: Vec<(String, Result<depth::DepthResult, String>)> = Vec::new();
@@ -808,6 +820,7 @@ fn headless_scan(args: &[String]) -> ExitCode {
         frames: 1,
         rate_hz: 0,
         dark_every: 0,
+        exposures: params.decode.exposures.clone(),
     };
     let mut frames = std::collections::HashMap::new();
     let mut size_ok = true;
@@ -835,7 +848,7 @@ fn headless_scan(args: &[String]) -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
-    let Some((gray, phase)) = scan::stacks(&frames, &params.decode) else {
+    let Some(stacks) = scan::stacks(&frames, &params.decode) else {
         eprintln!("the node sent fewer frames than the scan parameters need");
         return ExitCode::FAILURE;
     };
@@ -844,7 +857,8 @@ fn headless_scan(args: &[String]) -> ExitCode {
         names.sort();
         for name in names {
             let path = dir.join(format!("{name}.png"));
-            if let Err(e) = std::fs::create_dir_all(dir).and_then(|()| {
+            let folder = path.parent().map_or_else(|| dir.clone(), Path::to_path_buf);
+            if let Err(e) = std::fs::create_dir_all(folder).and_then(|()| {
                 calibration::write_png(
                     &path,
                     params.camera.width,
@@ -858,7 +872,7 @@ fn headless_scan(args: &[String]) -> ExitCode {
         }
     }
     let start = Instant::now();
-    let (columns, mask) = match decoder.decode(&params.decode_params(), &gray, &phase) {
+    let (columns, mask) = match scan::decode_scan(&decoder, &params, &stacks) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("decode failed: {e}");
@@ -965,8 +979,26 @@ fn scan_check(args: &[String]) -> ExitCode {
         1e6 * exact
     );
     let mut ok = exact < 1e-8;
+    let levels = params.decode.exposures.len().max(1);
+    let n = params.camera.width as usize * params.camera.height as usize;
+    let (gray_size, phase_size) = (
+        2 * params.decode.planes as usize * n,
+        params.decode.steps as usize * n,
+    );
+    if gray.len() != levels * gray_size || phase.len() != levels * phase_size {
+        eprintln!("stack sizes do not match {levels} exposures");
+        return ExitCode::FAILURE;
+    }
+    let stacks: Vec<(Vec<u8>, Vec<u8>)> = (0..levels)
+        .map(|e| {
+            (
+                gray[e * gray_size..(e + 1) * gray_size].to_vec(),
+                phase[e * phase_size..(e + 1) * phase_size].to_vec(),
+            )
+        })
+        .collect();
     match gpu::Decoder::new(fallback) {
-        Ok(decoder) => match decoder.decode(&params.decode_params(), &gray, &phase) {
+        Ok(decoder) => match scan::decode_scan(&decoder, &params, &stacks) {
             Ok((decoded, decoded_mask)) => {
                 let start = Instant::now();
                 let (gpu_points, gpu_pixels) = scan::triangulate(&decoded, &decoded_mask, &params);
