@@ -154,6 +154,9 @@ A view at several exposures decodes each exposure and gives each pixel the one w
 largest phase modulation among those where it decoded, which is the longest exposure
 that does not saturate there (D86).
 
+`ref/` decodes again in Haskell with NumPy's arithmetic in the same order, and
+`ref.do` compares its columns and masks with NumPy's on synthetic scans (D90).
+
 ## Color
 
 `colors.py` colors points from a mono camera and the projector's black, red, green and
