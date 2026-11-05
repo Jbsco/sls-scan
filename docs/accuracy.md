@@ -77,15 +77,16 @@ check and the datum residuals, so no result is quoted without its error.
 The same tests run on synthetic captures (`DESIGN.md` D17). The virtual rig is a
 1280 × 960 camera at f = 1500 px and a 1024 × 768 projector at 0.35 m baseline, with
 sensor noise of one grey level and phase pitch 16. Its calibration is recovered from
-twelve synthetic board poses. Results from `slscan simulate` on 2026-11-01:
+twelve synthetic board poses, with k2 at 0 for both devices (D84). Results from
+`slscan simulate` on 2026-11-04:
 
 | Test | Result | Truth or limit |
 |---|---|---|
-| Camera and projector reprojection | 0.096 and 0.092 px | under 0.3 and 0.5 px |
-| Baseline | 349.85 mm | 350 mm |
-| Flat plate, 0.5 m, tilted | 0.116 mm RMS | under 0.2 mm |
+| Camera and projector reprojection | 0.095 and 0.092 px | under 0.3 and 0.5 px |
+| Baseline | 349.84 mm | 350 mm |
+| Flat plate, 0.5 m, tilted | 0.092 mm RMS | under 0.2 mm |
 | Sphere radius, form | 50.010 mm, 0.035 mm RMS | 50.000 mm |
-| Ball bar spacing | 303.281 mm | 303.315 mm |
+| Ball bar spacing | 303.288 mm | 303.315 mm |
 
 A synthetic pass checks the arithmetic. It says nothing about lens, projector gamma or
 rig flex, which only the bench measures.
@@ -125,7 +126,7 @@ An uncalibrated light throws a random-dot pattern on uncoated artifacts, and the
 calibration is recovered from twelve synthetic poses of a 90 × 60 mm board.
 
 This calibration reprojects to 0.076 and 0.065 px (limit 0.3 px) with a baseline of
-200.17 mm against 200 mm, with k2 fixed for these narrow lenses (D80). Commands:
+200.17 mm against 200 mm, with k2 fixed for these narrow lenses (D80, D84). Commands:
 `slscan simulate --head stereo`, then the printed calibrate-stereo, scan-stereo and
 measure steps, with `--order 1 --window 21` for affine windows.
 

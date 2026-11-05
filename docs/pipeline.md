@@ -99,9 +99,10 @@ projector calibration.
 4. Scale: board square size, measured with calipers on the print, not taken from the
    print job.
 
-Distortion is radial and tangential with k3 fixed, for both devices. A device whose
-half-diagonal field is under 0.3 in tangent, about 17°, keeps k2 at 0 as well (D80).
-Stereo calibration follows the same rule for each camera. Column and row
+Distortion is radial and tangential with k3 fixed, for both devices. k2 stays at 0
+unless the board points reach far enough from the principal point that a unit of k2
+moves the farthest of them 10 px or more (D80, D84). Stereo calibration follows the
+same rule for each camera. Column and row
 Gray codes are both projected, because each corner needs a projector row as well as a
 column.
 
