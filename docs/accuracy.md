@@ -107,6 +107,21 @@ in `DESIGN.md` D86. Each strip's residual is from its own plane. Command:
 Every strip decodes fully where a residual is listed. The dark strip's residual follows
 its modulation, 16 grey levels at an exposure of 4 and 64 at 16.
 
+## Occlusion
+
+How much of a 20 mm slot cut across the baseline the near head's camera pairs see in one
+view, ray-cast without matching, as in `DESIGN.md` D92. A pair counts a point when both
+cameras and the pattern light see it within 75° of its normal. Command:
+`slscan occlusion-bench`.
+
+| Slot depth | Floor, pair alone | Floor, third camera above the light | All surfaces, pair alone | All surfaces, third camera above |
+|---|---|---|---|---|
+| 10 mm | 80.0% | 100.0% | 80.0% | 83.3% |
+| 20 mm | 65.0% | 100.0% | 66.4% | 71.4% |
+| 40 mm | 30.0% | 100.0% | 47.8% | 55.6% |
+
+A slot along the baseline keeps its whole floor with the pair alone.
+
 ## Small-volume head
 
 These results are the small-volume head of `DESIGN.md` D23 on the virtual bench. The HQ
