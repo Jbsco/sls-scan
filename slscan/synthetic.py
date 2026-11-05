@@ -284,16 +284,19 @@ def scene_view(rig: Rig, scene: list) -> SceneView:
 
 
 def capture_scene(sv: SceneView, values: np.ndarray, rng: np.random.Generator,
-                  ambient: float = 25.0, gain: float = 200.0, noise: float = 1.0) -> np.ndarray:
-    """Return the camera image, as uint8, of projector intensities (0 to 255) per pixel."""
+                  ambient: float = 25.0, gain: float = 200.0, noise: float = 1.0,
+                  exposure: float = 1.0) -> np.ndarray:
+    """Return the camera image, as uint8, of projector intensities (0 to 255) per pixel,
+    with the light scaled by exposure before the sensor clips it."""
     lighting = ambient + gain * np.where(sv.lit, values, 0.0) / 255.0
-    image = sv.albedo * lighting + noise * rng.standard_normal(len(values))
+    image = exposure * sv.albedo * lighting + noise * rng.standard_normal(len(values))
     return np.clip(np.rint(image), 0, 255).astype(np.uint8).reshape(sv.shape)
 
 
 def scan_captures(rig: Rig, scene: list, pitch: int = 16, steps: int = 4,
-                  seed: int = 0) -> tuple[dict, SceneView]:
-    """Render the column Gray code stack and the phase-shift stack of one static view.
+                  seed: int = 0, exposure: float = 1.0) -> tuple[dict, SceneView]:
+    """Render the column Gray code stack and the phase-shift stack of one static view at
+    an exposure relative to the nominal one.
 
     Gray code stripes are sampled at the nearest projector pixel, so their edges stay
     sharp. Sinusoids are evaluated at the continuous projector column, as a slightly
@@ -304,12 +307,20 @@ def scan_captures(rig: Rig, scene: list, pitch: int = 16, steps: int = 4,
     w, h = rig.projector.width, rig.projector.height
     column = np.clip(np.rint(sv.u), 0, w - 1).astype(np.int64)
     column[~sv.lit] = 0
-    gray = np.stack([capture_scene(sv, p[0][column].astype(np.float64), rng)
+    gray = np.stack([capture_scene(sv, p[0][column].astype(np.float64), rng, exposure=exposure)
                      for p in patterns.gray_code_images(w, 1, "columns")])
     phase = np.stack([capture_scene(sv, 127.5 + 127.5 * np.cos(
-        2.0 * math.pi * (np.where(sv.lit, sv.u, 0.0) / pitch + i / steps)), rng)
-        for i in range(steps)])
+        2.0 * math.pi * (np.where(sv.lit, sv.u, 0.0) / pitch + i / steps)), rng,
+        exposure=exposure) for i in range(steps)])
     return {"gray": gray, "phase": phase}, sv
+
+
+def exposure_captures(rig: Rig, scene: list, exposures, pitch: int = 16, steps: int = 4,
+                      seed: int = 0) -> list:
+    """Render scan_captures at each exposure, with noise seeded per exposure; the first
+    exposure keeps seed, so one exposure renders as scan_captures does."""
+    return [scan_captures(rig, scene, pitch, steps, seed + k, x)[0]
+            for k, x in enumerate(exposures)]
 
 
 def true_calibration(rig: Rig, spec: calibrate.BoardSpec) -> calibrate.Calibration:
@@ -326,6 +337,16 @@ def acceptance_scenes() -> dict:
             "sphere": [Ball(np.array([0.02, -0.01, 1.0]), 0.05)],
             "ball-bar": [Ball(np.array([-0.15, 0.02, 1.0]), 0.025),
                          Ball(np.array([0.15, -0.02, 1.02]), 0.025)]}
+
+
+def strip_scenes() -> dict:
+    """Return a scene for exposure tests: the acceptance plate as three strips side by
+    side in one plane, dark (albedo 0.04), middle (0.8) and bright (2.5), whose dark strip
+    lacks modulation and whose bright strip saturates at the nominal exposure."""
+    centre, axes = np.array([0.0, 0.0, 1.0]), rotation(10, -15)
+    third = 0.5 / 3.0
+    return {"strips": [Plate(centre + axes[:, 0] * k * third, axes, third / 2.0, 0.25, albedo)
+                       for k, albedo in ((-1, 0.04), (0, 0.8), (1, 2.5))]}
 
 
 def small_volume_scenes() -> dict:
