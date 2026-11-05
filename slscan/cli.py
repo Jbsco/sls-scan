@@ -328,7 +328,8 @@ def cmd_decode_vectors(args: argparse.Namespace) -> int:
 
     rig = synthetic.reference_rig()
     captures, _ = synthetic.scan_captures(rig, synthetic.acceptance_scenes()[args.scene],
-                                          pitch=args.pitch, seed=args.seed)
+                                          pitch=args.pitch, seed=args.seed,
+                                          exposure=args.exposure)
     columns, mask = decode.decode_columns(captures["gray"], captures["phase"],
                                           rig.projector.width, args.pitch)
     os.makedirs(args.out, exist_ok=True)
@@ -1287,6 +1288,8 @@ def main(argv=None) -> int:
     p.add_argument("--scene", choices=sorted(synthetic.acceptance_scenes()), default="plate")
     p.add_argument("--pitch", type=int, default=16)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--exposure", type=float, default=1.0,
+                   help="exposure relative to the nominal one; 4 saturates the plate")
     p.set_defaults(func=cmd_decode_vectors)
 
     p = sub.add_parser("depth-params",

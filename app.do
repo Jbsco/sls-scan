@@ -53,6 +53,8 @@ python3 -m slscan.cli measure "$SESSION/plate.ply" --shape plane
     cargo test --locked --quiet --lib window_scan)
 python3 -m slscan.cli decode-vectors --out "$SESSION/vectors" >/dev/null
 $RUN decode-check "$SESSION/vectors"
+python3 -m slscan.cli decode-vectors --exposure 4 --out "$SESSION/saturated" >/dev/null
+$RUN decode-check "$SESSION/saturated"
 python3 -m slscan.cli scan-vectors --out "$SESSION/scan-vectors" >/dev/null
 $RUN scan-check "$SESSION/scan-vectors"
 python3 -m slscan.cli stereo-vectors --out "$SESSION/stereo" >/dev/null
