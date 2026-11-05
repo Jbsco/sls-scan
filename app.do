@@ -55,7 +55,7 @@ python3 -m slscan.cli measure "$SESSION/plate.ply" --shape plane
     SLS_WINDOW_OUT="$SESSION/window.ply" SLS_WINDOW_REFERENCE="$SESSION/plate.ply" \
     cargo test --locked --quiet --lib window_scan)
 python3 -m slscan.cli scan-params --calibration "$SESSION/calibration.yaml" --pitch 16 \
-    --exposures 0.25,1,4,16 --out "$SESSION/strips.json" >/dev/null
+    --exposures 0.25,1,4,16 --color --out "$SESSION/strips.json" >/dev/null
 $RUN scan --node "127.0.0.1:$STRIPS_PORT" --params "$SESSION/strips.json" --wait 30 \
     --out "$SESSION/strips.ply"
 python3 -m slscan.cli measure "$SESSION/strips.ply" --shape plane
@@ -68,6 +68,8 @@ $RUN scan-check "$SESSION/scan-vectors"
 python3 -m slscan.cli scan-vectors --scene strips --exposures 0.25,1,4,16 \
     --out "$SESSION/strip-vectors" >/dev/null
 $RUN scan-check "$SESSION/strip-vectors"
+python3 -m slscan.cli scan-vectors --scene colors --color --out "$SESSION/color-vectors" >/dev/null
+$RUN scan-check "$SESSION/color-vectors"
 python3 -m slscan.cli stereo-vectors --out "$SESSION/stereo" >/dev/null
 $RUN rectify-check "$SESSION/stereo"
 python3 -m slscan.cli dot-vectors --out "$SESSION/dots" >/dev/null

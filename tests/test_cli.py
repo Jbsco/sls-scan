@@ -84,6 +84,16 @@ def test_scan_params_command_writes_the_calibration(tmp_path, calibration):
     assert cli.main(["scan-params", "--calibration", path, "--exposures", "0.25,1,4",
                      "--out", str(out)]) == 0
     assert json.loads(out.read_text())["decode"]["exposures"] == [0.25, 1.0, 4.0]
+    card = tmp_path / "white" / "color"
+    card.mkdir(parents=True)
+    fields = synthetic.color_captures(synthetic.reference_rig(), synthetic.color_scenes()["white"])
+    for name, image in fields.items():
+        cv2.imwrite(str(card / f"{name}.png"), image)
+    assert cli.main(["scan-params", "--calibration", path, "--white", str(card),
+                     "--out", str(out)]) == 0
+    decode_settings = json.loads(out.read_text())["decode"]
+    assert decode_settings["color"] is True
+    assert np.allclose(decode_settings["white"], [200.0, 200.0, 200.0], atol=1.0)
 
 
 def test_detect_command_counts_corners(tmp_path):

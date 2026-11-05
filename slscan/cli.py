@@ -418,8 +418,9 @@ def cmd_scan_params(args: argparse.Namespace) -> int:
     import json
 
     exposures = [float(x) for x in args.exposures.split(",")] if args.exposures else None
+    white = colors.white_balance(read_color(args.white)) if args.white else None
     params = triangulate.scan_params(calibrate.load(args.calibration), args.pitch, args.steps,
-                                     exposures)
+                                     exposures, args.color or white is not None, white)
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(params, f, indent=1)
     print(f"scan parameters written to {args.out}")
@@ -435,13 +436,21 @@ def cmd_scan_vectors(args: argparse.Namespace) -> int:
     spec = HEADS["reference"][2]
     cal = calibrate.calibrate(list(synthetic.calibration_views(rig, spec, args.seed)), spec,
                               (rig.projector.width, rig.projector.height))
-    scene = {**synthetic.acceptance_scenes(), **synthetic.strip_scenes()}[args.scene]
+    scene = {**synthetic.acceptance_scenes(), **synthetic.strip_scenes(),
+             **synthetic.color_scenes()}[args.scene]
     exposures = [float(x) for x in args.exposures.split(",")] if args.exposures else [1.0]
     views = synthetic.exposure_captures(rig, scene, exposures, args.pitch, seed=args.seed)
     columns, mask = decode.decode_exposures(views, rig.projector.width, args.pitch)
     columns = columns.astype("<f4")
     points, pixels = triangulate.triangulate(columns, mask, cal)
     os.makedirs(args.out, exist_ok=True)
+    white = None
+    if args.color:
+        fields = synthetic.color_captures(rig, scene, args.seed + len(exposures))
+        white = colors.white_balance(synthetic.color_captures(rig, synthetic.color_scenes()["white"]))
+        for name in ("black",) + colors.CHANNELS:
+            fields[name].tofile(os.path.join(args.out, f"{name}.bin"))
+        colors.point_colors(fields, pixels, white).tofile(os.path.join(args.out, "colors.bin"))
     np.concatenate([v["gray"] for v in views]).tofile(os.path.join(args.out, "gray.bin"))
     np.concatenate([v["phase"] for v in views]).tofile(os.path.join(args.out, "phase.bin"))
     columns.tofile(os.path.join(args.out, "columns.bin"))
@@ -450,7 +459,8 @@ def cmd_scan_vectors(args: argparse.Namespace) -> int:
     pixels.astype("<u4").tofile(os.path.join(args.out, "pixels.bin"))
     with open(os.path.join(args.out, "scan.json"), "w", encoding="utf-8") as f:
         json.dump(triangulate.scan_params(cal, args.pitch, int(views[0]["phase"].shape[0]),
-                                          exposures if len(exposures) > 1 else None), f)
+                                          exposures if len(exposures) > 1 else None, args.color,
+                                          white), f)
     print(f"scan vectors of the {args.scene} scene written to {args.out}: {len(points)} points")
     return 0
 
@@ -1344,6 +1354,9 @@ def main(argv=None) -> int:
     p.add_argument("--steps", type=int, default=4, help="phase steps")
     p.add_argument("--exposures", help="scan at these exposures relative to the nominal one, "
                                        "comma separated")
+    p.add_argument("--color", action="store_true", help="end scans with the projector's fields")
+    p.add_argument("--white", help="color/ directory of a white card's fields, for colors "
+                                   "against white")
     p.add_argument("--out", required=True)
     p.set_defaults(func=cmd_scan_params)
 
@@ -1351,8 +1364,11 @@ def main(argv=None) -> int:
                                             "and its NumPy decode and points")
     p.add_argument("--out", default="data/scan-vectors")
     p.add_argument("--scene", choices=sorted({**synthetic.acceptance_scenes(),
-                                              **synthetic.strip_scenes()}), default="plate")
+                                              **synthetic.strip_scenes(),
+                                              **synthetic.color_scenes()}), default="plate")
     p.add_argument("--exposures", help="exposures relative to the nominal one, comma separated")
+    p.add_argument("--color", action="store_true",
+                   help="write the projector's fields and point colors against a white card")
     p.add_argument("--pitch", type=int, default=16)
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_scan_vectors)

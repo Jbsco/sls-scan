@@ -15,7 +15,7 @@ use std::thread;
 use std::time::Duration;
 
 type StereoDetection = Result<(Detection, Detection), String>;
-type ScanResult = Result<(Vec<[f64; 3]>, String), String>;
+type ScanResult = Result<(Vec<[f64; 3]>, Vec<[u8; 3]>, String), String>;
 
 enum CalibrationEvent {
     Pose(String, Result<Detection, String>, Projector),
@@ -98,6 +98,8 @@ pub struct ScanApp {
     depth: Option<DepthWorker>,
     pending_left: Option<Vec<u8>>,
     cloud: Vec<[f64; 3]>,
+    /// A color per point of `cloud` from a scan with the projector's fields, else empty.
+    cloud_colors: Vec<[u8; 3]>,
     fusion_status: String,
     depth_status: String,
     depth_frames: usize,
@@ -144,6 +146,7 @@ impl Default for ScanApp {
             depth: None,
             pending_left: None,
             cloud: Vec::new(),
+            cloud_colors: Vec::new(),
             fusion_status: String::new(),
             depth_status: String::new(),
             depth_frames: 0,
@@ -282,6 +285,7 @@ impl ScanApp {
             let _ = worker.jobs.send(DepthJob::Reset);
         }
         self.cloud.clear();
+        self.cloud_colors.clear();
         self.fusion_status.clear();
         self.scan_frames.clear();
         self.scan_params = None;
@@ -317,6 +321,10 @@ impl ScanApp {
                 .filter(|_| self.set == "scan")
                 .map(|p| p.decode.exposures.clone())
                 .unwrap_or_default(),
+            color: self
+                .scan_params
+                .as_ref()
+                .is_some_and(|p| self.set == "scan" && p.decode.color),
         };
         let repaint = ctx.clone();
         thread::spawn(move || {
@@ -349,6 +357,11 @@ impl ScanApp {
             self.scan_status = "the node sent fewer frames than the scan parameters need".into();
             return;
         };
+        let fields = scan::color_fields(&self.scan_frames);
+        if params.decode.color && fields.is_none() {
+            self.scan_status = "the node sent no color fields".into();
+            return;
+        }
         self.scan_frames.clear();
         let (tx, rx) = mpsc::channel();
         let repaint = ctx.clone();
@@ -358,13 +371,19 @@ impl ScanApp {
                 let (columns, mask) = scan::decode_scan(&decoder, &params, &stacks)?;
                 let decoded = start.elapsed().as_secs_f64() * 1000.0;
                 let start = std::time::Instant::now();
-                let (points, _) = scan::triangulate(&columns, &mask, &params);
+                let (points, pixels) = scan::triangulate(&columns, &mask, &params);
+                let colors = fields
+                    .filter(|_| params.decode.color)
+                    .map(|f| {
+                        scan::point_colors(&f, &pixels, params.camera.width, &params.decode.white)
+                    })
+                    .unwrap_or_default();
                 let note = format!(
                     "{} points, decoded in {decoded:.0} ms and triangulated in {:.0} ms",
                     points.len(),
                     start.elapsed().as_secs_f64() * 1000.0
                 );
-                Ok((points, note))
+                Ok((points, colors, note))
             });
             let _ = tx.send(result);
             repaint.request_repaint();
@@ -379,8 +398,9 @@ impl ScanApp {
         };
         if let Ok(result) = rx.try_recv() {
             match result {
-                Ok((points, note)) => {
+                Ok((points, colors, note)) => {
                     self.cloud = points;
+                    self.cloud_colors = colors;
                     self.scan_status = note;
                 }
                 Err(e) => self.scan_status = format!("scan failed: {e}"),
@@ -391,7 +411,12 @@ impl ScanApp {
 
     fn save_points(&mut self) {
         let path = PathBuf::from(&self.points_path);
-        self.scan_status = match depth::write_ply(&path, &self.cloud) {
+        let written = if self.cloud_colors.len() == self.cloud.len() && !self.cloud.is_empty() {
+            depth::write_colored_ply(&path, &self.cloud, &self.cloud_colors)
+        } else {
+            depth::write_ply(&path, &self.cloud)
+        };
+        self.scan_status = match written {
             Ok(()) => format!("{} points written to {}", self.cloud.len(), path.display()),
             Err(e) => format!("{}: {e}", path.display()),
         };
@@ -1003,11 +1028,17 @@ impl ScanApp {
         let span = [0, 1, 2].map(|i| (hi[i] - lo[i]).max(1e-9));
         let scale = (f64::from(rect.width()) / span[0]).min(f64::from(rect.height()) / span[1]);
         let stride = self.cloud.len().div_ceil(MAX_DRAWN).max(1);
-        for p in self.cloud.iter().step_by(stride) {
+        let colored = self.cloud_colors.len() == self.cloud.len();
+        for (i, p) in self.cloud.iter().enumerate().step_by(stride) {
             let x = rect.left() + ((p[0] - lo[0]) * scale) as f32;
             let y = rect.top() + ((p[1] - lo[1]) * scale) as f32;
-            let shade = (255.0 - 160.0 * (p[2] - lo[2]) / span[2]) as u8;
-            painter.circle_filled(egui::pos2(x, y), 1.5, egui::Color32::from_gray(shade));
+            let color = if colored {
+                let [r, g, b] = self.cloud_colors[i];
+                egui::Color32::from_rgb(r, g, b)
+            } else {
+                egui::Color32::from_gray((255.0 - 160.0 * (p[2] - lo[2]) / span[2]) as u8)
+            };
+            painter.circle_filled(egui::pos2(x, y), 1.5, color);
         }
     }
 }

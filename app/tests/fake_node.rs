@@ -39,8 +39,6 @@ fn serve_one(listener: TcpListener, frames: u32) -> thread::JoinHandle<std::io::
 fn client_receives_a_full_scan_sequence() -> std::io::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     let address = listener.local_addr()?.to_string();
-    let names = protocol::pattern_names("scan", 16, 4, 4, 1, 0, 1).unwrap_or_default();
-    let server = serve_one(listener, u32::try_from(names.len()).unwrap_or(0));
     let request = SequenceRequest {
         set: "scan".into(),
         pitch: 16,
@@ -49,7 +47,10 @@ fn client_receives_a_full_scan_sequence() -> std::io::Result<()> {
         rate_hz: 0,
         dark_every: 0,
         exposures: Vec::new(),
+        color: false,
     };
+    let names = protocol::pattern_names(&request, 16, 4).unwrap_or_default();
+    let server = serve_one(listener, u32::try_from(names.len()).unwrap_or(0));
     let mut received = Vec::new();
     let stats = capture(&address, &request, Duration::ZERO, |event| {
         if let Event::Frame { name, pixels, .. } = event {
@@ -78,13 +79,14 @@ fn client_reports_missing_frames() -> std::io::Result<()> {
         rate_hz: 0,
         dark_every: 0,
         exposures: Vec::new(),
+        color: false,
     };
     let stats = capture(&address, &request, Duration::ZERO, |_| {})?;
     assert!(server.join().is_ok());
     assert_eq!(stats.frames, 5);
     assert_eq!(
         stats.missing.len(),
-        protocol::pattern_names("scan", 16, 4, 4, 1, 0, 1)
+        protocol::pattern_names(&request, 16, 4)
             .unwrap_or_default()
             .len()
             - 5
@@ -110,6 +112,7 @@ fn client_waits_for_a_late_node() -> std::io::Result<()> {
         rate_hz: 0,
         dark_every: 0,
         exposures: Vec::new(),
+        color: false,
     };
     let stats = capture(
         &address.to_string(),
@@ -133,6 +136,7 @@ fn client_without_wait_fails_fast() -> std::io::Result<()> {
         rate_hz: 0,
         dark_every: 0,
         exposures: Vec::new(),
+        color: false,
     };
     assert!(capture(&address.to_string(), &request, Duration::ZERO, |_| {}).is_err());
     Ok(())

@@ -112,16 +112,8 @@ pub fn capture(
     mut on_event: impl FnMut(Event),
 ) -> io::Result<Stats> {
     let (mut stream, hello) = connect(address, wait)?;
-    let names = protocol::pattern_names(
-        &request.set,
-        hello.projector.width,
-        hello.projector.height,
-        request.steps,
-        request.frames,
-        request.dark_every,
-        u32::try_from(request.exposures.len().max(1)).unwrap_or(u32::MAX),
-    )
-    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unknown pattern set"))?;
+    let names = protocol::pattern_names(request, hello.projector.width, hello.projector.height)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unknown pattern set"))?;
     on_event(Event::Connected(hello));
     protocol::write_message(
         &mut stream,

@@ -29,6 +29,13 @@ pub struct DecodeSettings {
     /// empty.
     #[serde(default)]
     pub exposures: Vec<f64>,
+    /// Whether a scan set ends with the projector's black, red, green and blue fields.
+    #[serde(default)]
+    pub color: bool,
+    /// A white card's response per channel, for point colors against white, or empty for
+    /// colors in grey levels.
+    #[serde(default)]
+    pub white: Vec<f64>,
 }
 
 /// Camera and projector, the camera-to-projector rotation (row-major) and translation,
@@ -119,6 +126,46 @@ pub fn stacks(
                 stack("gray", 2 * decode.planes)?,
                 stack("phase", decode.steps)?,
             ))
+        })
+        .collect()
+}
+
+/// The black, red, green and blue field images of a scan set's frames, or none when one
+/// is missing.
+pub fn color_fields(frames: &HashMap<String, Vec<u8>>) -> Option<[Vec<u8>; 4]> {
+    let field = |name: &str| frames.get(&format!("color/{name}")).cloned();
+    Some([
+        field("black")?,
+        field("red")?,
+        field("green")?,
+        field("blue")?,
+    ])
+}
+
+/// Red, green and blue bytes for each pixel, as `colors.point_colors`: each field less
+/// the black one, over the white response per channel times 255 when `white` lists all
+/// three, rounded half to even and clipped.
+pub fn point_colors(
+    fields: &[Vec<u8>; 4],
+    pixels: &[[u32; 2]],
+    width: u32,
+    white: &[f64],
+) -> Vec<[u8; 3]> {
+    let white: Option<&[f64; 3]> = white.try_into().ok();
+    pixels
+        .iter()
+        .map(|p| {
+            let i = p[1] as usize * width as usize + p[0] as usize;
+            let black = f64::from(fields[0][i]);
+            let mut out = [0u8; 3];
+            for (k, byte) in out.iter_mut().enumerate() {
+                let mut v = f64::from(fields[k + 1][i]) - black;
+                if let Some(w) = white {
+                    v = 255.0 * v / w[k];
+                }
+                *byte = v.round_ties_even().clamp(0.0, 255.0) as u8;
+            }
+            out
         })
         .collect()
 }
@@ -251,6 +298,25 @@ mod tests {
     }
 
     #[test]
+    fn point_colors_follow_the_fields_and_white() {
+        let fields = [
+            vec![25u8, 25],
+            vec![125u8, 225],
+            vec![75u8, 25],
+            vec![225u8, 255],
+        ];
+        let pixels = [[0, 0], [1, 0]];
+        assert_eq!(
+            point_colors(&fields, &pixels, 2, &[]),
+            [[100, 50, 200], [200, 0, 230]]
+        );
+        assert_eq!(
+            point_colors(&fields, &pixels, 2, &[200.0, 200.0, 200.0]),
+            [[128, 64, 255], [255, 0, 255]]
+        );
+    }
+
+    #[test]
     fn rays_meet_their_column_planes_on_a_plate() {
         let params = ScanParams {
             camera: device(800.0, [0.0; 5]),
@@ -266,6 +332,8 @@ mod tests {
                 min_modulation: 10.0,
                 max_disagreement: 1.0,
                 exposures: Vec::new(),
+                color: false,
+                white: Vec::new(),
             },
         };
         let (w, h) = (640usize, 480usize);
