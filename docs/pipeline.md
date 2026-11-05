@@ -213,6 +213,9 @@ and dense matching of selected frames refines it afterwards.
 
 In the phase-shift option a depth frame is a cycle of phase-shifted patterns instead.
 Its decode kernel is `app/src/decode.wgsl`, and it matches the NumPy decode (D22).
+`app/src/scan.rs` triangulates the decoded columns on the CPU in double precision and
+matches `slscan/triangulate.py` (D82). `slscan scan-params` writes the calibration and
+decode settings it reads.
 
 Rectification runs in `app/src/rectify.wgsl` from each camera's rectification parameters
 and matches `cv2.remap` within one grey level (D31). Block disparity runs in

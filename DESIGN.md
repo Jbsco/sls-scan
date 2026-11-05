@@ -1618,3 +1618,20 @@ file without seeds, then finds them in the merged views among the part's balls o
 100 mm radius. With ray-cast views their residuals were 2 to 5 µm. With stereo views and a
 recovered calibration they were 0.095 to 0.198 mm, where that run's scale bars read
 -0.126 and +0.008 mm.
+
+## D82. Phase-shift triangulation in the application (2026-11-04)
+
+Phase 11 starts with static phase-shift scans in the application, for edge-sharp views
+with a calibrated projector (D25). `app/src/scan.rs` triangulates decoded columns on the
+CPU in double precision, as `slscan/triangulate.py` does. Each camera ray meets its
+column's plane, taken from the undistorted projector point at the row where the previous
+estimate lands, over three iterations. Undistortion repeats the five fixed iterations of
+`cv2.undistortPoints`, so points match NumPy to rounding.
+
+`slscan scan-params` writes a calibration and the decode settings as JSON for it.
+`slscan scan-vectors` writes a plate scan by the reference rig with a calibration
+recovered from board views, whose camera and projector fit k2 of -0.11 and -0.40.
+`sls-scan scan-check` compares the application with NumPy on that scan. From NumPy's
+columns, 521,793 points matched within 0.1 nm in 23 to 39 ms on 16 threads. From the
+GPU decode they matched within 0.154 µm, with every pixel kept by both, on the Radeon and
+on llvmpipe.

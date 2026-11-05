@@ -8,6 +8,7 @@ iterations.
 import cv2
 import numpy as np
 
+from . import patterns
 from .calibrate import Calibration
 
 
@@ -39,3 +40,25 @@ def triangulate(columns: np.ndarray, mask: np.ndarray, cal: Calibration,
         v = image.reshape(-1, 2)[:, 1]
     keep = points[:, 2] > 0
     return points[keep], pixels[keep]
+
+
+def scan_params(cal: Calibration, pitch: int, steps: int) -> dict:
+    """Return a calibration and the decode settings of decode.decode_columns as the
+    application takes them: each device's size, row-major matrix and five distortion
+    coefficients, the camera-to-projector rotation (row-major) and translation, and the
+    decode settings."""
+    def device(intrinsics):
+        distortion = np.zeros(5)
+        coefficients = np.ravel(intrinsics.distortion)
+        if np.any(coefficients[5:]) or intrinsics.matrix[0, 1] != 0:
+            raise ValueError("the application takes five distortion terms and no skew")
+        distortion[:min(5, len(coefficients))] = coefficients[:5]
+        return {"width": int(intrinsics.width), "height": int(intrinsics.height),
+                "matrix": np.asarray(intrinsics.matrix, dtype=np.float64).ravel().tolist(),
+                "distortion": distortion.tolist()}
+    return {"camera": device(cal.camera), "projector": device(cal.projector),
+            "rotation": np.asarray(cal.stereo.rotation, dtype=np.float64).ravel().tolist(),
+            "translation": np.asarray(cal.stereo.translation, dtype=np.float64).ravel().tolist(),
+            "decode": {"planes": patterns.bit_planes(cal.projector.width), "steps": int(steps),
+                       "projector_width": int(cal.projector.width), "pitch": float(pitch),
+                       "min_contrast": 10.0, "min_modulation": 10.0, "max_disagreement": 1.0}}

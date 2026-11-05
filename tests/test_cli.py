@@ -68,6 +68,20 @@ def test_scan_and_measure_commands_on_a_synthetic_plate(tmp_path, rig, spec):
     assert cli.main(["measure", cloud, "--shape", "plane"]) == 0
 
 
+def test_scan_params_command_writes_the_calibration(tmp_path, calibration):
+    path = str(tmp_path / "calibration.yaml")
+    calibrate.save(path, calibration)
+    out = tmp_path / "scan.json"
+    assert cli.main(["scan-params", "--calibration", path, "--pitch", "16", "--out", str(out)]) == 0
+    params = json.loads(out.read_text())
+    assert np.allclose(np.reshape(params["camera"]["matrix"], (3, 3)), calibration.camera.matrix)
+    assert np.allclose(params["projector"]["distortion"],
+                       np.ravel(calibration.projector.distortion)[:5])
+    assert np.allclose(np.reshape(params["rotation"], (3, 3)), calibration.stereo.rotation)
+    assert params["decode"]["planes"] == patterns.bit_planes(calibration.projector.width)
+    assert params["decode"]["pitch"] == 16
+
+
 def test_detect_command_counts_corners(tmp_path):
     pose = tmp_path / "pose_000"
     pose.mkdir()

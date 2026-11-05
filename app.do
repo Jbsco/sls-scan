@@ -45,6 +45,8 @@ $RUN calibrate --node "127.0.0.1:$PORT" --wait 30 --poses 6 --out "$SESSION" \
     --squares-x 9 --squares-y 6 --square-mm 40 --marker-mm 30
 python3 -m slscan.cli decode-vectors --out "$SESSION/vectors" >/dev/null
 $RUN decode-check "$SESSION/vectors"
+python3 -m slscan.cli scan-vectors --out "$SESSION/scan-vectors" >/dev/null
+$RUN scan-check "$SESSION/scan-vectors"
 python3 -m slscan.cli stereo-vectors --out "$SESSION/stereo" >/dev/null
 $RUN rectify-check "$SESSION/stereo"
 python3 -m slscan.cli dot-vectors --out "$SESSION/dots" >/dev/null

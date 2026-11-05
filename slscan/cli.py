@@ -346,6 +346,45 @@ def cmd_decode_vectors(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_scan_params(args: argparse.Namespace) -> int:
+    """Write a calibration and decode settings as JSON for the application's scans."""
+    import json
+
+    params = triangulate.scan_params(calibrate.load(args.calibration), args.pitch, args.steps)
+    with open(args.out, "w", encoding="utf-8") as f:
+        json.dump(params, f, indent=1)
+    print(f"scan parameters written to {args.out}")
+    return 0
+
+
+def cmd_scan_vectors(args: argparse.Namespace) -> int:
+    """Write a synthetic scan, a calibration recovered from board views, and the NumPy
+    decode and triangulation of the scan as raw files for the application."""
+    import json
+
+    rig = synthetic.reference_rig()
+    spec = HEADS["reference"][2]
+    cal = calibrate.calibrate(list(synthetic.calibration_views(rig, spec, args.seed)), spec,
+                              (rig.projector.width, rig.projector.height))
+    captures, _ = synthetic.scan_captures(rig, synthetic.acceptance_scenes()[args.scene],
+                                          pitch=args.pitch, seed=args.seed)
+    columns, mask = decode.decode_columns(captures["gray"], captures["phase"],
+                                          rig.projector.width, args.pitch)
+    columns = columns.astype("<f4")
+    points, pixels = triangulate.triangulate(columns, mask, cal)
+    os.makedirs(args.out, exist_ok=True)
+    captures["gray"].tofile(os.path.join(args.out, "gray.bin"))
+    captures["phase"].tofile(os.path.join(args.out, "phase.bin"))
+    columns.tofile(os.path.join(args.out, "columns.bin"))
+    mask.astype(np.uint8).tofile(os.path.join(args.out, "mask.bin"))
+    points.astype("<f8").tofile(os.path.join(args.out, "points.bin"))
+    pixels.astype("<u4").tofile(os.path.join(args.out, "pixels.bin"))
+    with open(os.path.join(args.out, "scan.json"), "w", encoding="utf-8") as f:
+        json.dump(triangulate.scan_params(cal, args.pitch, int(captures["phase"].shape[0])), f)
+    print(f"scan vectors of the {args.scene} scene written to {args.out}: {len(points)} points")
+    return 0
+
+
 def cmd_stereo_vectors(args: argparse.Namespace) -> int:
     """Write a stereo view with its rectification, its affine matches and their NumPy
     second-order refinement as raw files for the GPU kernels."""
@@ -1226,6 +1265,22 @@ def main(argv=None) -> int:
     p.add_argument("--pitch", type=int, default=16)
     p.add_argument("--speeds", default="0,1,2,5", help="sweep speeds in mm/s, comma separated")
     p.set_defaults(func=cmd_motion_error)
+
+    p = sub.add_parser("scan-params", help="write a calibration and decode settings as JSON "
+                                           "for the application's scans")
+    p.add_argument("--calibration", required=True)
+    p.add_argument("--pitch", type=int, default=16, help="phase shift pitch in projector pixels")
+    p.add_argument("--steps", type=int, default=4, help="phase steps")
+    p.add_argument("--out", required=True)
+    p.set_defaults(func=cmd_scan_params)
+
+    p = sub.add_parser("scan-vectors", help="write a synthetic scan with a recovered calibration "
+                                            "and its NumPy decode and points")
+    p.add_argument("--out", default="data/scan-vectors")
+    p.add_argument("--scene", choices=sorted(synthetic.acceptance_scenes()), default="plate")
+    p.add_argument("--pitch", type=int, default=16)
+    p.add_argument("--seed", type=int, default=0)
+    p.set_defaults(func=cmd_scan_vectors)
 
     p = sub.add_parser("decode-vectors", help="write a synthetic scan and its reference decode")
     p.add_argument("--out", default="data/decode-vectors")
