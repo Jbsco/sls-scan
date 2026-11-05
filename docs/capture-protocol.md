@@ -65,6 +65,10 @@ the frames `exposure_000/gray_000` onward, and sets each frame header's exposure
 to the index in that list (D86). The application requests the exposures listed in its
 scan parameter file (D87).
 
+A scan request may set `color`. The node then ends the set with the camera under the
+projector's black field and its full red, green and blue fields, saved as `color/black.png`,
+`color/red.png`, `color/green.png` and `color/blue.png` (D88).
+
 Pattern order follows the capture layouts of `docs/pipeline.md`. A scan set is the
 column Gray codes with their inverses, then the phase shifts (`gray_000` onward, then
 `phase_000` onward). A calibration set is white, then column and row Gray codes
@@ -83,10 +87,12 @@ column Gray codes with their inverses, then the phase shifts (`gray_000` onward,
 The stand-in renders a sweep around a part on a mat for stereo sets, about 2° per frame
 at 30 fps, and the next board pose for each calibration set. With light-off pairs it
 slides 2.5 mm per pair along a flat panel with reference dots about 35 mm apart, and
-renders those pairs under room light (D79). For phase-shift scan sets it
-renders the chosen scene with timestamps at 60 Hz, at each requested exposure, and
-`--scene strips` serves a plate of dark, middle and bright strips. Captures land in the
-layouts that `slscan scan` and `slscan calibrate` read.
+renders those pairs under room light (D79).
+
+For phase-shift scan sets it renders the chosen scene with timestamps at 60 Hz, at each
+requested exposure. `--scene strips` serves a plate of dark, middle and bright strips,
+`--scene colors` red, green and blue strips, and `--scene white` a white card. Captures
+land in the layouts that `slscan scan` and `slscan calibrate` read.
 
 The `Dockerfile` at the repository root packages the stand-in, so it runs on its own
 address the way the Pi does:

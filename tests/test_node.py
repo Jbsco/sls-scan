@@ -181,3 +181,29 @@ def test_paced_stream_takes_light_off_pairs(stand_in, tmp_path):
     dark = cv2.imread(str(out / "dark_002" / "left.png"), cv2.IMREAD_GRAYSCALE)
     lit = cv2.imread(str(out / "frame_001" / "left.png"), cv2.IMREAD_GRAYSCALE)
     assert np.std(dark[dark > 0]) < np.std(lit[lit > 0])
+
+
+def test_scan_with_color_fields_over_the_protocol(tmp_path, rig, spec):
+    from slscan import colors
+
+    server = node.StandIn(("127.0.0.1", 0), scene="colors")
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        host, port = server.server_address
+        result = node.capture(host, port, "scan", str(tmp_path / "colors"), pitch=16, color=True)
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert result["missing"] == [] and result["in_order"]
+    view = cli.read_scan(str(tmp_path / "colors"))
+    assert set(view["color"]) == {"black", "red", "green", "blue"}
+    columns, mask = decode.decode_columns(view["gray"], view["phase"], rig.projector.width, 16)
+    points, pixels = triangulate.triangulate(columns, mask, synthetic.true_calibration(rig, spec))
+    white = colors.white_balance(synthetic.color_captures(rig, synthetic.color_scenes()["white"]))
+    rgb = colors.point_colors(view["color"], pixels, white)
+    axes = synthetic.rotation(10, -15)
+    along = (points - np.array([0.0, 0.0, 1.0])) @ axes[:, 0]
+    for k, channel in ((-1, 0), (0, 1), (1, 2)):
+        strip = np.median(rgb[np.abs(along - k * 0.5 / 3.0) < 0.05], axis=0)
+        expected = np.where(np.arange(3) == channel, 204, 51)
+        assert np.abs(strip - expected).max() <= 2

@@ -154,6 +154,15 @@ A view at several exposures decodes each exposure and gives each pixel the one w
 largest phase modulation among those where it decoded, which is the longest exposure
 that does not saturate there (D86).
 
+## Color
+
+`colors.py` colors points from a mono camera and the projector's black, red, green and
+blue fields (`DESIGN.md` D88). Each field less the black one is the surface's response
+in that channel without room light. A white card's median response per channel is the
+white balance, and `slscan scan --white` divides by it so a white surface reads 255 in
+every channel. `geometry.write_ply` keeps red, green and blue bytes per vertex, which
+`read_ply_colors` reads back.
+
 ## Triangulate
 
 Each pixel's ray comes from the camera matrix and distortion, each column's plane from

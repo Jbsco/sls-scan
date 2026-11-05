@@ -1735,3 +1735,24 @@ frames, within 0.12 µm.
 With a twelve-pose calibration from the stand-in, that plate measured 0.098 mm RMS over
 all three strips. One exposure gave 172,569 points on the middle strip alone, at
 0.060 mm. The gate runs the vector check and the stand-in scan.
+
+## D88. Color from the projector's fields (2026-11-05)
+
+A scan set may end with the camera under the projector's black field and its full red,
+green and blue fields. The capture node names them `color/black` onward, the stand-in
+renders them at each surface's tint, and `slscan capture --color` asks for them.
+
+A mono camera sees each field as the surface's reflectance in that channel times the
+projector's output there, plus room light. Subtracting the black field removes room
+light. A white card's median response per channel, taken once per session as
+`slscan scan --white`, divides the rest, so a white surface reads 255 in every channel
+and a colored one its reflectance against white. Without a card the point colors are the
+raw responses in grey levels. `geometry.write_ply` writes the bytes per vertex, so any
+PLY reader shows them.
+
+The stand-in's plate has red, green and blue strips, each of albedo 0.8 with a quarter
+of the other channels. Its points read within 2 grey levels of the truth, 204 in a
+strip's own channel and 51 in the others. A real projector's channels overlap and its
+LED output differs per channel, which the white card absorbs. A camera with a color
+filter array would see each field through it, so this rests on the mono Global Shutter
+camera of D25.
