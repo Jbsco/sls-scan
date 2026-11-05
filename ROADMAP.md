@@ -51,7 +51,8 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   cloud (D63). Acceptance: two scale bars in different orientations measure within 0.5 mm
   after a 10-view scan of an object a metre across. Ten synthetic stereo views of such an
   object, with a recovered calibration, register from geometry with both scale bars
-  within 0.13 mm (D69 to D71), and the application registers views in Rust (D73).
+  within 0.13 mm (D69 to D71), and the application registers views in Rust (D73). Datum
+  spheres found without seeds define the object's frame (D81).
 - Phase 7, in progress. Deferred processing and export. Dense matching of selected
   frames, meshing, hole filling, decimation, alignment to datums, PLY, OBJ and STL
   export, the residual report. Acceptance: a decimated mesh imports into CAD and its

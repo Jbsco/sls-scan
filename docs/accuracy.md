@@ -213,3 +213,7 @@ seem likely to include an offset between recovered and true camera frames.
 |---|---|---|---|---|
 | True | 0.204 mm, 0.0109° | +0.078 and -0.091 mm | 0.5 mm | 262 s |
 | Recovered (`--recovered`) | 1.665 mm, 0.0946° | -0.126 and +0.008 mm | 0.5 mm | 250 s |
+
+With `--datums`, the four scale bar spheres are found in the merged views without seeds
+and aligned to their true centres (D81). Their residuals were 2 to 5 µm with ray-cast
+views and 0.095 to 0.198 mm with stereo views and a recovered calibration.

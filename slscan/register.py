@@ -172,11 +172,13 @@ def register_views(views: list, voxel: float, rounds: int = 1) -> tuple[list, li
     return poses, records
 
 
-def view_bench(scene: dict, poses: list, views: list, voxel: float, rounds: int = 1) -> dict:
+def view_bench(scene: dict, poses: list, views: list, voxel: float, rounds: int = 1,
+               datums: dict | None = None) -> dict:
     """Register views of a scene like metre_object's, taken at known poses (world to
     camera), and compare the poses found and the scale bars measured in the merged views
-    with the truth. The merged frame is the first view's camera frame."""
-    from . import geometry
+    with the truth. The merged frame is the first view's camera frame. With a datum file,
+    its spheres are found in the merged views and aligned to it as by report.measure."""
+    from . import geometry, report
 
     found, records = register_views(views, voxel, rounds)
     r0, t0 = poses[0]
@@ -197,6 +199,7 @@ def view_bench(scene: dict, poses: list, views: list, voxel: float, rounds: int 
         truth = np.linalg.norm(bar[0].centre - bar[1].centre)
         bar_errors.append(float(np.linalg.norm(centres[0] - centres[1]) - truth))
     return {"views": len(views), "points": len(merged),
+            "datums": report.measure(merged, datums) if datums else None,
             "max_rotation_error_deg": max(rotation_errors),
             "max_translation_error_m": max(translation_errors),
             "translation_errors_m": translation_errors,

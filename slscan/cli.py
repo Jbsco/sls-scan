@@ -124,7 +124,8 @@ def cmd_report(args: argparse.Namespace) -> int:
 
     from . import report
 
-    result = report.measure(geometry.read_ply(args.cloud), report.load_datums(args.datums))
+    points = geometry.read_ply(args.cloud)
+    result = report.measure(points, report.load_datums(args.datums))
     for name, datum in result["datums"].items():
         print(f"datum {name}: residual {1e6 * datum['residual_m']:.1f} µm, "
               f"radius {1e6 * datum['radius_error_m']:+.1f} µm")
@@ -134,6 +135,16 @@ def cmd_report(args: argparse.Namespace) -> int:
         with open(args.out, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=1)
         print(f"report written to {args.out}")
+    if args.aligned:
+        from . import mesh
+
+        moved = points @ np.array(result["rotation"]).T + np.array(result["translation_m"])
+        faces = geometry.read_ply_faces(args.cloud)
+        if len(faces):
+            mesh.write_mesh(args.aligned, moved, faces)
+        else:
+            geometry.write_ply(args.aligned, moved)
+        print(f"{'mesh' if len(faces) else 'points'} in the object's frame written to {args.aligned}")
     worst = max(d["residual_m"] for d in result["datums"].values())
     return 0 if worst <= args.limit_mm / 1000.0 else 1
 
@@ -866,8 +877,20 @@ def cmd_view_bench(args: argparse.Namespace) -> int:
         views = [synthetic.point_view(shapes, r, t, rng, 0.42, 440, args.noise_um * 1e-6)
                  for r, t in poses]
         source = f"ray-cast views, {args.noise_um:g} µm noise"
+    datums = None
+    if args.datums:
+        import json
+
+        names = [f"bar-{i + 1}{side}" for i in range(len(scene["scale-bars"])) for side in "ab"]
+        balls = [ball for bar in scene["scale-bars"] for ball in bar]
+        datums = {"spheres": {name: {"centre": ball.centre.tolist(), "radius": ball.radius}
+                              for name, ball in zip(names, balls)},
+                  "scale_bars": [names[i:i + 2] for i in range(0, len(names), 2)]}
+        with open(args.datums, "w", encoding="utf-8") as f:
+            json.dump(datums, f, indent=1)
+        print(f"datums written to {args.datums}")
     start = time.time()
-    result = register.view_bench(scene, poses, views, args.voxel_mm / 1000.0, args.rounds)
+    result = register.view_bench(scene, poses, views, args.voxel_mm / 1000.0, args.rounds, datums)
     print(f"{result['views']} {source}, {distance:g} m out and {height:g} m up, "
           f"{np.mean([len(v) for v in views]):.0f} points each, {args.voxel_mm:g} mm voxels, "
           f"{args.rounds} rounds, registered in {time.time() - start:.0f} s")
@@ -880,6 +903,10 @@ def cmd_view_bench(args: argparse.Namespace) -> int:
     print("scale bar errors "
           + ", ".join(f"{1e3 * e:+.3f} mm" for e in result["scale_bar_errors_m"])
           + " (limit 0.5 mm)")
+    if datums:
+        print("datums found without seeds, residuals "
+              + ", ".join(f"{n} {1e3 * d['residual_m']:.3f} mm"
+                          for n, d in result["datums"]["datums"].items()))
     ok = placed == result["views"] and max(abs(e) for e in result["scale_bar_errors_m"]) < 0.0005
     return 0 if ok else 1
 
@@ -1156,6 +1183,8 @@ def main(argv=None) -> int:
     p.add_argument("--noise-um", type=float, default=40.0, help="point noise per coordinate")
     p.add_argument("--voxel-mm", type=float, default=10.0, help="coarse match voxel size")
     p.add_argument("--rounds", type=int, default=1, help="ICP rounds against all other views")
+    p.add_argument("--datums", help="write the scale bar spheres as a datum file without seeds, "
+                                    "then find and align them in the merged views")
     p.add_argument("--seed", type=int, default=1)
     p.set_defaults(func=cmd_view_bench)
 
@@ -1172,6 +1201,7 @@ def main(argv=None) -> int:
     p.add_argument("cloud", help="PLY points or mesh")
     p.add_argument("--datums", required=True, help="datum file of spheres and scale bars")
     p.add_argument("--out", help="write the report as JSON")
+    p.add_argument("--aligned", help="write the cloud or mesh in the object's frame")
     p.add_argument("--limit-mm", type=float, default=1.0, help="largest datum residual allowed")
     p.set_defaults(func=cmd_report)
 

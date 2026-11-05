@@ -45,7 +45,9 @@ block disparity on a CPU adapter (D49, D50), and folds each frame into a TSDF on
 (D52, D54).
 
 Phase 5 has ICP tracking, point fusion and a TSDF, verified on synthetic sweeps and
-closed loops (D26, D51, D55). Phase 7 has meshes by surface nets, decimation, small-hole
+closed loops (D26, D51, D55). Phase 6 registers static views from their geometry (D69
+to D73), and datum spheres found in the merged cloud define the object's frame (D81).
+Phase 7 has meshes by surface nets, decimation, small-hole
 filling and a datum residual report, with PLY, OBJ and STL export (D57 to D61). Phase 9
 has second-order matching windows, which follow curved surfaces (D28).
 
