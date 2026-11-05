@@ -322,8 +322,10 @@ def cmd_node_sim(args: argparse.Namespace) -> int:
 
 def cmd_capture(args: argparse.Namespace) -> int:
     host, port = args.node.rsplit(":", 1)
+    exposures = [float(x) for x in args.exposures.split(",")] if args.exposures else None
     result = node.capture(host, int(port), args.set, args.out, args.pitch, args.steps,
-                          wait=args.wait, frames=args.frames, dark_every=args.dark_every)
+                          wait=args.wait, frames=args.frames, dark_every=args.dark_every,
+                          exposures=exposures)
     print(f"{result['frames']} frames from {result['node']['node']} written to {args.out}")
     if result["missing"] or not result["in_order"]:
         print(f"missing frames {result['missing']}, in order: {result['in_order']}")
@@ -1426,7 +1428,8 @@ def main(argv=None) -> int:
     p = sub.add_parser("node-sim", help="run a stand-in capture node serving synthetic frames")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=5600)
-    p.add_argument("--scene", choices=sorted(synthetic.acceptance_scenes()), default="plate")
+    p.add_argument("--scene", choices=sorted({**synthetic.acceptance_scenes(),
+                                              **synthetic.strip_scenes()}), default="plate")
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_node_sim)
 
@@ -1439,6 +1442,8 @@ def main(argv=None) -> int:
                    help="take every this many-th stereo pair with the pattern light off")
     p.add_argument("--pitch", type=int, default=32)
     p.add_argument("--steps", type=int, default=4)
+    p.add_argument("--exposures", help="a scan set at these exposures relative to the nominal "
+                                       "one, comma separated")
     p.add_argument("--wait", type=float, default=0.0, help="seconds to retry while the node starts")
     p.add_argument("--out", default="data/view")
     p.set_defaults(func=cmd_capture)
