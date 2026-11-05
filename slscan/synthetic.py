@@ -190,6 +190,7 @@ class Plate:
     dots: tuple = ()
     dot_radius: float = 0.004
     dot_albedo: float = 0.05
+    tint: tuple = (1.0, 1.0, 1.0)
 
     def shade(self, origin: np.ndarray, directions: np.ndarray, t: np.ndarray) -> np.ndarray:
         """Albedo at each hit: dot_albedo within dot_radius of a dot centre (u, v in the
@@ -222,6 +223,7 @@ class Ball:
     centre: np.ndarray
     radius: float
     albedo: float = 0.8
+    tint: tuple = (1.0, 1.0, 1.0)
 
     def shade(self, origin: np.ndarray, directions: np.ndarray, t: np.ndarray) -> np.ndarray:
         return np.full(len(t), self.albedo)
@@ -247,6 +249,16 @@ def nearest_hit(scene: list, origin: np.ndarray, directions: np.ndarray) -> tupl
         t[closer] = ts[closer]
         albedo[closer] = shape.shade(origin, directions[closer], ts[closer])
     return t, albedo
+
+
+def hit_tints(scene: list, origin: np.ndarray, directions: np.ndarray,
+              t: np.ndarray) -> np.ndarray:
+    """Return the red, green and blue tint (N, 3) of the shape each ray hits at t, white
+    where it hits none."""
+    tints = np.ones((len(directions), 3))
+    for shape in scene:
+        tints[shape.hit(origin, directions) == t] = shape.tint
+    return tints
 
 
 @dataclass
@@ -315,6 +327,30 @@ def scan_captures(rig: Rig, scene: list, pitch: int = 16, steps: int = 4,
     return {"gray": gray, "phase": phase}, sv
 
 
+def color_captures(rig: Rig, scene: list, seed: int = 0, ambient: float = 25.0,
+                   gain: float = 200.0, noise: float = 1.0) -> dict:
+    """Render the camera under a black projector field and under full red, green and blue
+    fields, as "black", "red", "green" and "blue". Room light reaches the mono camera at a
+    surface's mean tint, and each field at the tint of its own channel."""
+    rng = np.random.default_rng(seed)
+    sv = scene_view(rig, scene)
+    h, w = sv.shape
+    ys, xs = np.mgrid[0:h, 0:w]
+    rays = np.column_stack([xs.ravel(), ys.ravel(), np.ones(h * w)]) @ \
+        np.linalg.inv(rig.camera.matrix).T
+    t, _ = nearest_hit(scene, np.zeros(3), rays)
+    tint = hit_tints(scene, np.zeros(3), rays, t)
+    room = sv.albedo * ambient * tint.mean(axis=1)
+
+    def capture(field):
+        image = room + field + noise * rng.standard_normal(h * w)
+        return np.clip(np.rint(image), 0, 255).astype(np.uint8).reshape(h, w)
+    images = {"black": capture(0.0)}
+    for k, name in enumerate(("red", "green", "blue")):
+        images[name] = capture(np.where(sv.lit, sv.albedo * gain * tint[:, k], 0.0))
+    return images
+
+
 def exposure_captures(rig: Rig, scene: list, exposures, pitch: int = 16, steps: int = 4,
                       seed: int = 0) -> list:
     """Render scan_captures at each exposure, with noise seeded per exposure; the first
@@ -347,6 +383,17 @@ def strip_scenes() -> dict:
     third = 0.5 / 3.0
     return {"strips": [Plate(centre + axes[:, 0] * k * third, axes, third / 2.0, 0.25, albedo)
                        for k, albedo in ((-1, 0.04), (0, 0.8), (1, 2.5))]}
+
+
+def color_scenes() -> dict:
+    """Return scenes for color tests: the acceptance plate as red, green and blue strips of
+    albedo 0.8, each with a quarter of the other channels, and a white card of albedo 1."""
+    centre, axes = np.array([0.0, 0.0, 1.0]), rotation(10, -15)
+    third = 0.5 / 3.0
+    tints = ((1.0, 0.25, 0.25), (0.25, 1.0, 0.25), (0.25, 0.25, 1.0))
+    return {"colors": [Plate(centre + axes[:, 0] * k * third, axes, third / 2.0, 0.25, 0.8,
+                             tint=tint) for k, tint in zip((-1, 0, 1), tints)],
+            "white": [Plate(centre, axes, 0.25, 0.25, 1.0)]}
 
 
 def small_volume_scenes() -> dict:
@@ -397,9 +444,9 @@ def transform_scene(scene: list, r: np.ndarray, t: np.ndarray) -> list:
     for s in scene:
         if isinstance(s, Plate):
             moved.append(Plate(r @ s.centre + t, r @ s.axes, s.half_u, s.half_v, s.albedo,
-                               s.dots, s.dot_radius, s.dot_albedo))
+                               s.dots, s.dot_radius, s.dot_albedo, s.tint))
         else:
-            moved.append(Ball(r @ s.centre + t, s.radius, s.albedo))
+            moved.append(Ball(r @ s.centre + t, s.radius, s.albedo, s.tint))
     return moved
 
 
