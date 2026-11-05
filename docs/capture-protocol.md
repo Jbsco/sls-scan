@@ -72,6 +72,7 @@ column Gray codes with their inverses, then the phase shifts (`gray_000` onward,
     slscan capture --set stereo-calibration --out data/stereo-calibration/pose_000
     slscan capture --set stereo --frames 25 --out data/sweep
     app/target/debug/sls-scan capture --set scan --pitch 16 --wait 30
+    app/target/debug/sls-scan scan --params scan.json --wait 30 --out view.ply
 
 The stand-in renders a sweep around a part on a mat for stereo sets, about 2° per frame
 at 30 fps, and the next board pose for each calibration set. With light-off pairs it
