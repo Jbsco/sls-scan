@@ -62,7 +62,8 @@ and `dark_000/right.png` in place of `frame_` (D77).
 A scan request may carry `exposures`, a list of exposures relative to the node's nominal
 one. The node then takes each pattern at every exposure before the next pattern, names
 the frames `exposure_000/gray_000` onward, and sets each frame header's exposure field
-to the index in that list (D86).
+to the index in that list (D86). The application requests the exposures listed in its
+scan parameter file (D87).
 
 Pattern order follows the capture layouts of `docs/pipeline.md`. A scan set is the
 column Gray codes with their inverses, then the phase shifts (`gray_000` onward, then

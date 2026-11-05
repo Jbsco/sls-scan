@@ -220,9 +220,13 @@ In the phase-shift option a depth frame is a cycle of phase-shifted patterns ins
 Its decode kernel is `app/src/decode.wgsl`, and it matches the NumPy decode (D22).
 `app/src/scan.rs` triangulates the decoded columns on the CPU in double precision and
 matches `slscan/triangulate.py` (D82). `slscan scan-params` writes the calibration and
-decode settings it reads. `sls-scan scan` captures a scan set from a node, decodes and
-triangulates it, and writes the points as PLY (D83). In the window, a scan set run with
-a scan parameter file shows its points in the scene, and "Save points" writes them.
+decode settings it reads.
+
+`sls-scan scan` captures a scan set from a node, decodes and triangulates it, and writes
+the points as PLY (D83). With exposures in its scan parameters it decodes each one and
+keeps, per pixel, the one with the largest modulation, as NumPy does (D87). In the
+window, a scan set run with a scan parameter file shows its points in the scene, and
+"Save points" writes them.
 
 The application gate runs a scan through the window and compares its points with
 `sls-scan scan` (D85).
