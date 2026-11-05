@@ -73,13 +73,15 @@ def is_dark(pair: int, dark_every: int) -> bool:
 
 
 def pattern_names(pattern_set: str, width: int, height: int, steps: int,
-                  frames: int = 1, dark_every: int = 0, exposures: int = 1) -> list[str]:
+                  frames: int = 1, dark_every: int = 0, exposures: int = 1,
+                  color: bool = False) -> list[str]:
     """Return the capture file names of a pattern set, in sequence order.
 
     A stereo set is frames pairs, left then right, each pair from one trigger, and a pair
     taken with the pattern light off is named dark_ in place of frame_. A
     stereo-calibration set is one board pair. A scan set at several exposures takes each
-    pattern at every exposure before the next pattern, under exposure_000/ onward."""
+    pattern at every exposure before the next pattern, under exposure_000/ onward, and a
+    scan set with color ends with the black, red, green and blue fields under color/."""
     if pattern_set == "stereo":
         return [f"{'dark' if is_dark(i, dark_every) else 'frame'}_{i:03d}/{side}"
                 for i in range(frames) for side in ("left", "right")]
@@ -92,7 +94,9 @@ def pattern_names(pattern_set: str, width: int, height: int, steps: int,
         names = ([f"gray_{i:03d}" for i in range(2 * patterns.bit_planes(width))]
                  + [f"phase_{i:03d}" for i in range(steps)])
         if exposures > 1:
-            return [f"exposure_{e:03d}/{name}" for name in names for e in range(exposures)]
+            names = [f"exposure_{e:03d}/{name}" for name in names for e in range(exposures)]
+        if color:
+            names += [f"color/{field}" for field in ("black", "red", "green", "blue")]
         return names
     raise ValueError(f"unknown pattern set {pattern_set}")
 
@@ -121,22 +125,26 @@ def connect(host: str, port: int, wait: float = 0.0,
 
 def capture(host: str, port: int, pattern_set: str, out: str, pitch: int = 32,
             steps: int = 4, timeout: float = 60.0, wait: float = 0.0, frames: int = 1,
-            rate_hz: float = 0.0, dark_every: int = 0, exposures=None) -> dict:
+            rate_hz: float = 0.0, dark_every: int = 0, exposures=None,
+            color: bool = False) -> dict:
     """Run one sequence on a node and save its frames as PNG files under out. A rate asks
     a stereo set to be triggered at that many pairs per second, dark_every asks for
-    every dark_every-th pair with the pattern light off, and exposures asks for a scan
-    set at each of those exposures relative to the nominal one."""
+    every dark_every-th pair with the pattern light off, exposures asks for a scan set at
+    each of those exposures relative to the nominal one, and color for a scan set's black,
+    red, green and blue fields."""
     import cv2
 
     sock, hello = connect(host, port, wait, timeout)
     with sock:
         projector = hello["projector"]
         names = pattern_names(pattern_set, projector["width"], projector["height"], steps, frames,
-                              dark_every, len(exposures) if exposures else 1)
+                              dark_every, len(exposures) if exposures else 1, color)
         request = {"set": pattern_set, "pitch": pitch, "steps": steps, "frames": frames,
                    "rate_hz": rate_hz, "dark_every": dark_every}
         if exposures:
             request["exposures"] = [float(x) for x in exposures]
+        if color:
+            request["color"] = True
         send(sock, SEQUENCE, json.dumps(request).encode())
         os.makedirs(out, exist_ok=True)
         indices, stamps = [], []
@@ -168,7 +176,8 @@ class StandIn(socketserver.ThreadingTCPServer):
     def __init__(self, address, scene: str = "plate", seed: int = 0):
         self.rig = synthetic.reference_rig()
         self.spec = calibrate.BoardSpec(9, 6, 0.04, 0.03)
-        self.scene = {**synthetic.acceptance_scenes(), **synthetic.strip_scenes()}[scene]
+        self.scene = {**synthetic.acceptance_scenes(), **synthetic.strip_scenes(),
+                      **synthetic.color_scenes()}[scene]
         self.poses = synthetic.board_poses(self.spec)
         self.next_pose = 0
         self.stereo = synthetic.stereo_head()
@@ -269,7 +278,12 @@ class StandIn(socketserver.ThreadingTCPServer):
                                                 self.seed)
             stacks = [list(v["gray"]) + list(v["phase"]) for v in views]
             images = [stack[k] for k in range(len(stacks[0])) for stack in stacks]
-            return images, [e for _ in range(len(stacks[0])) for e in range(len(stacks))]
+            levels = [e for _ in range(len(stacks[0])) for e in range(len(stacks))]
+            if request.get("color"):
+                fields = synthetic.color_captures(self.rig, self.scene, self.seed + len(views))
+                images += [fields[name] for name in ("black", "red", "green", "blue")]
+                levels += [0] * 4
+            return images, levels
         raise ValueError(f"unknown pattern set {request['set']}")
 
 

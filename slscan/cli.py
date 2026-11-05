@@ -7,7 +7,7 @@ import sys
 
 import numpy as np
 
-from . import calibrate, decode, geometry, node, patterns, stereo, synthetic, triangulate
+from . import calibrate, colors, decode, geometry, node, patterns, stereo, synthetic, triangulate
 
 CAMERA_LIMIT_PX = 0.3
 PROJECTOR_LIMIT_PX = 0.5
@@ -53,21 +53,39 @@ def cmd_patterns(args: argparse.Namespace) -> int:
 PLATE_LIMIT_M = 0.0002
 
 
+def read_color(directory: str) -> dict:
+    """Read the black, red, green and blue field images of a color/ directory."""
+    import cv2
+
+    fields = {}
+    for name in ("black",) + colors.CHANNELS:
+        path = os.path.join(directory, f"{name}.png")
+        fields[name] = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+        if fields[name] is None:
+            raise FileNotFoundError(f"no {path}")
+    return fields
+
+
 def read_scan(directory: str) -> dict:
     """Read a view written with the file names of slscan patterns: gray_*.png and phase_*.png,
-    or a view at several exposures as exposure_*/ directories of them, as {"exposures": views}."""
+    or a view at several exposures as exposure_*/ directories of them, as {"exposures": views}.
+    A color/ directory of fields is read as "color"."""
     import cv2
 
     levels = sorted(glob.glob(os.path.join(directory, "exposure_*")))
     if levels:
-        return {"exposures": [read_scan(level) for level in levels]}
-
-    def stack(name):
-        files = sorted(glob.glob(os.path.join(directory, f"{name}_*.png")))
-        if not files:
-            raise FileNotFoundError(f"no {name}_*.png in {directory}")
-        return np.stack([cv2.imread(f, cv2.IMREAD_GRAYSCALE) for f in files])
-    return {"gray": stack("gray"), "phase": stack("phase")}
+        view = {"exposures": [read_scan(level) for level in levels]}
+    else:
+        def stack(name):
+            files = sorted(glob.glob(os.path.join(directory, f"{name}_*.png")))
+            if not files:
+                raise FileNotFoundError(f"no {name}_*.png in {directory}")
+            return np.stack([cv2.imread(f, cv2.IMREAD_GRAYSCALE) for f in files])
+        view = {"gray": stack("gray"), "phase": stack("phase")}
+    color = os.path.join(directory, "color")
+    if os.path.isdir(color):
+        view["color"] = read_color(color)
+    return view
 
 
 def write_scan(directory: str, captures: dict) -> None:
@@ -84,9 +102,15 @@ def cmd_scan(args: argparse.Namespace) -> int:
     else:
         columns, mask = decode.decode_columns(view["gray"], view["phase"], cal.projector.width,
                                               args.pitch)
-    points, _ = triangulate.triangulate(columns, mask, cal)
-    geometry.write_ply(args.out, points)
-    print(f"{len(points)} points written to {args.out}")
+    points, pixels = triangulate.triangulate(columns, mask, cal)
+    if "color" in view:
+        white = colors.white_balance(read_color(args.white)) if args.white else None
+        geometry.write_ply(args.out, points, colors.point_colors(view["color"], pixels, white))
+        print(f"{len(points)} colored points written to {args.out}"
+              + (" with white balance" if white is not None else " in grey levels"))
+    else:
+        geometry.write_ply(args.out, points)
+        print(f"{len(points)} points written to {args.out}")
     return 0
 
 
@@ -356,7 +380,7 @@ def cmd_capture(args: argparse.Namespace) -> int:
     exposures = [float(x) for x in args.exposures.split(",")] if args.exposures else None
     result = node.capture(host, int(port), args.set, args.out, args.pitch, args.steps,
                           wait=args.wait, frames=args.frames, dark_every=args.dark_every,
-                          exposures=exposures)
+                          exposures=exposures, color=args.color)
     print(f"{result['frames']} frames from {result['node']['node']} written to {args.out}")
     if result["missing"] or not result["in_order"]:
         print(f"missing frames {result['missing']}, in order: {result['in_order']}")
@@ -1180,6 +1204,7 @@ def main(argv=None) -> int:
     p.add_argument("view", help="directory of gray_*.png and phase_*.png captures")
     p.add_argument("--calibration", default="data/calibration.yaml")
     p.add_argument("--pitch", type=int, default=32, help="phase shift pitch in projector pixels")
+    p.add_argument("--white", help="color/ directory of a white card's fields for white balance")
     p.add_argument("--out", default="data/view.ply")
     p.set_defaults(func=cmd_scan)
 
@@ -1467,7 +1492,8 @@ def main(argv=None) -> int:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=5600)
     p.add_argument("--scene", choices=sorted({**synthetic.acceptance_scenes(),
-                                              **synthetic.strip_scenes()}), default="plate")
+                                              **synthetic.strip_scenes(),
+                                              **synthetic.color_scenes()}), default="plate")
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_node_sim)
 
@@ -1490,6 +1516,8 @@ def main(argv=None) -> int:
     p.add_argument("--steps", type=int, default=4)
     p.add_argument("--exposures", help="a scan set at these exposures relative to the nominal "
                                        "one, comma separated")
+    p.add_argument("--color", action="store_true",
+                   help="end a scan set with black, red, green and blue fields")
     p.add_argument("--wait", type=float, default=0.0, help="seconds to retry while the node starts")
     p.add_argument("--out", default="data/view")
     p.set_defaults(func=cmd_capture)
