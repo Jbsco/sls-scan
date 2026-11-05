@@ -42,12 +42,12 @@ python3 -m slscan.cli depth-params --calibration "$SESSION/stereo/stereo.yaml" -
 python3 -m slscan.cli replay-reference "$SESSION/recorded" --params "$SESSION/replay.json" \
     --calibration "$SESSION/stereo/stereo.yaml" >/dev/null
 $RUN replay --frames "$SESSION/recorded" --params "$SESSION/replay.json"
-$RUN calibrate --node "127.0.0.1:$PORT" --wait 30 --poses 6 --out "$SESSION" \
+$RUN calibrate --node "127.0.0.1:$PORT" --wait 30 --poses 12 --out "$SESSION" \
     --squares-x 9 --squares-y 6 --square-mm 40 --marker-mm 30
 python3 -m slscan.cli scan-params --calibration "$SESSION/calibration.yaml" --pitch 16 \
     --out "$SESSION/scan.json" >/dev/null
 $RUN scan --node "127.0.0.1:$PORT" --params "$SESSION/scan.json" --wait 30 --out "$SESSION/plate.ply"
-python3 -m slscan.cli measure "$SESSION/plate.ply" --shape plane --limit-mm 1
+python3 -m slscan.cli measure "$SESSION/plate.ply" --shape plane
 python3 -m slscan.cli decode-vectors --out "$SESSION/vectors" >/dev/null
 $RUN decode-check "$SESSION/vectors"
 python3 -m slscan.cli scan-vectors --out "$SESSION/scan-vectors" >/dev/null
