@@ -28,11 +28,12 @@ fn headless_capture(args: &[String]) -> ExitCode {
         rate_hz: 0,
         dark_every: 0,
         exposures: Vec::new(),
+        color: false,
     };
     for pair in args.chunks(2) {
         let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
             eprintln!(
-                "arguments come in pairs: --node, --set, --pitch, --steps, --frames, --rate, --dark-every, --exposures, --wait, --out"
+                "arguments come in pairs: --node, --set, --pitch, --steps, --frames, --rate, --dark-every, --exposures, --color, --wait, --out"
             );
             return ExitCode::FAILURE;
         };
@@ -50,6 +51,16 @@ fn headless_capture(args: &[String]) -> ExitCode {
             "--frames" => value.parse().map(|v| request.frames = v),
             "--rate" => value.parse().map(|v| request.rate_hz = v),
             "--dark-every" => value.parse().map(|v| request.dark_every = v),
+            "--color" => match value.parse::<bool>() {
+                Ok(color) => {
+                    request.color = color;
+                    Ok(())
+                }
+                Err(_) => {
+                    eprintln!("--color takes true or false");
+                    return ExitCode::FAILURE;
+                }
+            },
             "--exposures" => match value.split(',').map(str::parse::<f64>).collect() {
                 Ok(exposures) => {
                     request.exposures = exposures;
@@ -255,6 +266,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
         rate_hz: 0,
         dark_every,
         exposures: Vec::new(),
+        color: false,
     };
     let mut left: Option<Vec<u8>> = None;
     let mut results: Vec<(String, Result<depth::DepthResult, String>)> = Vec::new();
@@ -821,6 +833,7 @@ fn headless_scan(args: &[String]) -> ExitCode {
         rate_hz: 0,
         dark_every: 0,
         exposures: params.decode.exposures.clone(),
+        color: params.decode.color,
     };
     let mut frames = std::collections::HashMap::new();
     let mut size_ok = true;
@@ -881,15 +894,27 @@ fn headless_scan(args: &[String]) -> ExitCode {
     };
     let decoded = start.elapsed().as_secs_f64() * 1000.0;
     let start = Instant::now();
-    let (points, _) = scan::triangulate(&columns, &mask, &params);
+    let (points, pixels) = scan::triangulate(&columns, &mask, &params);
     let triangulated = start.elapsed().as_secs_f64() * 1000.0;
-    if let Err(e) = depth::write_ply(&out, &points) {
+    let written = if params.decode.color {
+        let Some(fields) = scan::color_fields(&frames) else {
+            eprintln!("the node sent no color fields");
+            return ExitCode::FAILURE;
+        };
+        let colors =
+            scan::point_colors(&fields, &pixels, params.camera.width, &params.decode.white);
+        depth::write_colored_ply(&out, &points, &colors)
+    } else {
+        depth::write_ply(&out, &points)
+    };
+    if let Err(e) = written {
         eprintln!("{}: {e}", out.display());
         return ExitCode::FAILURE;
     }
     println!(
-        "{} points on {}, decoded in {decoded:.1} ms and triangulated in {triangulated:.1} ms, written to {}",
+        "{} {}points on {}, decoded in {decoded:.1} ms and triangulated in {triangulated:.1} ms, written to {}",
         points.len(),
+        if params.decode.color { "colored " } else { "" },
         decoder.adapter,
         out.display()
     );
@@ -979,6 +1004,41 @@ fn scan_check(args: &[String]) -> ExitCode {
         1e6 * exact
     );
     let mut ok = exact < 1e-8;
+    if params.decode.color {
+        let fields = [
+            read("black.bin"),
+            read("red.bin"),
+            read("green.bin"),
+            read("blue.bin"),
+        ];
+        let (Ok(black), Ok(red), Ok(green), Ok(blue)) =
+            (&fields[0], &fields[1], &fields[2], &fields[3])
+        else {
+            eprintln!("color fields missing in {}", dir.display());
+            return ExitCode::FAILURE;
+        };
+        let Ok(reference_colors) = read("colors.bin") else {
+            eprintln!("colors.bin missing in {}", dir.display());
+            return ExitCode::FAILURE;
+        };
+        let fields = [black.clone(), red.clone(), green.clone(), blue.clone()];
+        let colors = scan::point_colors(
+            &fields,
+            &found_pixels,
+            params.camera.width,
+            &params.decode.white,
+        );
+        let differing = colors
+            .iter()
+            .zip(reference_colors.chunks_exact(3))
+            .filter(|(c, r)| c.as_slice() != *r)
+            .count();
+        println!(
+            "colors of {} points against NumPy: {differing} differ",
+            colors.len()
+        );
+        ok &= differing == 0 && reference_colors.len() == 3 * colors.len();
+    }
     let levels = params.decode.exposures.len().max(1);
     let n = params.camera.width as usize * params.camera.height as usize;
     let (gray_size, phase_size) = (

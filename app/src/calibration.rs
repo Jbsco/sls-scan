@@ -178,6 +178,7 @@ fn capture_set(
         rate_hz: 0,
         dark_every: 0,
         exposures: Vec::new(),
+        color: false,
     };
     let mut projector = None;
     let mut failure = None;

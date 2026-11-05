@@ -52,11 +52,17 @@ pub struct SequenceRequest {
     /// empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exposures: Vec<f64>,
+    /// Whether a scan set ends with the projector's black, red, green and blue fields.
+    #[serde(default)]
+    pub color: bool,
 }
 
 const fn one() -> u32 {
     1
 }
+
+/// The projector's fields of a scan set with color, in capture order.
+pub const FIELDS: [&str; 4] = ["black", "red", "green", "blue"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameHeader {
@@ -151,24 +157,23 @@ pub fn is_dark(pair: u32, dark_every: u32) -> bool {
     dark_every > 0 && pair.is_multiple_of(dark_every)
 }
 
-/// Capture file names of a set, in sequence order. A stereo set is `frames` pairs, left
+/// Capture file names of a request's set, in sequence order. A stereo set is `frames` pairs, left
 /// then right, and a pair taken with the pattern light off is named `dark_` in place of
 /// `frame_`. A stereo-calibration set is one board pair. A scan set at more than one
 /// exposure takes each pattern at every exposure before the next, under `exposure_000/`
-/// onward.
-pub fn pattern_names(
-    set: &str,
-    width: u32,
-    height: u32,
-    steps: u32,
-    frames: u32,
-    dark_every: u32,
-    exposures: u32,
-) -> Option<Vec<String>> {
+/// onward, and one with color ends with the projector's fields under `color/`.
+pub fn pattern_names(request: &SequenceRequest, width: u32, height: u32) -> Option<Vec<String>> {
+    let (steps, frames, dark_every, color) = (
+        request.steps,
+        request.frames,
+        request.dark_every,
+        request.color,
+    );
+    let exposures = u32::try_from(request.exposures.len().max(1)).unwrap_or(u32::MAX);
     fn numbered(prefix: &'static str, n: u32) -> impl Iterator<Item = String> {
         (0..n).map(move |i| format!("{prefix}_{i:03}"))
     }
-    match set {
+    match request.set.as_str() {
         "stereo" => Some(
             (0..frames)
                 .flat_map(|i| {
@@ -190,13 +195,17 @@ pub fn pattern_names(
         ),
         "scan" => {
             let names = numbered("gray", 2 * bit_planes(width)).chain(numbered("phase", steps));
-            Some(if exposures > 1 {
+            let mut names: Vec<String> = if exposures > 1 {
                 names
                     .flat_map(|name| (0..exposures).map(move |e| format!("exposure_{e:03}/{name}")))
                     .collect()
             } else {
                 names.collect()
-            })
+            };
+            if color {
+                names.extend(FIELDS.iter().map(|f| format!("color/{f}")));
+            }
+            Some(names)
         }
         _ => None,
     }
@@ -265,20 +274,40 @@ mod tests {
         assert!(parse_frame(&payload).is_err());
     }
 
+    fn request(
+        set: &str,
+        frames: u32,
+        dark_every: u32,
+        exposures: usize,
+        color: bool,
+    ) -> SequenceRequest {
+        SequenceRequest {
+            set: set.into(),
+            pitch: 32,
+            steps: 4,
+            frames,
+            rate_hz: 0,
+            dark_every,
+            exposures: vec![1.0; exposures],
+            color,
+        }
+    }
+
     #[test]
     fn pattern_names_follow_capture_layout() {
-        let scan = pattern_names("scan", 1024, 768, 4, 1, 0, 1).unwrap_or_default();
+        let scan = pattern_names(&request("scan", 1, 0, 1, false), 1024, 768).unwrap_or_default();
         assert_eq!(scan.len(), 24);
         assert_eq!(
             (scan[0].as_str(), scan[23].as_str()),
             ("gray_000", "phase_003")
         );
-        let calibration = pattern_names("calibration", 1024, 768, 4, 1, 0, 1).unwrap_or_default();
+        let calibration =
+            pattern_names(&request("calibration", 1, 0, 1, false), 1024, 768).unwrap_or_default();
         assert_eq!(calibration.len(), 41);
         assert_eq!(calibration[1], "columns_000");
         assert_eq!(calibration[40], "rows_019");
-        assert!(pattern_names("other", 1024, 768, 4, 1, 0, 1).is_none());
-        let hdr = pattern_names("scan", 1024, 768, 4, 1, 0, 3).unwrap_or_default();
+        assert!(pattern_names(&request("other", 1, 0, 1, false), 1024, 768).is_none());
+        let hdr = pattern_names(&request("scan", 1, 0, 3, false), 1024, 768).unwrap_or_default();
         assert_eq!(hdr.len(), 72);
         assert_eq!(
             hdr[0..4],
@@ -289,7 +318,14 @@ mod tests {
                 "exposure_000/gray_001"
             ]
         );
-        let stereo = pattern_names("stereo", 1024, 768, 4, 2, 0, 1).unwrap_or_default();
+        let color = pattern_names(&request("scan", 1, 0, 1, true), 1024, 768).unwrap_or_default();
+        assert_eq!(color.len(), 28);
+        assert_eq!(
+            color[24..],
+            ["color/black", "color/red", "color/green", "color/blue"]
+        );
+        let stereo =
+            pattern_names(&request("stereo", 2, 0, 1, false), 1024, 768).unwrap_or_default();
         assert_eq!(
             stereo,
             [
@@ -299,11 +335,12 @@ mod tests {
                 "frame_001/right"
             ]
         );
-        let dark = pattern_names("stereo", 1024, 768, 4, 8, 4, 1).unwrap_or_default();
+        let dark = pattern_names(&request("stereo", 8, 4, 1, false), 1024, 768).unwrap_or_default();
         assert_eq!(dark[0..2], ["dark_000/left", "dark_000/right"]);
         assert_eq!(dark[8..10], ["dark_004/left", "dark_004/right"]);
         assert_eq!(
-            pattern_names("stereo-calibration", 1024, 768, 4, 1, 0, 1).unwrap_or_default(),
+            pattern_names(&request("stereo-calibration", 1, 0, 1, false), 1024, 768)
+                .unwrap_or_default(),
             ["left", "right"]
         );
     }

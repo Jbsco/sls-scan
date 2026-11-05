@@ -148,6 +148,24 @@ pub fn write_ply(path: &Path, points: &[[f64; 3]]) -> io::Result<()> {
     file.flush()
 }
 
+/// Write points with red, green and blue bytes per vertex as binary PLY, as
+/// `geometry.write_ply` does with colors.
+pub fn write_colored_ply(path: &Path, points: &[[f64; 3]], colors: &[[u8; 3]]) -> io::Result<()> {
+    let mut file = io::BufWriter::new(std::fs::File::create(path)?);
+    write!(
+        file,
+        "ply\nformat binary_little_endian 1.0\nelement vertex {}\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nend_header\n",
+        points.len()
+    )?;
+    for (p, c) in points.iter().zip(colors) {
+        for v in p {
+            file.write_all(&(*v as f32).to_le_bytes())?;
+        }
+        file.write_all(c)?;
+    }
+    file.flush()
+}
+
 pub struct DepthResult {
     /// Rectified left pixel of each point.
     pub samples: Vec<[f32; 2]>,
