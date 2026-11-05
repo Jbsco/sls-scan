@@ -393,8 +393,8 @@ def cmd_decode_vectors(args: argparse.Namespace) -> int:
     import json
 
     rig = synthetic.reference_rig()
-    captures, _ = synthetic.scan_captures(rig, synthetic.acceptance_scenes()[args.scene],
-                                          pitch=args.pitch, seed=args.seed,
+    scene = {**synthetic.acceptance_scenes(), **synthetic.strip_scenes()}[args.scene]
+    captures, _ = synthetic.scan_captures(rig, scene, pitch=args.pitch, seed=args.seed,
                                           exposure=args.exposure)
     columns, mask = decode.decode_columns(captures["gray"], captures["phase"],
                                           rig.projector.width, args.pitch)
@@ -1375,7 +1375,8 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("decode-vectors", help="write a synthetic scan and its reference decode")
     p.add_argument("--out", default="data/decode-vectors")
-    p.add_argument("--scene", choices=sorted(synthetic.acceptance_scenes()), default="plate")
+    p.add_argument("--scene", choices=sorted({**synthetic.acceptance_scenes(),
+                                              **synthetic.strip_scenes()}), default="plate")
     p.add_argument("--pitch", type=int, default=16)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--exposure", type=float, default=1.0,
