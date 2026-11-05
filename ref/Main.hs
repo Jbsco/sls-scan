@@ -8,62 +8,61 @@ import Data.Array.Unboxed (UArray, listArray, (!))
 import Data.Bits (shiftL, (.|.))
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Unsafe as BU
-import Data.Char (isSpace)
-import Data.Word (Word32)
+import Data.Word (Word32, Word64)
 import Decode
 import GHC.Float (castWord32ToFloat)
+import Json
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 import System.FilePath ((</>))
 import System.IO (hPutStrLn, stderr)
 import Text.Printf (printf)
-import Text.Read (readMaybe)
 
--- | The numeric fields of a flat JSON object, as `json.dump` writes `meta.json`.
-fields :: String -> [(String, String)]
-fields text = [pair item | item <- splitOn ',' (strip (trimBraces (strip text)))]
+word :: B.ByteString -> Int -> Int -> Word64
+word b size i = foldr (\k acc -> acc `shiftL` 8 .|. byte k) 0 [0 .. size - 1]
   where
-    trimBraces = takeWhile (/= '}') . drop 1 . dropWhile (/= '{')
-    pair item =
-      let (key, rest) = break (== ':') item
-       in (filter (/= '"') (strip key), strip (drop 1 rest))
-    strip = dropWhile isSpace . reverse . dropWhile isSpace . reverse
-    splitOn c xs = case break (== c) xs of
-      (a, []) -> [a]
-      (a, _ : b) -> a : splitOn c b
-
-settingsFrom :: String -> Either String Settings
-settingsFrom text =
-  Settings
-    <$> number "width"
-    <*> number "height"
-    <*> number "planes"
-    <*> number "steps"
-    <*> number "projector_width"
-    <*> number "pitch"
-    <*> number "min_contrast"
-    <*> number "min_modulation"
-    <*> number "max_disagreement"
-  where
-    table = fields text
-    number :: Read a => String -> Either String a
-    number key = maybe (Left ("meta.json lacks " ++ key)) Right (lookup key table >>= readMaybe)
+    byte k = fromIntegral (BU.unsafeIndex b (size * i + k))
 
 floatAt :: B.ByteString -> Int -> Float
-floatAt b i =
-  let at k = fromIntegral (BU.unsafeIndex b (4 * i + k)) :: Word32
-   in castWord32ToFloat (at 0 .|. at 1 `shiftL` 8 .|. at 2 `shiftL` 16 .|. at 3 `shiftL` 24)
+floatAt b i = castWord32ToFloat (fromIntegral (word b 4 i) :: Word32)
+
+orDie :: Either String a -> IO a
+orDie = either (\e -> hPutStrLn stderr e >> exitFailure) pure
+
+int :: String -> Json -> Either String Int
+int key j = round <$> (field key j >>= number)
+
+settingsFrom :: Json -> Either String Settings
+settingsFrom j =
+  Settings
+    <$> int "width" j
+    <*> int "height" j
+    <*> int "planes" j
+    <*> int "steps" j
+    <*> int "projector_width" j
+    <*> real "pitch"
+    <*> real "min_contrast"
+    <*> real "min_modulation"
+    <*> real "max_disagreement"
+  where
+    real key = field key j >>= number
 
 decodeCheck :: FilePath -> IO ()
 decodeCheck dir = do
-  meta <- readFile (dir </> "meta.json")
-  settings <- either (\e -> hPutStrLn stderr e >> exitFailure) pure (settingsFrom meta)
+  settings <- readFile (dir </> "meta.json") >>= orDie . (\t -> parseJson t >>= settingsFrom)
   gray <- B.readFile (dir </> "gray.bin")
   phase <- B.readFile (dir </> "phase.bin")
   columns <- B.readFile (dir </> "columns.bin")
   mask <- B.readFile (dir </> "mask.bin")
   let n = width settings * height settings
-      decoded = map (decodePixel settings gray phase) [0 .. n - 1]
+      sizes =
+        [ B.length gray == 2 * planes settings * n
+        , B.length phase == steps settings * n
+        , B.length columns == 4 * n
+        , B.length mask == n
+        ]
+  if and sizes then pure () else hPutStrLn stderr "vectors do not match meta.json" >> exitFailure
+  let decoded = map (decodePixel settings gray phase) [0 .. n - 1]
       found = listArray (0, n - 1) (map (realToFrac . fst) decoded) :: UArray Int Float
       kept = listArray (0, n - 1) (map snd decoded) :: UArray Int Bool
       reference i = BU.unsafeIndex mask i /= 0
@@ -72,13 +71,6 @@ decodeCheck dir = do
       differences = [abs (found ! i - floatAt columns i) | i <- shared]
       largest = if null differences then 0 else maximum differences
       unequal = length (filter (> 0) differences)
-  let sizes =
-        [ B.length gray == 2 * planes settings * n
-        , B.length phase == steps settings * n
-        , B.length columns == 4 * n
-        , B.length mask == n
-        ]
-  if and sizes then pure () else hPutStrLn stderr "vectors do not match meta.json" >> exitFailure
   printf
     "%d pixels: %d mask disagreements, %d of %d shared columns differ, largest %.6f px\n"
     n
