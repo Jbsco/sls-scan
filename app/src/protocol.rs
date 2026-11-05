@@ -35,7 +35,7 @@ pub struct Hello {
     pub cameras: Vec<Camera>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct SequenceRequest {
     pub set: String,
     pub pitch: u32,
@@ -48,6 +48,10 @@ pub struct SequenceRequest {
     /// Every this many-th stereo pair is taken with the pattern light off, none when 0.
     #[serde(default)]
     pub dark_every: u32,
+    /// Exposures of a scan set relative to the node's nominal one, the nominal alone when
+    /// empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exposures: Vec<f64>,
 }
 
 const fn one() -> u32 {
@@ -149,7 +153,9 @@ pub fn is_dark(pair: u32, dark_every: u32) -> bool {
 
 /// Capture file names of a set, in sequence order. A stereo set is `frames` pairs, left
 /// then right, and a pair taken with the pattern light off is named `dark_` in place of
-/// `frame_`. A stereo-calibration set is one board pair.
+/// `frame_`. A stereo-calibration set is one board pair. A scan set at more than one
+/// exposure takes each pattern at every exposure before the next, under `exposure_000/`
+/// onward.
 pub fn pattern_names(
     set: &str,
     width: u32,
@@ -157,6 +163,7 @@ pub fn pattern_names(
     steps: u32,
     frames: u32,
     dark_every: u32,
+    exposures: u32,
 ) -> Option<Vec<String>> {
     fn numbered(prefix: &'static str, n: u32) -> impl Iterator<Item = String> {
         (0..n).map(move |i| format!("{prefix}_{i:03}"))
@@ -181,11 +188,16 @@ pub fn pattern_names(
                 .chain(numbered("rows", 2 * bit_planes(height)))
                 .collect(),
         ),
-        "scan" => Some(
-            numbered("gray", 2 * bit_planes(width))
-                .chain(numbered("phase", steps))
-                .collect(),
-        ),
+        "scan" => {
+            let names = numbered("gray", 2 * bit_planes(width)).chain(numbered("phase", steps));
+            Some(if exposures > 1 {
+                names
+                    .flat_map(|name| (0..exposures).map(move |e| format!("exposure_{e:03}/{name}")))
+                    .collect()
+            } else {
+                names.collect()
+            })
+        }
         _ => None,
     }
 }
@@ -255,18 +267,29 @@ mod tests {
 
     #[test]
     fn pattern_names_follow_capture_layout() {
-        let scan = pattern_names("scan", 1024, 768, 4, 1, 0).unwrap_or_default();
+        let scan = pattern_names("scan", 1024, 768, 4, 1, 0, 1).unwrap_or_default();
         assert_eq!(scan.len(), 24);
         assert_eq!(
             (scan[0].as_str(), scan[23].as_str()),
             ("gray_000", "phase_003")
         );
-        let calibration = pattern_names("calibration", 1024, 768, 4, 1, 0).unwrap_or_default();
+        let calibration = pattern_names("calibration", 1024, 768, 4, 1, 0, 1).unwrap_or_default();
         assert_eq!(calibration.len(), 41);
         assert_eq!(calibration[1], "columns_000");
         assert_eq!(calibration[40], "rows_019");
-        assert!(pattern_names("other", 1024, 768, 4, 1, 0).is_none());
-        let stereo = pattern_names("stereo", 1024, 768, 4, 2, 0).unwrap_or_default();
+        assert!(pattern_names("other", 1024, 768, 4, 1, 0, 1).is_none());
+        let hdr = pattern_names("scan", 1024, 768, 4, 1, 0, 3).unwrap_or_default();
+        assert_eq!(hdr.len(), 72);
+        assert_eq!(
+            hdr[0..4],
+            [
+                "exposure_000/gray_000",
+                "exposure_001/gray_000",
+                "exposure_002/gray_000",
+                "exposure_000/gray_001"
+            ]
+        );
+        let stereo = pattern_names("stereo", 1024, 768, 4, 2, 0, 1).unwrap_or_default();
         assert_eq!(
             stereo,
             [
@@ -276,11 +299,11 @@ mod tests {
                 "frame_001/right"
             ]
         );
-        let dark = pattern_names("stereo", 1024, 768, 4, 8, 4).unwrap_or_default();
+        let dark = pattern_names("stereo", 1024, 768, 4, 8, 4, 1).unwrap_or_default();
         assert_eq!(dark[0..2], ["dark_000/left", "dark_000/right"]);
         assert_eq!(dark[8..10], ["dark_004/left", "dark_004/right"]);
         assert_eq!(
-            pattern_names("stereo-calibration", 1024, 768, 4, 1, 0).unwrap_or_default(),
+            pattern_names("stereo-calibration", 1024, 768, 4, 1, 0, 1).unwrap_or_default(),
             ["left", "right"]
         );
     }

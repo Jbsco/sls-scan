@@ -2,7 +2,7 @@
 //! following `slscan/triangulate.py`.
 
 use crate::fuse::chunked;
-use crate::gpu::DecodeParams;
+use crate::gpu::{DecodeParams, Decoder};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -25,6 +25,10 @@ pub struct DecodeSettings {
     pub min_contrast: f32,
     pub min_modulation: f32,
     pub max_disagreement: f32,
+    /// Exposures of a scan set relative to the node's nominal one, the nominal alone when
+    /// empty.
+    #[serde(default)]
+    pub exposures: Vec<f64>,
 }
 
 /// Camera and projector, the camera-to-projector rotation (row-major) and translation,
@@ -90,22 +94,77 @@ impl Device {
 }
 
 /// The Gray code and phase stacks of a scan set's frames, keyed by capture name, in the
-/// plane-major layout the decode kernel takes, or none when a frame is missing.
+/// plane-major layout the decode kernel takes, one pair per exposure, or none when a
+/// frame is missing.
 pub fn stacks(
     frames: &HashMap<String, Vec<u8>>,
     decode: &DecodeSettings,
-) -> Option<(Vec<u8>, Vec<u8>)> {
-    let stack = |prefix: &str, n: u32| -> Option<Vec<u8>> {
-        let mut bytes = Vec::new();
-        for i in 0..n {
-            bytes.extend_from_slice(frames.get(&format!("{prefix}_{i:03}"))?);
+) -> Option<Vec<(Vec<u8>, Vec<u8>)>> {
+    let levels = decode.exposures.len().max(1);
+    (0..levels)
+        .map(|e| {
+            let prefix = if levels > 1 {
+                format!("exposure_{e:03}/")
+            } else {
+                String::new()
+            };
+            let stack = |name: &str, n: u32| -> Option<Vec<u8>> {
+                let mut bytes = Vec::new();
+                for i in 0..n {
+                    bytes.extend_from_slice(frames.get(&format!("{prefix}{name}_{i:03}"))?);
+                }
+                Some(bytes)
+            };
+            Some((
+                stack("gray", 2 * decode.planes)?,
+                stack("phase", decode.steps)?,
+            ))
+        })
+        .collect()
+}
+
+/// Amplitude of the sinusoid in pixel `p`'s phase samples, as `patterns.phase_modulation`.
+fn modulation(phase: &[u8], n: usize, p: usize, steps: usize) -> f64 {
+    let (mut num, mut den) = (0.0f64, 0.0f64);
+    for i in 0..steps {
+        let v = f64::from(phase[i * n + p]);
+        let angle = std::f64::consts::TAU * i as f64 / steps as f64;
+        num += v * angle.sin();
+        den += v * angle.cos();
+    }
+    2.0 / steps as f64 * num.hypot(den)
+}
+
+/// Decode a scan set's stacks on the GPU, one pair per exposure. At more than one
+/// exposure each pixel takes the exposure with the largest phase modulation among those
+/// where it decoded, as `decode.decode_exposures`.
+pub fn decode_scan(
+    decoder: &Decoder,
+    params: &ScanParams,
+    stacks: &[(Vec<u8>, Vec<u8>)],
+) -> Result<(Vec<f32>, Vec<bool>), String> {
+    let n = params.camera.width as usize * params.camera.height as usize;
+    let steps = params.decode.steps as usize;
+    if let [(gray, phase)] = stacks {
+        return decoder.decode(&params.decode_params(), gray, phase);
+    }
+    let mut columns = vec![0.0f32; n];
+    let mut mask = vec![false; n];
+    let mut best = vec![f64::NEG_INFINITY; n];
+    for (gray, phase) in stacks {
+        let (decoded, kept) = decoder.decode(&params.decode_params(), gray, phase)?;
+        for p in 0..n {
+            if kept[p] {
+                let m = modulation(phase, n, p, steps);
+                if m > best[p] {
+                    best[p] = m;
+                    columns[p] = decoded[p];
+                    mask[p] = true;
+                }
+            }
         }
-        Some(bytes)
-    };
-    Some((
-        stack("gray", 2 * decode.planes)?,
-        stack("phase", decode.steps)?,
-    ))
+    }
+    Ok((columns, mask))
 }
 
 fn point_of(params: &ScanParams, x: usize, y: usize, column: f64) -> Option<[f64; 3]> {
@@ -206,6 +265,7 @@ mod tests {
                 min_contrast: 10.0,
                 min_modulation: 10.0,
                 max_disagreement: 1.0,
+                exposures: Vec::new(),
             },
         };
         let (w, h) = (640usize, 480usize);

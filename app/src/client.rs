@@ -119,6 +119,7 @@ pub fn capture(
         request.steps,
         request.frames,
         request.dark_every,
+        u32::try_from(request.exposures.len().max(1)).unwrap_or(u32::MAX),
     )
     .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unknown pattern set"))?;
     on_event(Event::Connected(hello));

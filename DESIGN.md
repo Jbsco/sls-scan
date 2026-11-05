@@ -1717,3 +1717,21 @@ decodes a view of `exposure_` directories this way.
 exposure decodes only the middle strip. Exposures of 0.25, 1, 4 and 16 decode all
 three, the dark strip at 68 µm RMS, and the whole plate at 61 µm RMS against 51 µm for
 the middle strip alone. The application takes these scans next.
+
+## D87. Exposures in the application (2026-11-04)
+
+The application now takes the scans of D86. `slscan scan-params --exposures` lists
+exposures in the scan parameter file, and `sls-scan scan` and the window request them
+from the node, as `sls-scan capture --exposures` does. Each exposure decodes on the GPU.
+The CPU then gives each pixel the exposure with the largest phase modulation among those
+where it decoded, in double precision as NumPy does.
+
+On a strip scan at exposures of 0.25, 1, 4 and 16, `sls-scan scan-check` placed 521,793
+points from the GPU decode within 0.154 µm of NumPy's, with every pixel kept by both, on
+the Radeon and on llvmpipe. From a stand-in serving the strip plate, `sls-scan scan`
+decoded the four exposures in 86 ms and gave the points of `slscan scan` on its saved
+frames, within 0.12 µm.
+
+With a twelve-pose calibration from the stand-in, that plate measured 0.098 mm RMS over
+all three strips. One exposure gave 172,569 points on the middle strip alone, at
+0.060 mm. The gate runs the vector check and the stand-in scan.
