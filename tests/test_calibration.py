@@ -26,10 +26,36 @@ def test_camera_intrinsics_match_the_rig(rig, result):
     assert result.camera.rms_px < 0.3
 
 
-def test_wide_lenses_fit_k2(result):
-    camera = result.camera
-    assert calibrate.half_field((camera.width, camera.height), camera.matrix) >= calibrate.NARROW_FIELD
-    assert camera.distortion[1] != 0.0
+def board_grid_views(matrix, distortion, spread):
+    """Board points (objects) and their pixels (images) for five poses of a 0.4 × 0.3 m
+    grid at 1 m, shifted spread metres towards each corner and tilted."""
+    import cv2
+
+    grid = np.array([[x, y, 0.0] for y in np.linspace(-0.15, 0.15, 7)
+                     for x in np.linspace(-0.2, 0.2, 9)])
+    objects, images = [], []
+    for sx, sy, tilt in ((0, 0, 0.0), (1, 1, 0.2), (-1, 1, -0.2), (1, -1, 0.15), (-1, -1, -0.15)):
+        rvec = np.array([tilt, -tilt, 0.05])
+        tvec = np.array([sx * spread, sy * spread * 0.75, 1.0])
+        pixels, _ = cv2.projectPoints(grid, rvec, tvec, matrix, distortion)
+        objects.append(grid.astype(np.float32))
+        images.append(pixels.reshape(-1, 2).astype(np.float32))
+    return objects, images
+
+
+def test_k2_is_fitted_only_where_the_board_reaches():
+    matrix = np.array([[1000.0, 0, 640], [0, 1000.0, 480], [0, 0, 1]])
+    distortion = np.array([-0.2, 0.15, 0.0, 0.0, 0.0])
+    wide = calibrate.calibrate_intrinsics(*board_grid_views(matrix, distortion, 0.32), (1280, 960))
+    centre = calibrate.calibrate_intrinsics(*board_grid_views(matrix, distortion, 0.0), (1280, 960))
+    assert wide.distortion[1] != 0.0
+    assert abs(wide.distortion[1] - 0.15) < 0.01
+    assert centre.distortion[1] == 0.0
+
+
+def test_reference_rig_keeps_k2_at_zero(result):
+    assert result.camera.distortion[1] == 0.0
+    assert result.projector.distortion[1] == 0.0
 
 
 def test_projector_intrinsics_match_the_rig(rig, result):

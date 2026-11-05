@@ -41,7 +41,6 @@ def test_stereo_calibration_matches_the_head(head, stereo_calibration):
 
 def test_narrow_lenses_keep_k2_at_zero(stereo_calibration):
     for side in (stereo_calibration.left, stereo_calibration.right):
-        assert calibrate.half_field((side.width, side.height), side.matrix) < calibrate.NARROW_FIELD
         assert side.distortion[1] == 0.0
 
 
