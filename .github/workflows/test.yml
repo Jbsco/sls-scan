@@ -24,3 +24,6 @@ jobs:
 
       - name: Run test gate
         run: bash test.do
+
+      - name: Run reference gate
+        run: ghc --version && bash ref.do
