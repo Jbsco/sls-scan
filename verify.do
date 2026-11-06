@@ -17,6 +17,7 @@ run () {
 run "style + sanitization" bash style.do
 run "tests"                bash test.do
 run "reference"            bash ref.do
+run "futhark"              bash fut.do
 run "application"          bash app.do
 echo "=========================================="
 if [ "$fail" -ne 0 ]; then
