@@ -1836,3 +1836,50 @@ the head a quarter turn therefore reaches the same floor in a second view, and a
 continuous sweep does so as it moves. This is a measurement for the rig of Phase 8, not
 a choice of it. A third camera adds a capture channel and matching for two more pairs
 per frame.
+
+## D93. A Futhark decode, measured against WGSL (2026-11-06)
+
+`fut/decode.fut` decodes as `slscan/decode.py` does, in a module over the float type, so
+one source gives entry points in double and single precision. `slscan/futhark.py` builds
+it into a shared library with one Futhark backend and calls it through ctypes, over the
+C interface an application would link. `slscan futhark-check` compares its columns and
+masks with vectors from `slscan decode-vectors` and times it.
+
+In double precision it matched NumPy to the last bit on plate, sphere and strip plate,
+on C, multicore, OpenCL and HIP backends. In single precision no mask differed, and
+columns differed by at most 6.1 × 10⁻⁵ px, as WGSL's do. Truncating in place of
+rounding made 259,279 masks differ, and dropping the saturation rule 151,187, as in
+Haskell (D90).
+
+Times below are for a 1280 × 960 plate scan of 20 Gray code and 4 phase images
+(29.5 MB), each the fastest of three runs. We measured on a Radeon RX 7900 GRE over
+PCIe 4.0 x16 with Mesa 26.2.4 and ROCm 7.2.4, and a Ryzen 7 7700X. A virtual machine
+used about seven of its 16 threads throughout, which slows CPU backends and host work
+on every path. `sls-scan decode-check` times WGSL, and `slscan futhark-check` Futhark.
+
+| Decode | Precision | With upload and readback | Kernel alone |
+|---|---|---|---|
+| WGSL on Vulkan | f32 | 7.7 ms | 0.13 ms |
+| Futhark, OpenCL | f32 | 2.2 ms | 0.14 ms |
+| Futhark, HIP | f32 | 2.0 ms | 0.14 ms |
+| Futhark, OpenCL | f64 | 3.9 ms | 1.74 ms |
+| Futhark, HIP | f64 | 3.4 ms | 1.66 ms |
+| Futhark, multicore | f32 | 17.7 ms | 13.1 ms |
+| Futhark, multicore | f64 | 21.5 ms | 17.6 ms |
+| Futhark, C | f64 | 140 ms | 136 ms |
+| NumPy | f64 | 108 ms | |
+
+WGSL's and Futhark's single-precision kernels run equally fast. Of WGSL's 7.7 ms, about 7.5 ms is host work in
+`app/src/gpu.rs`, which pads both stacks into new 32-bit word buffers and creates
+every buffer per call. Futhark keeps device memory between calls and takes bytes as
+they are. Double precision costs this card twelve times its kernel time, which seems
+likely to follow from RDNA3's low double-precision rate. Futhark's C backend runs one
+thread and trails NumPy, whose array operations use vector instructions.
+
+For decode this gives no reason to leave WGSL (D11). Its kernel is as fast, and wgpu
+reaches Vulkan on AMD and NVIDIA cards and lavapipe with no toolchain beyond Rust.
+Reusing buffers across calls would likely recover most of those 7.5 ms. Futhark stays
+as a second check: `fut.do` runs its C and multicore backends in `verify.do` and in
+continuous integration, and `slscan futhark-check --backend opencl` checks a card. It
+costs a C compiler and a library build per backend, and HIP needs ROCm's include and
+library paths when ROCm sits outside the compiler's defaults, as in `/opt/rocm`.
