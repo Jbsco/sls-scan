@@ -729,6 +729,13 @@ fn decode_check(args: &[String]) -> ExitCode {
     let Some((decoded, decoded_mask)) = result else {
         return ExitCode::FAILURE;
     };
+    let kernel = match decoder.time_kernel(&params, &gray, &phase, 10) {
+        Ok(ms) => ms,
+        Err(e) => {
+            eprintln!("decode failed: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
     let reference: Vec<f32> = columns
         .chunks_exact(4)
         .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
@@ -754,6 +761,7 @@ fn decode_check(args: &[String]) -> ExitCode {
         "{} × {} pixels decoded in {fastest:.1} ms (fastest of three, with upload and readback)",
         meta.width, meta.height
     );
+    println!("kernel alone {kernel:.2} ms (fastest of ten, stacks on the device)");
     println!(
         "mask disagreements {mismatched} of {pixels} ({:.4} %), largest column difference {max_difference:.5} px",
         100.0 * fraction

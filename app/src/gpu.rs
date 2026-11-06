@@ -4,6 +4,7 @@
 use eframe::wgpu;
 use eframe::wgpu::util::DeviceExt;
 use std::sync::mpsc;
+use std::time::Instant;
 
 const WORKGROUP: u32 = 64;
 const MAX_GROUPS: u32 = 65_535;
@@ -157,13 +158,8 @@ impl Decoder {
         }
     }
 
-    /// Decode stacks laid out as in `slscan`: plane-major, then rows, then columns.
-    pub fn decode(
-        &self,
-        params: &DecodeParams,
-        gray: &[u8],
-        phase: &[u8],
-    ) -> Result<(Vec<f32>, Vec<bool>), String> {
+    /// Upload stacks and build the output buffers and bind group of one decode.
+    fn bind(&self, params: &DecodeParams, gray: &[u8], phase: &[u8]) -> Result<Bound, String> {
         let n = params.width as usize * params.height as usize;
         if gray.len() != 2 * params.planes as usize * n || phase.len() != params.steps as usize * n
         {
@@ -212,16 +208,7 @@ impl Decoder {
                 mapped_at_creation: false,
             })
         };
-        let readback = |label| {
-            self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
-        };
         let (columns, mask) = (output("columns"), output("mask"));
-        let (columns_read, mask_read) = (readback("columns read"), readback("mask read"));
         let layout = self.pipeline.get_bind_group_layout(0);
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("decode"),
@@ -249,6 +236,16 @@ impl Decoder {
                 },
             ],
         });
+        Ok(Bound {
+            bind_group,
+            columns,
+            mask,
+            groups: (x, y),
+            size,
+        })
+    }
+
+    fn encode(&self, bound: &Bound) -> wgpu::CommandEncoder {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -260,11 +257,32 @@ impl Decoder {
                 timestamp_writes: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(x, y, 1);
+            pass.set_bind_group(0, &bound.bind_group, &[]);
+            pass.dispatch_workgroups(bound.groups.0, bound.groups.1, 1);
         }
-        encoder.copy_buffer_to_buffer(&columns, 0, &columns_read, 0, size);
-        encoder.copy_buffer_to_buffer(&mask, 0, &mask_read, 0, size);
+        encoder
+    }
+
+    /// Decode stacks laid out as in `slscan`: plane-major, then rows, then columns.
+    pub fn decode(
+        &self,
+        params: &DecodeParams,
+        gray: &[u8],
+        phase: &[u8],
+    ) -> Result<(Vec<f32>, Vec<bool>), String> {
+        let bound = self.bind(params, gray, phase)?;
+        let readback = |label| {
+            self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: bound.size,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let (columns_read, mask_read) = (readback("columns read"), readback("mask read"));
+        let mut encoder = self.encode(&bound);
+        encoder.copy_buffer_to_buffer(&bound.columns, 0, &columns_read, 0, bound.size);
+        encoder.copy_buffer_to_buffer(&bound.mask, 0, &mask_read, 0, bound.size);
         self.queue.submit([encoder.finish()]);
         let column_bytes = read(&self.device, &columns_read)?;
         let mask_bytes = read(&self.device, &mask_read)?;
@@ -275,6 +293,37 @@ impl Decoder {
         let mask = mask_bytes.chunks_exact(4).map(|c| c[0] != 0).collect();
         Ok((columns, mask))
     }
+
+    /// Time the kernel alone, in milliseconds: the fastest of `runs` dispatches on stacks
+    /// already on the device, with no readback.
+    pub fn time_kernel(
+        &self,
+        params: &DecodeParams,
+        gray: &[u8],
+        phase: &[u8],
+        runs: usize,
+    ) -> Result<f64, String> {
+        let bound = self.bind(params, gray, phase)?;
+        let mut fastest = f64::INFINITY;
+        for _ in 0..runs {
+            let start = Instant::now();
+            self.queue.submit([self.encode(&bound).finish()]);
+            self.device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .map_err(|e| e.to_string())?;
+            fastest = fastest.min(start.elapsed().as_secs_f64() * 1000.0);
+        }
+        Ok(fastest)
+    }
+}
+
+/// Output buffers and bind group of one decode, with its dispatch size.
+struct Bound {
+    bind_group: wgpu::BindGroup,
+    columns: wgpu::Buffer,
+    mask: wgpu::Buffer,
+    groups: (u32, u32),
+    size: u64,
 }
 
 #[cfg(test)]
@@ -356,5 +405,28 @@ mod tests {
             Err(e) => panic!("decode failed: {e}"),
         };
         assert_eq!(mask, vec![false, false]);
+    }
+
+    #[test]
+    fn kernel_time_is_measured() {
+        let Some(decoder) = decoder() else { return };
+        let params = DecodeParams {
+            width: 64,
+            height: 8,
+            planes: 6,
+            steps: 4,
+            projector_width: 64,
+            pitch: 8.0,
+            min_contrast: 10.0,
+            min_modulation: 10.0,
+            max_disagreement: 1.0,
+        };
+        let n = 64 * 8;
+        let (gray, phase) = (vec![0u8; 12 * n], vec![0u8; 4 * n]);
+        let ms = match decoder.time_kernel(&params, &gray, &phase, 3) {
+            Ok(ms) => ms,
+            Err(e) => panic!("kernel timing failed: {e}"),
+        };
+        assert!(ms.is_finite() && ms >= 0.0, "kernel time {ms}");
     }
 }
