@@ -68,3 +68,14 @@ def test_unknown_backend_is_refused():
     with pytest.raises(ValueError):
         futhark.link_flags("vulkan")
 
+
+def test_check_command_passes_vectors_and_fails_a_changed_mask(tmp_path):
+    from slscan import cli
+
+    out = str(tmp_path / "plate")
+    assert cli.main(["decode-vectors", "--out", out]) == 0
+    assert cli.main(["futhark-check", "--exact", out]) == 0
+    mask = np.fromfile(f"{out}/mask.bin", np.uint8)
+    mask[np.flatnonzero(mask)[:200]] = 0
+    mask.tofile(f"{out}/mask.bin")
+    assert cli.main(["futhark-check", out]) == 1
