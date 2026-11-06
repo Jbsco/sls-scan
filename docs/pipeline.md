@@ -158,6 +158,12 @@ that does not saturate there (D86).
 `ref.do` compares its columns and masks with NumPy's on synthetic scans (D90). It also
 triangulates the plate scan of `slscan scan-vectors` and compares its points (D91).
 
+`fut/decode.fut` decodes again in Futhark, in double and single precision from one
+source. `slscan futhark-check` builds it with a Futhark backend (C, multicore, OpenCL or
+HIP), calls it through ctypes and compares its columns and masks with NumPy's. It times
+each decode with and without upload and readback, as `sls-scan decode-check` does for
+the WGSL kernel. `fut.do` runs it on C and multicore backends (D93).
+
 ## Color
 
 `colors.py` colors points from a mono camera and the projector's black, red, green and

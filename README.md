@@ -141,12 +141,14 @@ error budget.
 | `slscan/` | Python package: calibration, stereo matching, the phase-shift path, artifact fits, synthetic captures, capture protocol with a stand-in node, and the commands in `cli.py` |
 | `app/` | Rust application: capture client, three panels, and a headless `capture` mode |
 | `tests/` | pytest tests of the pure functions, and the virtual bench on synthetic captures |
+| `ref/` | Haskell reference of the decode and triangulation, on GHC's own libraries |
+| `fut/` | Futhark decode, built for C, multicore, OpenCL or HIP |
 | `docs/hardware.md` | Bill of materials, rig geometry and build notes |
 | `docs/accuracy.md` | Error model and acceptance tests |
 | `docs/pipeline.md` | Each stage with its inputs, outputs and file formats |
 | `docs/capture-protocol.md` | Messages between the application and a capture node |
 | `tools/` | Markdown rendering check, prose check |
-| `style.do`, `test.do`, `app.do`, `verify.do`, `node.do` | The gates, runnable with `bash` or `redo` |
+| `style.do`, `test.do`, `ref.do`, `fut.do`, `app.do`, `verify.do`, `node.do` | The gates, runnable with `bash` or `redo` |
 | `Dockerfile` | Stand-in capture node image |
 | `DESIGN.md` | Numbered design decisions with their reasons |
 | `ROADMAP.md` | Phases with acceptance criteria, and open questions |
@@ -156,11 +158,15 @@ error budget.
 Python 3.11 or later with the packages in `pyproject.toml` (OpenCV with the contrib
 modules, NumPy, Open3D, PyYAML, pytest). The application needs Rust 1.93, pinned in
 `app/rust-toolchain.toml`, and a Vulkan driver (or Mesa's lavapipe for the CPU path).
+`ref.do` needs GHC, and `fut.do` needs Futhark and a C compiler. Each skips without its
+tools.
 
     python3 -m venv .venv && . .venv/bin/activate
     pip install -e '.[dev]'
     bash test.do                              # the pytest suite
     bash style.do                             # markdown, sanitization and prose
+    bash ref.do                               # Haskell reference against NumPy, needs GHC
+    bash fut.do                               # Futhark decode against NumPy, needs Futhark
     bash app.do                               # Rust format, lints, tests, protocol check
     bash verify.do                            # every gate, cheapest first
     bash node.do                              # virtual bench over the capture protocol, needs Docker

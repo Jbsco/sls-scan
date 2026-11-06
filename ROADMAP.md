@@ -79,8 +79,8 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   Futhark kernels. The application takes phase-shift scans at several exposures and in
   color, matching NumPy (D82 to D89). A Haskell reference decodes bit for bit and
   triangulates within a femtometre (D90, D91). A third camera above the light would see
-  the whole floor of a slot across the baseline, where the pair sees 30% at 40 mm deep
-  (D92).
+  all of a 40 mm deep slot floor across the baseline, against 30% for the pair (D92).
+  Futhark decodes bit for bit on four backends, as fast on the GPU as WGSL (D93).
 
 ## Open questions
 

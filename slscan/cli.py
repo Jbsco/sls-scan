@@ -433,6 +433,66 @@ def cmd_decode_vectors(args: argparse.Namespace) -> int:
     return 0
 
 
+def read_decode_vectors(directory: str) -> tuple[dict, np.ndarray, np.ndarray, np.ndarray,
+                                                 np.ndarray]:
+    """Return the metadata, Gray code stack, phase stack, columns and mask that
+    decode-vectors wrote to directory, stacks as (planes, rows, columns)."""
+    import json
+
+    with open(os.path.join(directory, "meta.json"), encoding="utf-8") as f:
+        meta = json.load(f)
+    shape = (meta["height"], meta["width"])
+
+    def read(name, dtype):
+        return np.fromfile(os.path.join(directory, name), dtype=dtype)
+
+    return (meta, read("gray.bin", np.uint8).reshape(-1, *shape),
+            read("phase.bin", np.uint8).reshape(-1, *shape), read("columns.bin", "<f4")
+            .reshape(shape), read("mask.bin", np.uint8).reshape(shape).astype(bool))
+
+
+def cmd_futhark_check(args: argparse.Namespace) -> int:
+    """Decode vector sets with a Futhark backend and compare with NumPy's decode."""
+    import tempfile
+    import time
+
+    from . import futhark
+
+    failed = False
+    with tempfile.TemporaryDirectory() as scratch:
+        library = futhark.build(args.backend, args.build or scratch)
+        with futhark.Decoder(library, args.backend) as decoder:
+            for directory in args.vectors:
+                meta, gray, phase, columns, mask = read_decode_vectors(directory)
+                settings = (meta["projector_width"], meta["pitch"], meta["min_contrast"],
+                             meta["min_modulation"], meta["max_disagreement"])
+                times = []
+                for _ in range(5):
+                    start = time.perf_counter()
+                    found, kept = decoder.decode(gray, phase, *settings,
+                                                 precision=args.precision)
+                    times.append(1000.0 * (time.perf_counter() - start))
+                kernel = decoder.time_kernel(gray, phase, *settings, precision=args.precision)
+                disagreements = int(np.count_nonzero(kept != mask))
+                shared = kept & mask
+                differ = int(np.count_nonzero(found[shared] != columns[shared]))
+                largest = float(np.abs(found[shared] - columns[shared]).max(initial=0.0))
+                print(f"{args.backend} {args.precision}, {mask.size} pixels: {disagreements} "
+                      f"mask disagreements, {differ} of {int(shared.sum())} shared columns "
+                      f"differ, largest {largest:.6f} px")
+                print(f"decoded in {min(times):.1f} ms (fastest of five, with upload and "
+                      f"readback), kernel alone {kernel:.2f} ms (fastest of ten, stacks on "
+                      f"the device)")
+                if args.exact:
+                    ok = disagreements == 0 and differ == 0
+                else:
+                    ok = disagreements <= 1e-4 * mask.size and largest <= 0.01
+                verdict = "matches" if ok else "differs from"
+                print(f"decode check: Futhark {verdict} the NumPy reference")
+                failed |= not ok
+    return 1 if failed else 0
+
+
 def cmd_scan_params(args: argparse.Namespace) -> int:
     """Write a calibration and decode settings as JSON for the application's scans."""
     import json
@@ -1402,6 +1462,16 @@ def main(argv=None) -> int:
     p.add_argument("--exposure", type=float, default=1.0,
                    help="exposure relative to the nominal one; 4 saturates the plate")
     p.set_defaults(func=cmd_decode_vectors)
+
+    p = sub.add_parser("futhark-check",
+                       help="decode vector sets with the Futhark kernel and compare with NumPy")
+    p.add_argument("vectors", nargs="+", help="directories decode-vectors wrote")
+    p.add_argument("--backend", choices=("c", "multicore", "opencl", "hip"), default="c")
+    p.add_argument("--precision", choices=("f64", "f32"), default="f64")
+    p.add_argument("--exact", action="store_true",
+                   help="require every mask bit and column to equal NumPy's")
+    p.add_argument("--build", help="directory for the compiled library (default: temporary)")
+    p.set_defaults(func=cmd_futhark_check)
 
     p = sub.add_parser("depth-params",
                        help="write the depth frame parameters of a stereo calibration for "
