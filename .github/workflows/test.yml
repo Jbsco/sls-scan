@@ -22,8 +22,20 @@ jobs:
       - name: Install the package with its test extras
         run: pip install -e '.[dev]'
 
+      - name: Install Futhark
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSLO https://github.com/diku-dk/futhark/releases/download/v0.28.2/futhark-0.28.2-linux-x86_64.tar.xz
+          echo "3b582c5cbd4a63261ea70bbf0b39f547bfcf95e2c66f635ac0a87e81f0403fcf  futhark-0.28.2-linux-x86_64.tar.xz" | sha256sum -c
+          tar -xJf futhark-0.28.2-linux-x86_64.tar.xz
+          PREFIX="$HOME/.local" make -C futhark-0.28.2-linux-x86_64 install
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: Run test gate
         run: bash test.do
 
       - name: Run reference gate
         run: ghc --version && bash ref.do
+
+      - name: Run Futhark gate
+        run: futhark --version && bash fut.do
