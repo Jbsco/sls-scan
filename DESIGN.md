@@ -1793,8 +1793,8 @@ dropping the saturation rule made 151,187 differ.
 
 It builds from GHC's own libraries, `base`, `bytestring`, `array` and `filepath`, so any
 GHC installation runs it. `ref.do` builds it and runs the check in `verify.do`, and
-skips without GHC. Continuous integration does not install GHC yet. Triangulation is
-the next part of the reference.
+skips without GHC. Continuous integration runs it in the Tests job, on the GHC of
+GitHub's runner image. Triangulation is the next part of the reference.
 
 ## D91. Triangulation in the Haskell reference (2026-11-05)
 
