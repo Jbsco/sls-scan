@@ -4,6 +4,7 @@
 use eframe::wgpu;
 use eframe::wgpu::util::DeviceExt;
 use std::sync::mpsc;
+use std::time::Instant;
 
 const WORKGROUP: u32 = 64;
 const MAX_GROUPS: u32 = 65_535;
@@ -292,6 +293,28 @@ impl Decoder {
         let mask = mask_bytes.chunks_exact(4).map(|c| c[0] != 0).collect();
         Ok((columns, mask))
     }
+
+    /// Time the kernel alone, in milliseconds: the fastest of `runs` dispatches on stacks
+    /// already on the device, with no readback.
+    pub fn time_kernel(
+        &self,
+        params: &DecodeParams,
+        gray: &[u8],
+        phase: &[u8],
+        runs: usize,
+    ) -> Result<f64, String> {
+        let bound = self.bind(params, gray, phase)?;
+        let mut fastest = f64::INFINITY;
+        for _ in 0..runs {
+            let start = Instant::now();
+            self.queue.submit([self.encode(&bound).finish()]);
+            self.device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .map_err(|e| e.to_string())?;
+            fastest = fastest.min(start.elapsed().as_secs_f64() * 1000.0);
+        }
+        Ok(fastest)
+    }
 }
 
 /// Output buffers and bind group of one decode, with its dispatch size.
@@ -382,5 +405,28 @@ mod tests {
             Err(e) => panic!("decode failed: {e}"),
         };
         assert_eq!(mask, vec![false, false]);
+    }
+
+    #[test]
+    fn kernel_time_is_measured() {
+        let Some(decoder) = decoder() else { return };
+        let params = DecodeParams {
+            width: 64,
+            height: 8,
+            planes: 6,
+            steps: 4,
+            projector_width: 64,
+            pitch: 8.0,
+            min_contrast: 10.0,
+            min_modulation: 10.0,
+            max_disagreement: 1.0,
+        };
+        let n = 64 * 8;
+        let (gray, phase) = (vec![0u8; 12 * n], vec![0u8; 4 * n]);
+        let ms = match decoder.time_kernel(&params, &gray, &phase, 3) {
+            Ok(ms) => ms,
+            Err(e) => panic!("kernel timing failed: {e}"),
+        };
+        assert!(ms.is_finite() && ms >= 0.0, "kernel time {ms}");
     }
 }
