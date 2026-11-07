@@ -240,7 +240,8 @@ moves, which shows coverage and gaps. In continuous mode the fused model is the 
 and dense matching of selected frames refines it afterwards.
 
 In the phase-shift option a depth frame is a cycle of phase-shifted patterns instead.
-Its decode kernel is `app/src/decode.wgsl`, and it matches the NumPy decode (D22).
+Its decode kernel is `app/src/decode.wgsl`, and it matches the NumPy decode (D22). The
+decoder keeps its buffers between calls of one stack size (D94).
 `app/src/scan.rs` triangulates the decoded columns on the CPU in double precision and
 matches `slscan/triangulate.py` (D82). `slscan scan-params` writes the calibration and
 decode settings it reads.
