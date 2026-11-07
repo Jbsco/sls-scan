@@ -1883,3 +1883,22 @@ as a second check: `fut.do` runs its C and multicore backends in `verify.do` and
 continuous integration, and `slscan futhark-check --backend opencl` checks a card. It
 costs a C compiler and a library build per backend, and HIP needs ROCm's include and
 library paths when ROCm sits outside the compiler's defaults, as in `/opt/rocm`.
+
+## D94. Decode buffers kept between calls (2026-11-06)
+
+D93 found the WGSL decode spending about 7.5 ms of 7.7 ms on host work, with a kernel
+of 0.13 ms. `gpu::Decoder` now keeps its parameter, stack, output and readback buffers
+and its bind group from one decode to the next, while stack sizes stay the same, and
+allocates them again when sizes change. Stacks go straight into their buffers through
+`Queue::write_buffer`, with no padded copy. A scan at several exposures decodes each
+exposure into one set of buffers.
+
+On a 1280 × 960 plate scan, with a Radeon RX 7900 GRE and a load average near 5,
+`sls-scan decode-check` took 6.6 to 7.2 ms before and 3.6 to 4.6 ms after, over five
+alternating runs of each build. Every run matched NumPy, and the kernel stayed at
+0.12 ms. Mapping both readback buffers at once and converting from mapped memory made
+no difference beyond run-to-run spread, so we left it out. Most of the remaining time
+seems likely to be upload: 29.5 MB copied into wgpu's staging memory and then over PCIe.
+
+A decoder of this size keeps 49 MB of buffers between calls: 29.5 MB of stacks and two
+pairs of 4.9 MB output and readback buffers.

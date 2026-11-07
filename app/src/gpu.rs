@@ -3,7 +3,7 @@
 
 use eframe::wgpu;
 use eframe::wgpu::util::DeviceExt;
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 use std::time::Instant;
 
 const WORKGROUP: u32 = 64;
@@ -27,6 +27,8 @@ pub struct Decoder {
     queue: wgpu::Queue,
     pipeline: wgpu::ComputePipeline,
     pub adapter: String,
+    /// Buffers of the last decode, kept while the stack sizes stay the same.
+    kept: Mutex<Option<Bound>>,
 }
 
 /// Pad bytes to whole 32-bit words, as WGSL storage arrays of `u32` need.
@@ -155,60 +157,38 @@ impl Decoder {
             queue: gpu.queue.clone(),
             pipeline,
             adapter: gpu.adapter.clone(),
+            kept: Mutex::new(None),
         }
     }
 
-    /// Upload stacks and build the output buffers and bind group of one decode.
-    fn bind(&self, params: &DecodeParams, gray: &[u8], phase: &[u8]) -> Result<Bound, String> {
-        let n = params.width as usize * params.height as usize;
-        if gray.len() != 2 * params.planes as usize * n || phase.len() != params.steps as usize * n
-        {
-            return Err("stack sizes do not match the parameters".into());
-        }
+    /// Allocate the buffers and bind group of a decode with stacks of these byte lengths
+    /// over n pixels.
+    fn allocate(&self, lengths: (usize, usize, usize)) -> Result<Bound, String> {
+        let (gray, phase, n) = lengths;
         let groups = u32::try_from(n.div_ceil(WORKGROUP as usize)).map_err(|e| e.to_string())?;
-        let (x, y) = (groups.min(MAX_GROUPS), groups.div_ceil(MAX_GROUPS));
-        let mut uniform = Vec::with_capacity(48);
-        for v in [
-            params.width,
-            params.height,
-            params.planes,
-            params.steps,
-            params.projector_width,
-        ] {
-            uniform.extend_from_slice(&v.to_le_bytes());
-        }
-        for v in [
-            params.pitch,
-            params.min_contrast,
-            params.min_modulation,
-            params.max_disagreement,
-        ] {
-            uniform.extend_from_slice(&v.to_le_bytes());
-        }
-        for v in [x * WORKGROUP, 0, 0] {
-            uniform.extend_from_slice(&v.to_le_bytes());
-        }
-        let init = |label, contents: &[u8], usage| {
-            self.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(label),
-                    contents,
-                    usage,
-                })
-        };
-        let params_buffer = init("params", &uniform, wgpu::BufferUsages::UNIFORM);
-        let gray_buffer = init("gray", &words(gray), wgpu::BufferUsages::STORAGE);
-        let phase_buffer = init("phase", &words(phase), wgpu::BufferUsages::STORAGE);
         let size = (n * 4) as u64;
-        let output = |label| {
+        let buffer = |label, size, usage| {
             self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
                 size,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                usage,
                 mapped_at_creation: false,
             })
         };
-        let (columns, mask) = (output("columns"), output("mask"));
+        let stack = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
+        let output = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC;
+        let readback = wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST;
+        let params = buffer(
+            "params",
+            48,
+            wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        );
+        let gray_buffer = buffer("gray", gray.div_ceil(4) as u64 * 4, stack);
+        let phase_buffer = buffer("phase", phase.div_ceil(4) as u64 * 4, stack);
+        let (columns, mask) = (
+            buffer("columns", size, output),
+            buffer("mask", size, output),
+        );
         let layout = self.pipeline.get_bind_group_layout(0);
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("decode"),
@@ -216,7 +196,7 @@ impl Decoder {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: params_buffer.as_entire_binding(),
+                    resource: params.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
@@ -237,12 +217,67 @@ impl Decoder {
             ],
         });
         Ok(Bound {
-            bind_group,
+            lengths,
+            params,
+            gray: gray_buffer,
+            phase: phase_buffer,
+            columns_read: buffer("columns read", size, readback),
+            mask_read: buffer("mask read", size, readback),
             columns,
             mask,
-            groups: (x, y),
+            bind_group,
+            groups: (groups.min(MAX_GROUPS), groups.div_ceil(MAX_GROUPS)),
             size,
         })
+    }
+
+    /// Write the parameters and stacks into the kept buffers, allocating them when the
+    /// sizes change, and run `f` on them.
+    fn with_bound<T>(
+        &self,
+        params: &DecodeParams,
+        gray: &[u8],
+        phase: &[u8],
+        f: impl FnOnce(&Bound) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let n = params.width as usize * params.height as usize;
+        if gray.len() != 2 * params.planes as usize * n || phase.len() != params.steps as usize * n
+        {
+            return Err("stack sizes do not match the parameters".into());
+        }
+        let lengths = (gray.len(), phase.len(), n);
+        let mut kept = self.kept.lock().map_err(|e| e.to_string())?;
+        let bound = match kept.take() {
+            Some(b) if b.lengths == lengths => b,
+            _ => self.allocate(lengths)?,
+        };
+        let mut uniform = Vec::with_capacity(48);
+        for v in [
+            params.width,
+            params.height,
+            params.planes,
+            params.steps,
+            params.projector_width,
+        ] {
+            uniform.extend_from_slice(&v.to_le_bytes());
+        }
+        for v in [
+            params.pitch,
+            params.min_contrast,
+            params.min_modulation,
+            params.max_disagreement,
+        ] {
+            uniform.extend_from_slice(&v.to_le_bytes());
+        }
+        for v in [bound.groups.0 * WORKGROUP, 0, 0] {
+            uniform.extend_from_slice(&v.to_le_bytes());
+        }
+        self.queue.write_buffer(&bound.params, 0, &uniform);
+        write_words(&self.queue, &bound.gray, gray);
+        write_words(&self.queue, &bound.phase, phase);
+        let result = f(&bound);
+        *kept = Some(bound);
+        result
     }
 
     fn encode(&self, bound: &Bound) -> wgpu::CommandEncoder {
@@ -270,28 +305,20 @@ impl Decoder {
         gray: &[u8],
         phase: &[u8],
     ) -> Result<(Vec<f32>, Vec<bool>), String> {
-        let bound = self.bind(params, gray, phase)?;
-        let readback = |label| {
-            self.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(label),
-                size: bound.size,
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            })
-        };
-        let (columns_read, mask_read) = (readback("columns read"), readback("mask read"));
-        let mut encoder = self.encode(&bound);
-        encoder.copy_buffer_to_buffer(&bound.columns, 0, &columns_read, 0, bound.size);
-        encoder.copy_buffer_to_buffer(&bound.mask, 0, &mask_read, 0, bound.size);
-        self.queue.submit([encoder.finish()]);
-        let column_bytes = read(&self.device, &columns_read)?;
-        let mask_bytes = read(&self.device, &mask_read)?;
-        let columns = column_bytes
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect();
-        let mask = mask_bytes.chunks_exact(4).map(|c| c[0] != 0).collect();
-        Ok((columns, mask))
+        self.with_bound(params, gray, phase, |bound| {
+            let mut encoder = self.encode(bound);
+            encoder.copy_buffer_to_buffer(&bound.columns, 0, &bound.columns_read, 0, bound.size);
+            encoder.copy_buffer_to_buffer(&bound.mask, 0, &bound.mask_read, 0, bound.size);
+            self.queue.submit([encoder.finish()]);
+            let column_bytes = read(&self.device, &bound.columns_read)?;
+            let mask_bytes = read(&self.device, &bound.mask_read)?;
+            let columns = column_bytes
+                .chunks_exact(4)
+                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect();
+            let mask = mask_bytes.chunks_exact(4).map(|c| c[0] != 0).collect();
+            Ok((columns, mask))
+        })
     }
 
     /// Time the kernel alone, in milliseconds: the fastest of `runs` dispatches on stacks
@@ -303,27 +330,48 @@ impl Decoder {
         phase: &[u8],
         runs: usize,
     ) -> Result<f64, String> {
-        let bound = self.bind(params, gray, phase)?;
-        let mut fastest = f64::INFINITY;
-        for _ in 0..runs {
-            let start = Instant::now();
-            self.queue.submit([self.encode(&bound).finish()]);
-            self.device
-                .poll(wgpu::PollType::wait_indefinitely())
-                .map_err(|e| e.to_string())?;
-            fastest = fastest.min(start.elapsed().as_secs_f64() * 1000.0);
-        }
-        Ok(fastest)
+        self.with_bound(params, gray, phase, |bound| {
+            let mut fastest = f64::INFINITY;
+            for _ in 0..runs {
+                let start = Instant::now();
+                self.queue.submit([self.encode(bound).finish()]);
+                self.device
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .map_err(|e| e.to_string())?;
+                fastest = fastest.min(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            Ok(fastest)
+        })
     }
 }
 
-/// Output buffers and bind group of one decode, with its dispatch size.
+/// Buffers and bind group of a decode, with the byte lengths of its stacks, its pixel
+/// count and its dispatch size.
 struct Bound {
-    bind_group: wgpu::BindGroup,
+    lengths: (usize, usize, usize),
+    params: wgpu::Buffer,
+    gray: wgpu::Buffer,
+    phase: wgpu::Buffer,
     columns: wgpu::Buffer,
     mask: wgpu::Buffer,
+    columns_read: wgpu::Buffer,
+    mask_read: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
     groups: (u32, u32),
     size: u64,
+}
+
+/// Write bytes to a buffer of whole 32-bit words, the last word padded with zeros.
+fn write_words(queue: &wgpu::Queue, buffer: &wgpu::Buffer, bytes: &[u8]) {
+    let whole = bytes.len() / 4 * 4;
+    if whole > 0 {
+        queue.write_buffer(buffer, 0, &bytes[..whole]);
+    }
+    if whole < bytes.len() {
+        let mut last = [0u8; 4];
+        last[..bytes.len() - whole].copy_from_slice(&bytes[whole..]);
+        queue.write_buffer(buffer, whole as u64, &last);
+    }
 }
 
 #[cfg(test)]
@@ -341,12 +389,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn exact_patterns_decode_to_their_columns() {
-        let Some(decoder) = decoder() else { return };
-        let (projector_width, pitch, steps) = (64u32, 8.0f32, 4u32);
-        let planes = 6u32;
-        let columns: Vec<f32> = (0..40).map(|i| 3.0 + 1.37 * i as f32).collect();
+    /// Stacks that encode the given columns exactly, with their parameters.
+    fn exact_stacks(columns: &[f32], steps: u32) -> (DecodeParams, Vec<u8>, Vec<u8>) {
+        let (projector_width, pitch, planes) = (64u32, 8.0f32, 6u32);
         let n = columns.len();
         let mut gray = vec![0u8; 2 * planes as usize * n];
         let mut phase = vec![0u8; steps as usize * n];
@@ -374,14 +419,37 @@ mod tests {
             min_modulation: 10.0,
             max_disagreement: 1.0,
         };
+        (params, gray, phase)
+    }
+
+    fn decode_exact(decoder: &Decoder, columns: &[f32], steps: u32) -> Vec<f32> {
+        let (params, gray, phase) = exact_stacks(columns, steps);
         let (decoded, mask) = match decoder.decode(&params, &gray, &phase) {
             Ok(r) => r,
             Err(e) => panic!("decode failed: {e}"),
         };
         assert!(mask.iter().all(|&m| m));
-        for (d, u) in decoded.iter().zip(&columns) {
+        for (d, u) in decoded.iter().zip(columns) {
             assert!((d - u).abs() < 0.05, "decoded {d} for column {u}");
         }
+        decoded
+    }
+
+    #[test]
+    fn exact_patterns_decode_to_their_columns() {
+        let Some(decoder) = decoder() else { return };
+        let columns: Vec<f32> = (0..40).map(|i| 3.0 + 1.37 * i as f32).collect();
+        decode_exact(&decoder, &columns, 4);
+    }
+
+    #[test]
+    fn kept_buffers_follow_changing_stack_sizes() {
+        let Some(decoder) = decoder() else { return };
+        let wide: Vec<f32> = (0..40).map(|i| 3.0 + 1.37 * i as f32).collect();
+        let narrow: Vec<f32> = (0..7).map(|i| 50.0 - 4.1 * i as f32).collect();
+        let first = decode_exact(&decoder, &wide, 4);
+        decode_exact(&decoder, &narrow, 3);
+        assert_eq!(decode_exact(&decoder, &wide, 4), first);
     }
 
     #[test]
