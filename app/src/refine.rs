@@ -1,7 +1,7 @@
 //! Second-order refinement of stereo matches on the GPU: one WGSL workgroup per sample,
 //! following the NumPy reference `second_order_matches` in `slscan/stereo.py`.
 
-use crate::gpu::{download, upload, Gpu};
+use crate::gpu::{download, flags, upload, Gpu};
 use eframe::wgpu;
 use eframe::wgpu::util::DeviceExt;
 
@@ -342,8 +342,7 @@ impl Refiner {
                 ]
             })
             .collect();
-        let kept = kept_bytes.chunks_exact(4).map(|c| c[0] != 0).collect();
-        Ok((points, kept))
+        Ok((points, flags(&kept_bytes)))
     }
 }
 

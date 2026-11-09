@@ -1,7 +1,7 @@
 //! Coarse disparity on the GPU: block matching by normalized cross-correlation at reduced
 //! resolution, following the NumPy reference `block_disparity_small` in `slscan/stereo.py`.
 
-use crate::gpu::{download, upload, Gpu};
+use crate::gpu::{download, flags, floats, upload, Gpu};
 use eframe::wgpu;
 use eframe::wgpu::util::DeviceExt;
 
@@ -116,12 +116,7 @@ impl BlockMatcher {
     ) -> Result<(Vec<f32>, Vec<bool>), String> {
         let disparity_bytes = download(&self.device, &self.queue, disparity, disparity.size())?;
         let valid_bytes = download(&self.device, &self.queue, valid, valid.size())?;
-        let disparity = disparity_bytes
-            .chunks_exact(4)
-            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect();
-        let valid = valid_bytes.chunks_exact(4).map(|c| c[0] != 0).collect();
-        Ok((disparity, valid))
+        Ok((floats(&disparity_bytes), flags(&valid_bytes)))
     }
 
     /// Match an uploaded rectified pair. Returns the disparity and validity of each
