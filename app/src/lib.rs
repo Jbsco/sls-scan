@@ -8,6 +8,7 @@ pub mod depth;
 pub mod dots;
 pub mod fuse;
 pub mod gpu;
+pub mod live;
 pub mod mesh;
 pub mod protocol;
 pub mod rectify;
