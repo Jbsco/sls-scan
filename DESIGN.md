@@ -1902,3 +1902,31 @@ seems likely to be upload: 29.5 MB copied into wgpu's staging memory and then ov
 
 A decoder of this size keeps 49 MB of buffers between calls: 29.5 MB of stacks and two
 pairs of 4.9 MB output and readback buffers.
+
+## D95. Decode time by stage (2026-11-09)
+
+Stage timers in a temporary build split one decode of D93's plate scan, which took 3.6
+to 4.6 ms after D94.
+
+| Stage | Time |
+|---|---|
+| Copy of both stacks into wgpu's staging memory | 1.4 ms |
+| GPU: staging copies, kernel, copies to readback buffers | 0.85 ms |
+| Copies of both readback buffers into host vectors | 0.4 ms |
+| Conversion of those bytes to floats and flags | 1.7 to 2.5 ms |
+
+Conversion ran as a loop that did not vectorize, into new result vectors whose pages
+fault on first touch. `gpu::floats` and `gpu::flags` now convert whole words through
+`as_chunks`, and `gpu::read_with` runs them on a mapped readback buffer with no host
+copy between. Coarse matching, refinement and TSDF readback use these two functions too.
+
+`sls-scan decode-check` took 4.3 to 5.1 ms before and 3.3 to 4.1 ms after, over six
+alternating runs on a Radeon RX 7900 GRE with a load average near 6. About 1 ms of each
+run is still first touch of new result vectors, since this check keeps one result while
+it decodes again. With each result released first, as `scan::decode_scan` does between
+exposures, runs took 2.5 to 3.0 ms.
+
+Uploading is what remains on the host. Removing that copy means writing frames into
+staging memory as they arrive, which changes the decoder's interface to save about
+1.4 ms in a scan whose capture takes seconds, so we left it.
+
