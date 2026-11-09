@@ -37,8 +37,8 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   15 depth frames per second at 1.6 MP on either machine's GPU, 3 or more on the CPU
   fallback, and kernel outputs within tolerance of the Phase 2 reference on recorded
   frames. Kernels match NumPy, live (D38, D40, D47, D52). On one desktop, llvmpipe
-  previews reach 34 per second, and live settings take sweep frames from 9 per second to
-  17 or 18 while another build runs (D72, D74).
+  previews reach 34 per second, and live sweep frames reach 24, up from 9 (D72, D74,
+  D96).
 - Phase 5, in progress. Continuous scanning. Pose tracking from geometry, with optional
   markers on a mat (D63) and removable dots on long smooth panels (D64), TSDF fusion,
   loop closure. Acceptance: a sweep around a part fuses to a model whose ball bar is
