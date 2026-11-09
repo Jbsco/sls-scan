@@ -1956,3 +1956,14 @@ power state while it waits, which we did not confirm from its driver.
 Fusion on the CPU sits between frames in that way, at 27 to 43 ms per frame in these
 runs. Each frame's first GPU stages may pay for it likewise. We have not measured that.
 
+## D97. Two cameras on the rig (2026-11-09)
+
+Phase 8's rig stays at two cameras and one pattern light for now. D92 measured what a
+third camera above that light would add: a whole slot floor across the baseline, where
+our pair sees 30% at 40 mm deep. A second view with the head turned a quarter turn
+reaches that floor with two cameras, and so does a continuous sweep. A third camera
+would add a capture channel, its calibration, and matching for two more pairs per frame.
+
+`slscan occlusion-bench` stays, so a part that a second view cannot reach can be
+measured before this is decided again.
+
