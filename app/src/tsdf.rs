@@ -2,7 +2,7 @@
 //! frame, and one per voxel for the surface, following `depth_grid`, `integrate` and
 //! `surface` in `slscan/tsdf.py`.
 
-use crate::gpu::{download, Gpu};
+use crate::gpu::{download, floats, Gpu};
 use eframe::wgpu;
 use eframe::wgpu::util::DeviceExt;
 
@@ -345,12 +345,11 @@ impl Integrator {
         let n = u64::from(found);
         let coords = download(&self.device, &self.queue, &points, n * 12)?;
         let keys = download(&self.device, &self.queue, &keys, n * 4)?;
-        let floats: Vec<f32> = coords
-            .chunks_exact(4)
-            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-            .collect();
         Ok((
-            floats.chunks_exact(3).map(|p| [p[0], p[1], p[2]]).collect(),
+            floats(&coords)
+                .chunks_exact(3)
+                .map(|p| [p[0], p[1], p[2]])
+                .collect(),
             keys.chunks_exact(4)
                 .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
                 .collect(),
@@ -363,14 +362,15 @@ impl Integrator {
 
     /// The volume's distances and weights.
     pub fn read(&self) -> Result<(Vec<f32>, Vec<f32>), String> {
-        let floats = |buffer: &wgpu::Buffer| -> Result<Vec<f32>, String> {
-            let bytes = download(&self.device, &self.queue, buffer, buffer.size())?;
-            Ok(bytes
-                .chunks_exact(4)
-                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-                .collect())
+        let values = |buffer: &wgpu::Buffer| -> Result<Vec<f32>, String> {
+            Ok(floats(&download(
+                &self.device,
+                &self.queue,
+                buffer,
+                buffer.size(),
+            )?))
         };
-        Ok((floats(&self.tsdf)?, floats(&self.weight)?))
+        Ok((values(&self.tsdf)?, values(&self.weight)?))
     }
 }
 

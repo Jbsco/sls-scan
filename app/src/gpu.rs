@@ -114,8 +114,12 @@ pub fn download(
     read(device, &readback)
 }
 
-/// Map a readback buffer after the queue's work and copy its contents to host memory.
-pub fn read(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Result<Vec<u8>, String> {
+/// Map a readback buffer after the queue's work, run `f` on its bytes and unmap it.
+pub fn read_with<T>(
+    device: &wgpu::Device,
+    buffer: &wgpu::Buffer,
+    f: impl FnOnce(&[u8]) -> T,
+) -> Result<T, String> {
     let (tx, rx) = mpsc::channel();
     buffer.map_async(wgpu::MapMode::Read, .., move |r| {
         let _ = tx.send(r);
@@ -126,9 +130,26 @@ pub fn read(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Result<Vec<u8>, Str
     rx.recv()
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
-    let bytes = buffer.get_mapped_range(..).to_vec();
+    let result = f(&buffer.get_mapped_range(..));
     buffer.unmap();
-    Ok(bytes)
+    Ok(result)
+}
+
+/// Map a readback buffer after the queue's work and copy its contents to host memory.
+pub fn read(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Result<Vec<u8>, String> {
+    read_with(device, buffer, <[u8]>::to_vec)
+}
+
+/// The 32-bit floats a kernel wrote, from their bytes.
+pub fn floats(bytes: &[u8]) -> Vec<f32> {
+    let (words, _) = bytes.as_chunks::<4>();
+    words.iter().map(|w| f32::from_le_bytes(*w)).collect()
+}
+
+/// One flag per 32-bit word a kernel wrote, set where the word is not zero.
+pub fn flags(bytes: &[u8]) -> Vec<bool> {
+    let (words, _) = bytes.as_chunks::<4>();
+    words.iter().map(|w| u32::from_le_bytes(*w) != 0).collect()
 }
 
 impl Decoder {
@@ -310,13 +331,8 @@ impl Decoder {
             encoder.copy_buffer_to_buffer(&bound.columns, 0, &bound.columns_read, 0, bound.size);
             encoder.copy_buffer_to_buffer(&bound.mask, 0, &bound.mask_read, 0, bound.size);
             self.queue.submit([encoder.finish()]);
-            let column_bytes = read(&self.device, &bound.columns_read)?;
-            let mask_bytes = read(&self.device, &bound.mask_read)?;
-            let columns = column_bytes
-                .chunks_exact(4)
-                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-                .collect();
-            let mask = mask_bytes.chunks_exact(4).map(|c| c[0] != 0).collect();
+            let columns = read_with(&self.device, &bound.columns_read, floats)?;
+            let mask = read_with(&self.device, &bound.mask_read, flags)?;
             Ok((columns, mask))
         })
     }
@@ -450,6 +466,21 @@ mod tests {
         let first = decode_exact(&decoder, &wide, 4);
         decode_exact(&decoder, &narrow, 3);
         assert_eq!(decode_exact(&decoder, &wide, 4), first);
+    }
+
+    #[test]
+    fn readback_bytes_convert_to_floats_and_flags() {
+        let bytes: Vec<u8> = [1.5f32, -2.25]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        assert_eq!(floats(&bytes), vec![1.5, -2.25]);
+        let words: Vec<u8> = [0u32, 1, 256]
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        assert_eq!(flags(&words), vec![false, true, true]);
+        assert_eq!(floats(&bytes[..7]), vec![1.5]);
     }
 
     #[test]
