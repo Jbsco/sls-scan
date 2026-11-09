@@ -1757,17 +1757,101 @@ fn replay_frame(
     matched
 }
 
+/// Run recorded pairs through the live pipeline and print its rate. Pairs go in back to
+/// back, or at `rate` per second with those that find the pipeline full skipped, as the
+/// window skips them.
+fn replay_live(
+    setup: &depth::DepthSetup,
+    frame: depth::DepthFrame,
+    pairs: Vec<(String, Vec<u8>, Vec<u8>)>,
+    rate: Option<f64>,
+) -> bool {
+    let preview = setup.preview_params().filter(|_| frame.software());
+    let kind = if preview.is_some() {
+        "previews"
+    } else {
+        "depth frames"
+    };
+    let pipeline = live::Pipeline::start(setup, frame, preview, || {});
+    let offered = pairs.len();
+    let mut sent = 0usize;
+    let mut frames: Vec<live::LiveFrame> = Vec::new();
+    let start = Instant::now();
+    for (i, (name, left, right)) in pairs.into_iter().enumerate() {
+        match rate {
+            Some(hz) => {
+                let due = Duration::from_secs_f64(i as f64 / hz);
+                while let Some(wait) = due.checked_sub(start.elapsed()) {
+                    if let Ok(live) = pipeline.results.recv_timeout(wait) {
+                        frames.push(live);
+                    }
+                }
+                frames.extend(pipeline.results.try_iter());
+                if sent - frames.len() >= live::IN_FLIGHT {
+                    continue;
+                }
+            }
+            None => {
+                while sent - frames.len() >= live::IN_FLIGHT {
+                    let Ok(live) = pipeline.results.recv() else {
+                        break;
+                    };
+                    frames.push(live);
+                }
+            }
+        }
+        if pipeline.send(live::Job::Pair(name, left, right)) {
+            sent += 1;
+        }
+    }
+    while frames.len() < sent {
+        let Ok(live) = pipeline.results.recv() else {
+            break;
+        };
+        frames.push(live);
+    }
+    let seconds = start.elapsed().as_secs_f64();
+    let n = frames.len().max(1) as f64;
+    let depth_ms: f64 = frames
+        .iter()
+        .filter_map(|f| f.depth.as_ref().ok())
+        .map(|d| d.timings.iter().map(|(_, ms)| ms).sum::<f64>())
+        .sum();
+    let fuse_ms: f64 = frames.iter().map(|f| f.fuse_ms).sum();
+    let tsdf_ms: f64 = frames.iter().map(|f| f.tsdf_ms).sum();
+    let pace = rate.map_or_else(String::new, |hz| format!(" at {hz} per second"));
+    println!(
+        "live{pace}: {} of {offered} pairs as {kind} in {:.0} ms, {:.1} per second (depth {:.1}, fusion {:.1}, TSDF {:.1} ms)",
+        frames.len(),
+        seconds * 1000.0,
+        frames.len() as f64 / seconds,
+        depth_ms / n,
+        fuse_ms / n,
+        tsdf_ms / n
+    );
+    let measured = frames.iter().all(|f| f.depth.is_ok());
+    pipeline.finish().is_ok() && measured && sent > 0 && frames.len() == sent
+}
+
 fn replay(args: &[String]) -> ExitCode {
     let mut frames_dir: Option<PathBuf> = None;
     let mut params = PathBuf::from("data/depth.json");
+    let mut rate: Option<f64> = None;
     for pair in args.chunks(2) {
         let (Some(key), Some(value)) = (pair.first(), pair.get(1)) else {
-            eprintln!("arguments come in pairs: --frames, --params");
+            eprintln!("arguments come in pairs: --frames, --params, --rate");
             return ExitCode::FAILURE;
         };
         match key.as_str() {
             "--frames" => frames_dir = Some(PathBuf::from(value)),
             "--params" => params = PathBuf::from(value),
+            "--rate" => match value.parse::<f64>() {
+                Ok(hz) if hz > 0.0 => rate = Some(hz),
+                _ => {
+                    eprintln!("--rate takes pairs per second");
+                    return ExitCode::FAILURE;
+                }
+            },
             _ => {
                 eprintln!("unknown argument {key}");
                 return ExitCode::FAILURE;
@@ -1775,7 +1859,9 @@ fn replay(args: &[String]) -> ExitCode {
         }
     }
     let Some(frames_dir) = frames_dir else {
-        eprintln!("usage: sls-scan replay --frames <directory> [--params depth.json]");
+        eprintln!(
+            "usage: sls-scan replay --frames <directory> [--params depth.json] [--rate <per second>]"
+        );
         return ExitCode::FAILURE;
     };
     let setup = match depth::DepthSetup::load(&params) {
@@ -1819,6 +1905,7 @@ fn replay(args: &[String]) -> ExitCode {
     let depth_params = setup.params();
     let preview = setup.preview_params();
     let mut ok = true;
+    let mut recorded = Vec::new();
     for pair in &pairs {
         let name = pair
             .file_name()
@@ -1856,7 +1943,9 @@ fn replay(args: &[String]) -> ExitCode {
                 1e-6 * f64::from(coarse.scale),
             );
         }
+        recorded.push((name, left, right));
     }
+    ok &= replay_live(&setup, frame, recorded, rate);
     println!(
         "replay: {} pairs, {}",
         pairs.len(),
