@@ -5,6 +5,7 @@ use slscan_app::depth;
 use slscan_app::dots;
 use slscan_app::fuse;
 use slscan_app::gpu;
+use slscan_app::live;
 use slscan_app::protocol::SequenceRequest;
 use slscan_app::rectify;
 use slscan_app::refine;
@@ -154,8 +155,92 @@ fn headless_capture(args: &[String]) -> ExitCode {
     }
 }
 
-/// Voxel size of the fused model, as `track.fuse` uses by default.
-const FUSION_VOXEL_M: f64 = 0.0005;
+/// What `sls-scan depth` keeps of the live frames it prints.
+struct LiveReport {
+    /// Pairs were fused, not previewed.
+    fused: bool,
+    ok: bool,
+    frames: usize,
+    /// Points of the last pair measured.
+    last: Vec<[f64; 3]>,
+    /// The last TSDF surface.
+    surface: Vec<[f64; 3]>,
+}
+
+impl LiveReport {
+    fn take(&mut self, live: live::LiveFrame) {
+        self.frames += 1;
+        let pair = &live.name;
+        if let Some(dark) = &live.dark {
+            match &dark.found {
+                Ok((found, pose)) => {
+                    if dark.mapped.0 > 0 && *found < 3 {
+                        println!("{}: fewer than 3 dots, no pose from dots", dark.name);
+                        self.ok = false;
+                    }
+                    println!(
+                        "{}: {found} dots against {pair}, {} map dots, pose at [{:.1}, {:.1}, {:.1}] mm",
+                        dark.name,
+                        dark.mapped.1,
+                        pose.translation[0] * 1e3,
+                        pose.translation[1] * 1e3,
+                        pose.translation[2] * 1e3
+                    );
+                }
+                Err(e) => {
+                    println!("{}: dot finding failed: {e}", dark.name);
+                    self.ok = false;
+                }
+            }
+        }
+        let d = match live.depth {
+            Ok(d) => d,
+            Err(e) => {
+                println!("{pair}: depth failed: {e}");
+                self.ok = false;
+                return;
+            }
+        };
+        let total: f64 = d.timings.iter().map(|(_, ms)| ms).sum();
+        let stages: Vec<String> = d
+            .timings
+            .iter()
+            .map(|(name, ms)| format!("{name} {ms:.1}"))
+            .collect();
+        let fused = if self.fused {
+            let rms = live
+                .rms
+                .map_or_else(String::new, |r| format!(", ICP residual {:.1} µm", r * 1e6));
+            let tsdf = match live.model {
+                Ok(surface) => {
+                    self.surface = surface;
+                    format!(
+                        ", TSDF surface {} points in {:.1} ms",
+                        self.surface.len(),
+                        live.tsdf_ms
+                    )
+                }
+                Err((e, _)) => {
+                    self.ok = false;
+                    format!(", TSDF failed: {e}")
+                }
+            };
+            format!(
+                ", {} isolated dropped, fused in {:.1} ms into {} points{rms}{tsdf}",
+                live.dropped, live.fuse_ms, live.fused
+            )
+        } else {
+            String::new()
+        };
+        println!(
+            "{pair}: {} points in {total:.1} ms ({} ms){fused}",
+            d.points.len(),
+            stages.join(", ")
+        );
+        self.ok &= !d.points.is_empty();
+        self.last = d.points;
+    }
+}
 
 fn headless_depth(args: &[String]) -> ExitCode {
     let mut node = "127.0.0.1:5600".to_owned();
@@ -257,7 +342,6 @@ fn headless_depth(args: &[String]) -> ExitCode {
         "depth frames"
     };
     println!("{kind} on adapter {}", frame.adapter);
-    let depth_params = setup.params();
     let request = SequenceRequest {
         set: "stereo".to_owned(),
         pitch: 32,
@@ -268,11 +352,16 @@ fn headless_depth(args: &[String]) -> ExitCode {
         exposures: Vec::new(),
         color: false,
     };
+    let mut report = LiveReport {
+        fused: preview.is_none(),
+        ok: true,
+        frames: 0,
+        last: Vec::new(),
+        surface: Vec::new(),
+    };
+    let pipeline = live::Pipeline::start(&setup, frame, preview, || {});
     let mut left: Option<Vec<u8>> = None;
-    let mut results: Vec<(String, Result<depth::DepthResult, String>)> = Vec::new();
-    // Light-off pairs keyed by the index of the lit result that follows them.
-    let mut dark_before: std::collections::HashMap<usize, (String, Vec<u8>, Vec<u8>)> =
-        std::collections::HashMap::new();
+    let (mut sent, mut dark_pairs, mut in_flight) = (0usize, 0usize, 0usize);
     let captured = client::capture(&node, &request, wait, |event| match event {
         Event::Connected(hello) => println!("connected to {} at {node}", hello.node),
         Event::Frame { name, pixels, .. } => {
@@ -281,12 +370,18 @@ fn headless_depth(args: &[String]) -> ExitCode {
             } else if let Some(l) = left.take() {
                 let pair = name.trim_end_matches("/right").to_owned();
                 if pair.starts_with("dark_") {
-                    dark_before.insert(results.len(), (pair, l, pixels));
-                } else {
-                    let cameras = (&setup.cameras.left, &setup.cameras.right);
-                    let result =
-                        frame.measure(&depth_params, preview.as_ref(), cameras, &l, &pixels);
-                    results.push((pair, result));
+                    dark_pairs += 1;
+                    pipeline.send(live::Job::Dark(pair, l, pixels));
+                } else if pipeline.send(live::Job::Pair(pair, l, pixels)) {
+                    sent += 1;
+                    in_flight += 1;
+                    while in_flight >= live::IN_FLIGHT {
+                        let Ok(live) = pipeline.results.recv() else {
+                            break;
+                        };
+                        report.take(live);
+                        in_flight -= 1;
+                    }
                 }
             }
         }
@@ -296,122 +391,25 @@ fn headless_depth(args: &[String]) -> ExitCode {
         eprintln!("capture failed: {e}");
         return ExitCode::FAILURE;
     }
-    let mut ok = !results.is_empty();
-    let dark_pairs = dark_before.len();
-    let mut fusion = fuse::Fusion::new(FUSION_VOXEL_M);
-    let mut last: &[[f64; 3]] = &[];
-    let mut volume = tsdf::Live::coarse();
-    let mut surface = Vec::new();
-    let camera = tsdf::LeftCamera {
-        rotation: setup.cameras.left.rotation,
-        projection: setup.cameras.left.projection,
-    };
-    for (i, (pair, result)) in results.iter().enumerate() {
-        match result {
-            Ok(d) => {
-                let total: f64 = d.timings.iter().map(|(_, ms)| ms).sum();
-                let stages: Vec<String> = d
-                    .timings
-                    .iter()
-                    .map(|(name, ms)| format!("{name} {ms:.1}"))
-                    .collect();
-                let fused = if preview.is_some() {
-                    String::new()
-                } else {
-                    let points = fuse::drop_isolated(
-                        &d.points,
-                        f64::from(depth_params.step),
-                        camera.projection[0],
-                        fuse::ISOLATED_SPACINGS,
-                    );
-                    let dropped = d.points.len() - points.len();
-                    if let Some((dark, l, r)) = dark_before.remove(&i) {
-                        let cameras = (&setup.cameras.left, &setup.cameras.right);
-                        match frame.dots(&depth_params, cameras, &l, &r, &points) {
-                            Ok(dots) => {
-                                if !fusion.dots().is_empty() && dots.len() < 3 {
-                                    println!("{dark}: fewer than 3 dots, no pose from dots");
-                                    ok = false;
-                                }
-                                let pose = fusion.add_dark(&dots);
-                                println!(
-                                    "{dark}: {} dots against {pair}, {} map dots, pose at [{:.1}, {:.1}, {:.1}] mm",
-                                    dots.len(),
-                                    fusion.dots().len(),
-                                    pose.translation[0] * 1e3,
-                                    pose.translation[1] * 1e3,
-                                    pose.translation[2] * 1e3
-                                );
-                            }
-                            Err(e) => {
-                                println!("{dark}: dot finding failed: {e}");
-                                ok = false;
-                            }
-                        }
-                    }
-                    let start = Instant::now();
-                    fusion.add(&points);
-                    let ms = start.elapsed().as_secs_f64() * 1000.0;
-                    let rms = fusion
-                        .last_rms
-                        .map_or_else(String::new, |r| format!(", ICP residual {:.1} µm", r * 1e6));
-                    let start = Instant::now();
-                    let grid = tsdf::depth_grid(
-                        &points,
-                        &camera,
-                        depth_params.step,
-                        depth_params.window,
-                        (setup.width, setup.height),
-                    );
-                    let tsdf = match fusion.poses.last() {
-                        Some(pose) => {
-                            let rotation: [f64; 9] =
-                                std::array::from_fn(|k| pose.rotation[k / 3][k % 3]);
-                            volume.add(
-                                frame.gpu(),
-                                &grid,
-                                &points,
-                                &camera,
-                                (&rotation, &pose.translation),
-                            )
-                        }
-                        None => Ok(Vec::new()),
-                    };
-                    let tsdf_ms = start.elapsed().as_secs_f64() * 1000.0;
-                    let tsdf = match tsdf {
-                        Ok(s) => {
-                            surface = s;
-                            format!(", TSDF surface {} points in {tsdf_ms:.1} ms", surface.len())
-                        }
-                        Err(e) => {
-                            ok = false;
-                            format!(", TSDF failed: {e}")
-                        }
-                    };
-                    format!(
-                        ", {dropped} isolated dropped, fused in {ms:.1} ms into {} points{rms}{tsdf}",
-                        fusion.model().len()
-                    )
-                };
-                println!(
-                    "{pair}: {} points in {total:.1} ms ({} ms){fused}",
-                    d.points.len(),
-                    stages.join(", ")
-                );
-                last = &d.points;
-                ok &= !d.points.is_empty();
-            }
-            Err(e) => {
-                println!("{pair}: depth failed: {e}");
-                ok = false;
-            }
-        }
+    while report.frames < sent {
+        let Ok(live) = pipeline.results.recv() else {
+            break;
+        };
+        report.take(live);
     }
+    let finished = match pipeline.finish() {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("live frames: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let ok = report.ok && sent > 0 && report.frames == sent;
     if let Some(path) = &out {
-        let (points, what) = if preview.is_some() {
-            (last, "preview")
+        let (points, what) = if report.fused {
+            (finished.fusion.model(), "fused")
         } else {
-            (fusion.model(), "fused")
+            (report.last.as_slice(), "preview")
         };
         match depth::write_ply(path, points) {
             Ok(()) => println!(
@@ -426,10 +424,10 @@ fn headless_depth(args: &[String]) -> ExitCode {
         }
     }
     if let Some(path) = &surface_out {
-        match depth::write_ply(path, &surface) {
+        match depth::write_ply(path, &report.surface) {
             Ok(()) => println!(
                 "{} TSDF surface points written to {}",
-                surface.len(),
+                report.surface.len(),
                 path.display()
             ),
             Err(e) => {
@@ -439,7 +437,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
         }
     }
     if let Some(dir) = &volume_out {
-        match volume.save(dir) {
+        match finished.volume.save(dir) {
             Ok(()) => println!("TSDF volume written to {}", dir.display()),
             Err(e) => {
                 eprintln!("volume: {e}");
@@ -449,7 +447,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
     }
     if let Some(path) = &mesh_out {
         let start = Instant::now();
-        let meshed = volume.mesh(0.01, faces).and_then(|m| {
+        let meshed = finished.volume.mesh(0.01, faces).and_then(|m| {
             slscan_app::mesh::write_mesh(path, &m)
                 .map(|()| m)
                 .map_err(|e| format!("{}: {e}", path.display()))
@@ -468,13 +466,13 @@ fn headless_depth(args: &[String]) -> ExitCode {
             }
         }
     }
-    if !dark_before.is_empty() {
+    if finished.unused_dark > 0 {
         println!(
             "{} light-off pairs had no lit depth frame after them",
-            dark_before.len()
+            finished.unused_dark
         );
     }
-    println!("depth: {} pairs, {dark_pairs} light-off", results.len());
+    println!("depth: {sent} pairs, {dark_pairs} light-off");
     if ok {
         ExitCode::SUCCESS
     } else {
