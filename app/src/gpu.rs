@@ -40,6 +40,7 @@ pub fn words(bytes: &[u8]) -> Vec<u8> {
 
 /// A device on the first adapter wgpu offers, or on a software one when `fallback` is set,
 /// shared by every kernel built from it.
+#[derive(Clone)]
 pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
