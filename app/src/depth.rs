@@ -183,24 +183,6 @@ pub struct DepthFrame {
     pub adapter: String,
 }
 
-/// Summed-area table with a zero first row and column.
-fn integral(width: usize, height: usize, value: impl Fn(usize, usize) -> u32) -> Vec<u64> {
-    let mut table = vec![0u64; (width + 1) * (height + 1)];
-    for y in 0..height {
-        let mut row = 0u64;
-        for x in 0..width {
-            row += u64::from(value(x, y));
-            table[(y + 1) * (width + 1) + x + 1] = table[y * (width + 1) + x + 1] + row;
-        }
-    }
-    table
-}
-
-fn box_sum(table: &[u64], width: usize, x0: usize, y0: usize, x1: usize, y1: usize) -> u64 {
-    let w = width + 1;
-    table[y1 * w + x1] + table[y0 * w + x0] - table[y0 * w + x1] - table[y1 * w + x0]
-}
-
 fn reflect101(i: isize, n: isize) -> usize {
     let r = if i < 0 {
         -i
@@ -210,6 +192,19 @@ fn reflect101(i: isize, n: isize) -> usize {
         i
     };
     r as usize
+}
+
+/// Sums of five neighbours along a row, with the border reflected as OpenCV's default.
+fn row_sums(row: &[u8], out: &mut [u16]) {
+    let w = row.len();
+    for (o, five) in out[2..w - 2].iter_mut().zip(row.windows(5)) {
+        *o = five.iter().map(|&v| u16::from(v)).sum();
+    }
+    for x in [0, 1, w - 2, w - 1] {
+        out[x] = (-2..=2)
+            .map(|k| u16::from(row[reflect101(x as isize + k, w as isize)]))
+            .sum();
+    }
 }
 
 /// Pick grid samples whose whole window lies on lit, matched surface, with right guesses
@@ -223,26 +218,65 @@ pub fn select(
     let (w, h) = (params.coarse.width as usize, params.coarse.height as usize);
     let scale = params.coarse.scale as usize;
     let sw = w / scale;
-    let padded = integral(w + 4, h + 4, |x, y| {
-        let sx = reflect101(x as isize - 2, w as isize);
-        let sy = reflect101(y as isize - 2, h as isize);
-        u32::from(left[sy * w + sx])
-    });
-    let threshold = 25.0 * (f64::from(params.min_level) - 0.5);
-    let lit = |x: usize, y: usize| box_sum(&padded, w + 4, x, y, x + 5, y + 5) as f64 >= threshold;
-    let matched = integral(w, h, |x, y| {
-        u32::from(lit(x, y) && valid[(y / scale) * sw + x / scale])
-    });
     let (window, step) = (params.window as usize, params.step as usize);
-    let kernel = window + 8;
+    let (kernel, half) = (window + 8, (window + 8) / 2);
+    let ys: Vec<usize> = (window..h.saturating_sub(window)).step_by(step).collect();
+    let xs: Vec<usize> = (window..w.saturating_sub(window)).step_by(step).collect();
+    let limit = (25.0 * (f64::from(params.min_level) - 0.5)).ceil();
     let mut samples = Vec::new();
     let mut guesses = Vec::new();
-    for y in (window..h.saturating_sub(window)).step_by(step) {
-        for x in (window..w.saturating_sub(window)).step_by(step) {
-            let (x0, y0) = (x - kernel / 2, y - kernel / 2);
-            let (x1, y1) = ((x0 + kernel).min(w), (y0 + kernel).min(h));
-            let full = ((x1 - x0) * (y1 - y0)) as u64;
-            if box_sum(&matched, w, x0, y0, x1, y1) != full {
+    if ys.is_empty() || xs.is_empty() || limit.is_nan() || limit > 6375.0 {
+        return (samples, guesses);
+    }
+    let need = limit.max(0.0) as u16;
+    let mut sums = vec![0u16; 5 * w];
+    let mut unmatched = vec![0u8; w];
+    let mut invalid = vec![0u8; w];
+    let mut bands = vec![0u8; ys.len() * w];
+    let (mut ready, mut first, mut next) = (0usize, 0usize, 0usize);
+    for y in 0..h {
+        while ready <= (y + 2).min(h - 1) {
+            let slot = ready % 5;
+            row_sums(
+                &left[ready * w..(ready + 1) * w],
+                &mut sums[slot * w..(slot + 1) * w],
+            );
+            ready += 1;
+        }
+        let line = |k: isize| {
+            let slot = reflect101(y as isize + k, h as isize) % 5;
+            &sums[slot * w..(slot + 1) * w]
+        };
+        let (a, b, c, d, e) = (line(-2), line(-1), line(0), line(1), line(2));
+        for x in 0..w {
+            unmatched[x] = u8::from(a[x] + b[x] + c[x] + d[x] + e[x] < need);
+        }
+        if y % scale == 0 {
+            let base = (y / scale) * sw;
+            for (i, block) in invalid.chunks_mut(scale).enumerate() {
+                block.fill(u8::from(!valid[base + i]));
+            }
+        }
+        for (u, i) in unmatched.iter_mut().zip(&invalid) {
+            *u |= *i;
+        }
+        while next < ys.len() && ys[next] - half <= y {
+            next += 1;
+        }
+        while first < next && (ys[first] - half + kernel).min(h) <= y {
+            first += 1;
+        }
+        for band in bands[first * w..next * w].chunks_exact_mut(w) {
+            for (b, u) in band.iter_mut().zip(&unmatched) {
+                *b |= *u;
+            }
+        }
+    }
+    for (band, &y) in bands.chunks_exact(w).zip(&ys) {
+        for &x in &xs {
+            let x0 = x - half;
+            let x1 = (x0 + kernel).min(w);
+            if band[x0..x1].iter().any(|&b| b != 0) {
                 continue;
             }
             let d = disparity[(y / scale) * sw + x / scale] * scale as f32;
@@ -551,6 +585,99 @@ impl DepthFrame {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Selection by a scan of every pixel of every window.
+    fn select_by_scan(
+        params: &DepthParams,
+        left: &[u8],
+        disparity: &[f32],
+        valid: &[bool],
+    ) -> (Vec<[f32; 2]>, Vec<[f32; 2]>) {
+        let (w, h) = (params.coarse.width as usize, params.coarse.height as usize);
+        let scale = params.coarse.scale as usize;
+        let sw = w / scale;
+        let threshold = 25.0 * (f64::from(params.min_level) - 0.5);
+        let good = |x: usize, y: usize| {
+            let mut sum = 0u32;
+            for j in -2..=2 {
+                for i in -2..=2 {
+                    let sx = reflect101(x as isize + i, w as isize);
+                    let sy = reflect101(y as isize + j, h as isize);
+                    sum += u32::from(left[sy * w + sx]);
+                }
+            }
+            f64::from(sum) >= threshold && valid[(y / scale) * sw + x / scale]
+        };
+        let (window, step) = (params.window as usize, params.step as usize);
+        let kernel = window + 8;
+        let (mut samples, mut guesses) = (Vec::new(), Vec::new());
+        for y in (window..h.saturating_sub(window)).step_by(step) {
+            for x in (window..w.saturating_sub(window)).step_by(step) {
+                let (x0, y0) = (x - kernel / 2, y - kernel / 2);
+                let (x1, y1) = ((x0 + kernel).min(w), (y0 + kernel).min(h));
+                if (y0..y1).all(|py| (x0..x1).all(|px| good(px, py))) {
+                    let d = disparity[(y / scale) * sw + x / scale] * scale as f32;
+                    samples.push([x as f32, y as f32]);
+                    guesses.push([x as f32 - d, y as f32]);
+                }
+            }
+        }
+        (samples, guesses)
+    }
+
+    fn selection_case(size: (u32, u32), scale: u32, window: u32, step: u32) {
+        let (w, h) = (size.0 as usize, size.1 as usize);
+        let mut state = 0x2545_f491u32;
+        let mut next = || {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            state >> 16
+        };
+        let mut left: Vec<u8> = (0..w * h).map(|_| 4 + (next() % 12) as u8).collect();
+        for _ in 0..6 {
+            let (x0, y0) = (next() as usize % w, next() as usize % h);
+            for y in y0..(y0 + 7).min(h) {
+                for x in x0..(x0 + 9).min(w) {
+                    left[y * w + x] = (next() % 3) as u8;
+                }
+            }
+        }
+        let cells = (w / scale as usize) * (h / scale as usize);
+        let valid: Vec<bool> = (0..cells).map(|_| next() % 40 != 0).collect();
+        let disparity: Vec<f32> = (0..cells).map(|_| (next() % 64) as f32 / 4.0).collect();
+        let params = DepthParams {
+            coarse: CoarseParams {
+                width: size.0,
+                height: size.1,
+                scale,
+                block: 7,
+                lo: 0,
+                count: 16,
+                min_correlation: 0.6,
+                margin: 0.05,
+                fill: 2,
+            },
+            step,
+            window,
+            iterations: 20,
+            exit_px: 1e-4,
+            min_level: 6.0,
+            max_move: 3.0,
+            min_correlation: 0.95,
+            near_m: 0.4,
+            far_m: 0.6,
+        };
+        let expected = select_by_scan(&params, &left, &disparity, &valid);
+        let grid = (window..size.1 - window).step_by(step as usize).count()
+            * (window..size.0 - window).step_by(step as usize).count();
+        assert!(!expected.0.is_empty() && expected.0.len() < grid);
+        assert_eq!(select(&params, &left, &disparity, &valid), expected);
+    }
+
+    #[test]
+    fn selection_matches_a_scan_of_every_window() {
+        selection_case((96, 80), 4, 8, 3);
+        selection_case((160, 120), 8, 25, 12);
+    }
 
     #[test]
     fn preview_matches_stand_at_block_centres() {
