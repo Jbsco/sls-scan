@@ -1930,3 +1930,29 @@ Uploading is what remains on the host. Removing that copy means writing frames i
 staging memory as they arrive, which changes the decoder's interface to save about
 1.4 ms in a scan whose capture takes seconds, so we left it.
 
+## D96. Sample selection in one pass over rows (2026-11-09)
+
+`depth::select` chose samples through two summed-area tables of a whole image, built on
+one thread with two divisions per pixel (D36). It now walks down an image once. It keeps
+five rows of 5-pixel sums, marks each pixel that is unlit or unmatched, and combines each
+row of marks into one band per sample row. A sample is kept when its band has no mark
+across its window. Samples and guesses equal those from summed-area tables on our stereo
+vectors, and a test compares them with a scan of every window pixel.
+
+Times are from a Radeon RX 7900 GRE and a Ryzen 7 7700X at a load average of 4 to 6,
+with builds alternating.
+
+| Frame | Before | After |
+|---|---|---|
+| Sphere vectors, `sls-scan depth-check`, six runs | 22.1 to 23.3 ms, selection 9.9 to 10.8 ms | 11.9 to 12.9 ms, selection 0.5 to 0.6 ms |
+| Stand-in sweep at live settings, mean of frames 2 to 4, seven runs | 62.9 to 66.0 ms, refinement 47.5 to 50.0 ms | 40.4 to 41.7 ms, refinement 35.3 to 36.3 ms |
+
+Live frames go from about 15 to 24 per second. Refinement did not change, yet it ran
+about 13 ms faster. A 10 ms pause in place of old selection, sleeping or spinning,
+brought refinement back to 47.8 to 49.9 ms. A host gap of that length before a GPU stage
+therefore costs more than its own time. It seems likely that this card drops to a lower
+power state while it waits, which we did not confirm from its driver.
+
+Fusion on the CPU sits between frames in that way, at 27 to 43 ms per frame in these
+runs. Each frame's first GPU stages may pay for it likewise. We have not measured that.
+
