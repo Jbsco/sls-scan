@@ -345,6 +345,19 @@ def test_dot_fusion_vectors_command_tracks_with_dots(tmp_path):
     assert abs(poses[-1, 9] - 0.03) < 0.0005
 
 
+def test_dot_fusion_vectors_command_leaves_out_dropped_frames(tmp_path):
+    out = str(tmp_path / "dropped")
+    assert cli.main(["dot-fusion-vectors", "--out", out, "--frames", "12", "--slide-mm", "77",
+                     "--dark-every", "4", "--drop", "1,6"]) == 0
+    with open(os.path.join(out, "meta.json"), encoding="utf-8") as f:
+        meta = json.load(f)
+    assert meta["times"] == [float(k) for k in range(12) if k not in (1, 6)]
+    assert len(meta["counts"]) == 10 and meta["dark"][0] and meta["dark"][3]
+    poses = np.fromfile(os.path.join(out, "poses.bin"), dtype="<f8").reshape(-1, 12)
+    assert len(poses) == 10 and abs(poses[-1, 9] - 0.077) < 0.0005
+    assert cli.main(["dot-fusion-vectors", "--out", out, "--dark-every", "4", "--drop", "4"]) == 2
+
+
 def test_dot_fusion_vectors_command_writes_light_off_frames(tmp_path):
     out = str(tmp_path / "dark")
     assert cli.main(["dot-fusion-vectors", "--out", out, "--frames", "12", "--slide-mm", "77",

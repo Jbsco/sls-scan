@@ -636,7 +636,8 @@ def cmd_dot_fusion_vectors(args: argparse.Namespace) -> int:
     """Write point frames and reference dot frames of a slide along a smooth panel, with
     their NumPy tracking and fusion, for the application's fusion-check. With dark_every,
     every that many-th frame from the first is a light-off pair with dots and no points,
-    and lit frames have no dots."""
+    and lit frames have no dots. With drop, those frames are left out and the others keep
+    their capture times, as a live view does with pairs it skips."""
     import json
 
     from . import track
@@ -648,9 +649,16 @@ def cmd_dot_fusion_vectors(args: argparse.Namespace) -> int:
     if args.dark_every > 0:
         clouds = [np.empty((0, 3)) if d else c for c, d in zip(clouds, dark)]
         dot_frames = [f if d else np.empty((0, 3)) for f, d in zip(dot_frames, dark)]
+    dropped = {int(k) for k in args.drop.split(",")} if args.drop else set()
+    if any(k >= len(clouds) or dark[k] for k in dropped):
+        print("--drop takes lit frames of the sequence", file=sys.stderr)
+        return 2
+    kept = [k for k in range(len(clouds)) if k not in dropped]
+    clouds, dot_frames, dark = ([frames[k] for k in kept] for frames in (clouds, dot_frames, dark))
+    times = [float(k) for k in kept] if dropped else None
     voxel = args.voxel_mm / 1000.0
     tracked, model = track.fuse([None if d else c for c, d in zip(clouds, dark)], voxel,
-                                dots=dot_frames)
+                                dots=dot_frames, times=times)
     os.makedirs(args.out, exist_ok=True)
     np.concatenate(clouds).astype("<f8").tofile(os.path.join(args.out, "frames.bin"))
     np.concatenate(dot_frames).astype("<f8").tofile(os.path.join(args.out, "dots.bin"))
@@ -660,6 +668,8 @@ def cmd_dot_fusion_vectors(args: argparse.Namespace) -> int:
     meta = {"counts": [int(len(c)) for c in clouds],
             "dot_counts": [int(len(d)) for d in dot_frames], "dark": dark, "voxel": voxel,
             "model": int(len(model))}
+    if times:
+        meta["times"] = times
     with open(os.path.join(args.out, "meta.json"), "w", encoding="utf-8") as f:
         json.dump(meta, f)
     print(f"dot fusion vectors written to {args.out}: {len(clouds)} frames, {sum(dark)} light-off, "
@@ -1567,6 +1577,9 @@ def main(argv=None) -> int:
     p.add_argument("--voxel-mm", type=float, default=6.0)
     p.add_argument("--dark-every", type=int, default=0,
                    help="make every this many-th frame from the first a light-off pair")
+    p.add_argument("--drop", default="",
+                   help="lit frames to leave out, comma separated; the others keep their "
+                        "capture times")
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_dot_fusion_vectors)
 
