@@ -37,15 +37,15 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   15 depth frames per second at 1.6 MP on either machine's GPU, 3 or more on the CPU
   fallback, and kernel outputs within tolerance of the Phase 2 reference on recorded
   frames. Kernels match NumPy, live (D38, D40, D47, D52). On one desktop, llvmpipe
-  previews reach 34 per second, and live sweep frames reach 24, up from 9 (D72, D74,
-  D96).
+  previews reach 34 per second, and depth stages of live sweep frames reach 24, up from
+  9 (D72, D74, D96).
 - Phase 5, in progress. Continuous scanning. Pose tracking from geometry, with optional
-  markers on a mat (D63) and removable dots on long smooth panels (D64), TSDF fusion,
-  loop closure. Acceptance: a sweep around a part fuses to a model whose ball bar is
-  within 0.05 mm and shows no doubling at revisited surfaces. ICP tracking and a TSDF keep
-  a synthetic sweep's ball bar within 0.03 mm, live (D26, D51, D54). Closed loops return
+  mat markers (D63) and removable dots on long smooth panels (D64), TSDF fusion, loop
+  closure. Acceptance: a sweep around a part fuses to a model whose ball bar is within
+  0.05 mm and shows no doubling at revisited surfaces. ICP tracking and a TSDF keep a
+  synthetic sweep's ball bar within 0.03 mm, live (D26, D51, D54). Closed loops return
   within 15 µm (D55). Dots from light-off frames keep smooth point-frame panels within
-  0.22 mm (D78), and the application tracks from them live (D79).
+  0.22 mm, live (D78, D79). Live fusion runs at 16 pairs per second (D99).
 - Phase 6, in progress. Many static views. View poses from geometry by a coarse match
   and ICP refinement, optional markers, datums defining the object's frame, a merged
   cloud (D63). Acceptance: two scale bars in different orientations measure within 0.5 mm
