@@ -2032,3 +2032,47 @@ On twelve pairs, refinement took 35 to 37 ms back to back, 37 ms after 10 ms of 
 
 Fusion now sets this rate. It averaged 55 ms over that sweep and took 68 to 74 ms on its
 last pair, since each pair is tracked against a growing model.
+
+## D100. Fusion on the model near a frame (2026-11-09)
+
+After D99, fusion set our live rate, and its time grew with the model. For every frame,
+`fuse::Fusion::add` built four ICP search grids over all model points, sorted every
+voxel and computed a normal for every point. Four changes cut that work and keep its
+results:
+
+- nearest-point search passes over a cell that lies beyond its match limit or beyond
+  its nearest point so far;
+- ICP's four grids, one per match distance, are built on separate threads;
+- ICP runs on model points within 20 mm of a frame's box, and again on all of them if a
+  step could have matched a point outside that box;
+- voxels a frame touched are merged into an ordered model, and a normal is computed
+  again only for a point that moved or lies within its normal's reach of one that did.
+
+Unit tests compare model and normals with a rebuild from every voxel after each frame,
+at two voxel sizes, and local alignment with ICP on all points. Deliberate faults in
+each rule made that rebuild test fail. `sls-scan fusion-check` matches NumPy on four
+vector sets as before. `sls-scan depth` wrote a fused model equal byte for byte for 24
+stand-in pairs, some with light-off pairs before them.
+
+Times are from a Radeon RX 7900 GRE and a Ryzen 7 7700X at a load average near 5.
+
+| 60 recorded stand-in pairs | Before | After |
+|---|---|---|
+| Live loop back to back, three runs | 16.0 to 16.3 pairs per second, fusion 57 ms | 22.3 to 22.5 pairs per second, fusion 35 ms |
+| Pairs offered at 30 per second, three runs | 15.3 to 15.5 pairs per second | 17.9, 22.8 and 17.9 pairs per second |
+
+| Synthetic sweep, 12 mm further each frame | Search and grid changes alone | All four changes |
+|---|---|---|
+| Fusion per frame at 122,000 model points | 49 ms | 18 ms |
+| Fusion per frame at 426,000 model points | 213 ms | 26 ms |
+
+Our stand-in sweep keeps its whole scene in view, so every model point is near each
+frame and most normals change. Its gain comes from search and grids. A sweep that leaves
+surface behind, as that synthetic one does, gains from all four.
+
+With pairs offered at 30 per second this loop reached its back-to-back rate in one run
+of three. In both others, depth stages took 46 ms against 41 ms, and its TSDF step
+19 ms against 8 ms. It seems likely that measuring waits for a pair once a full pipeline
+has skipped some, and that our GPU slows as in D99. Keeping the newest skipped pair for
+the next free place would test that.
+

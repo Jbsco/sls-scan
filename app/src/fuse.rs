@@ -23,6 +23,13 @@ const MIN_DOT_PAIRS: usize = 3;
 const HOLD_BELOW: f64 = 1e-4;
 /// Fewest points a thread takes, so that small frames stay on one thread.
 const CHUNK: usize = 2048;
+/// A frame's ICP runs on model points within this of the box around the frame, in metres.
+const NEAR_MARGIN: f64 = 0.02;
+/// Cell of the search for changed points near a model point, in voxels.
+const RENEW_CELL_VOXELS: f64 = 8.0;
+/// Normals are computed again from model points within this of those that need one, in
+/// voxels. A normal that reaches farther is computed from the whole model.
+const RENEW_MARGIN_VOXELS: f64 = 16.0;
 
 /// Multiply-and-rotate hash for cell keys, much cheaper than the default for short
 /// integer keys that need no protection from chosen inputs.
@@ -341,20 +348,50 @@ impl Grid {
         }
     }
 
-    /// Nearest point closer than `limit`, which must not exceed the cell size.
+    /// Nearest point closer than `limit`, which must not exceed the cell size. Cells are
+    /// visited in the order of `shell`, and one is passed over when every point in it
+    /// would lie farther than the limit or the nearest found so far.
     pub(crate) fn nearest(&self, points: &[Vec3], q: &Vec3, limit: f64) -> Option<usize> {
         let centre = Self::key_of(q, self.cell);
-        let mut best: Option<(f64, usize)> = None;
-        for shell in 0..=1 {
-            self.shell(centre, shell, |i| {
-                let d = sub(&points[i as usize], q);
-                let d2 = dot(&d, &d);
-                if d2 < limit * limit && best.is_none_or(|(b, _)| d2 < b) {
-                    best = Some((d2, i as usize));
+        let slack = 1e-9 * self.cell;
+        let gap = |d: usize, offset: i64| -> f64 {
+            let to_face = match offset {
+                0 => return 0.0,
+                1 => (centre[d] + 1) as f64 * self.cell - q[d],
+                _ => q[d] - centre[d] as f64 * self.cell,
+            };
+            (to_face - slack).max(0.0)
+        };
+        let mut bound = limit * limit;
+        let mut best = None;
+        for shell in 0..=1i64 {
+            for dx in -shell..=shell {
+                for dy in -shell..=shell {
+                    for dz in -shell..=shell {
+                        if dx.abs().max(dy.abs()).max(dz.abs()) != shell {
+                            continue;
+                        }
+                        let g = [gap(0, dx), gap(1, dy), gap(2, dz)];
+                        if dot(&g, &g) >= bound {
+                            continue;
+                        }
+                        let key = [centre[0] + dx, centre[1] + dy, centre[2] + dz];
+                        let Some(list) = self.cells.get(&key) else {
+                            continue;
+                        };
+                        for &i in list {
+                            let d = sub(&points[i as usize], q);
+                            let d2 = dot(&d, &d);
+                            if d2 < bound {
+                                bound = d2;
+                                best = Some(i as usize);
+                            }
+                        }
+                    }
                 }
-            });
+            }
         }
-        best.map(|(_, i)| i)
+        best
     }
 
     /// The `k` nearest points, nearest first.
@@ -401,7 +438,20 @@ pub(crate) fn normals(points: &[Vec3], cell: f64) -> Vec<Vec3> {
 
 /// Unit normal of one point from the plane of its nearest neighbours.
 fn normal(grid: &Grid, points: &[Vec3], p: &Vec3) -> Vec3 {
+    normal_reach(grid, points, p).0
+}
+
+/// Unit normal of one point from the plane of its nearest neighbours, with the squared
+/// distance to the farthest of them, or infinity when fewer than `NEIGHBOURS` exist.
+fn normal_reach(grid: &Grid, points: &[Vec3], p: &Vec3) -> (Vec3, f64) {
     let idx = grid.knn(points, p, NEIGHBOURS);
+    let reach = match idx.last() {
+        Some(&last) if idx.len() == NEIGHBOURS => {
+            let d = sub(&points[last], p);
+            dot(&d, &d)
+        }
+        _ => f64::INFINITY,
+    };
     let n = idx.len() as f64;
     let mut mean = [0.0; 3];
     for &i in &idx {
@@ -417,7 +467,28 @@ fn normal(grid: &Grid, points: &[Vec3], p: &Vec3) -> Vec3 {
             }
         }
     }
-    smallest_eigenvector(&cov)
+    (smallest_eigenvector(&cov), reach)
+}
+
+/// The box around points, as its lowest and highest corner.
+fn bounds(points: &[Vec3]) -> (Vec3, Vec3) {
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for p in points {
+        for d in 0..3 {
+            lo[d] = lo[d].min(p[d]);
+            hi[d] = hi[d].max(p[d]);
+        }
+    }
+    (lo, hi)
+}
+
+/// The box around a box's corners after a pose.
+fn posed_bounds(pose: &Pose, lo: &Vec3, hi: &Vec3) -> (Vec3, Vec3) {
+    let corners: Vec<Vec3> = (0..8)
+        .map(|c| pose.apply(&[0, 1, 2].map(|d| if c >> d & 1 == 0 { lo[d] } else { hi[d] })))
+        .collect();
+    bounds(&corners)
 }
 
 /// Point-to-plane ICP of `source` onto `target` from `start`, with match distances
@@ -437,11 +508,54 @@ pub(crate) fn icp_with(
     fixed: &[(Vec3, Vec3)],
     hold_below: f64,
 ) -> (Pose, f64) {
+    icp_within(
+        source,
+        target,
+        target_normals,
+        start,
+        limits,
+        fixed,
+        hold_below,
+        None,
+    )
+    .unwrap_or((start, f64::INFINITY))
+}
+
+/// ICP as `icp_with`, on a target that holds every point of a larger one inside the box
+/// `region`. Returns nothing when a step's source points, by the box around them, could
+/// match a point outside that box, where the larger target could give another result.
+#[allow(clippy::too_many_arguments)]
+fn icp_within(
+    source: &[Vec3],
+    target: &[Vec3],
+    target_normals: &[Vec3],
+    start: Pose,
+    limits: &[f64],
+    fixed: &[(Vec3, Vec3)],
+    hold_below: f64,
+    region: Option<&(Vec3, Vec3)>,
+) -> Option<(Pose, f64)> {
     let mut pose = start;
     let mut rms = f64::INFINITY;
-    for &limit in limits {
-        let grid = Grid::new(target, limit);
+    let (source_lo, source_hi) = bounds(source);
+    let grids: Vec<Grid> = thread::scope(|scope| {
+        let handles: Vec<_> = limits
+            .iter()
+            .map(|&limit| scope.spawn(move || Grid::new(target, limit)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+            .collect()
+    });
+    for (&limit, grid) in limits.iter().zip(&grids) {
         for _ in 0..ITERATIONS {
+            if let Some((lo, hi)) = region {
+                let (a, b) = posed_bounds(&pose, &source_lo, &source_hi);
+                if (0..3).any(|d| a[d] - limit < lo[d] || b[d] + limit > hi[d]) {
+                    return None;
+                }
+            }
             let parts = chunked(source.len(), |range| {
                 let mut ata = [[0.0; 6]; 6];
                 let mut atb = [0.0; 6];
@@ -529,15 +643,18 @@ pub(crate) fn icp_with(
             }
         }
     }
-    (pose, rms)
+    Some((pose, rms))
 }
 
 /// A model built from depth frames, each aligned to it before it joins.
 pub struct Fusion {
     voxel: f64,
     sums: CellMap<(Vec3, u32)>,
+    /// Voxels in order, with each one's average, its normal and that normal's reach.
+    keys: Vec<[i64; 3]>,
     model: Vec<Vec3>,
     normals: Vec<Vec3>,
+    reach: Vec<f64>,
     pose: Pose,
     pub poses: Vec<Pose>,
     pub last_rms: Option<f64>,
@@ -552,8 +669,10 @@ impl Fusion {
         Self {
             voxel,
             sums: CellMap::default(),
+            keys: Vec::new(),
             model: Vec::new(),
             normals: Vec::new(),
+            reach: Vec::new(),
             pose: Pose::IDENTITY,
             poses: Vec::new(),
             last_rms: None,
@@ -703,19 +822,12 @@ impl Fusion {
             } else {
                 Vec::new()
             };
-            let (new, rms) = icp_with(
-                points,
-                &self.model,
-                &self.normals,
-                self.pose,
-                &LIMITS,
-                &fixed,
-                if self.fixes.is_empty() {
-                    0.0
-                } else {
-                    HOLD_BELOW
-                },
-            );
+            let hold_below = if self.fixes.is_empty() {
+                0.0
+            } else {
+                HOLD_BELOW
+            };
+            let (new, rms) = self.align(points, &fixed, hold_below);
             self.pose = new;
             self.last_rms = Some(rms);
         }
@@ -723,24 +835,171 @@ impl Fusion {
             self.place_dots(dots);
         }
         self.poses.push(self.pose);
+        let mut touched = Vec::with_capacity(points.len());
         for p in points {
             let q = self.pose.apply(p);
             let key = Grid::key_of(&q, self.voxel);
             let entry = self.sums.entry(key).or_insert(([0.0; 3], 0));
             entry.0 = add(&entry.0, &q);
             entry.1 += 1;
+            touched.push(key);
         }
-        let mut keys: Vec<&[i64; 3]> = self.sums.keys().collect();
-        keys.sort();
-        self.model = keys
-            .into_iter()
-            .map(|k| {
-                let (s, n) = self.sums[k];
-                s.map(|v| v / f64::from(n))
-            })
-            .collect();
-        self.normals = normals(&self.model, 2.0 * self.voxel);
+        touched.sort_unstable();
+        touched.dedup();
+        let (changed, moved) = self.merge(&touched);
+        self.renew_normals(changed, &moved);
         self.pose
+    }
+
+    /// ICP of a frame's points onto the model from the current pose. It runs on the model
+    /// points within `NEAR_MARGIN` of the box around the frame, and on the whole model
+    /// when a step could reach a point outside that box, so its result is that of the
+    /// whole model.
+    fn align(&self, points: &[Vec3], fixed: &[(Vec3, Vec3)], hold_below: f64) -> (Pose, f64) {
+        let (source_lo, source_hi) = bounds(points);
+        let (lo, hi) = posed_bounds(&self.pose, &source_lo, &source_hi);
+        let region = (lo.map(|v| v - NEAR_MARGIN), hi.map(|v| v + NEAR_MARGIN));
+        let inside = |p: &Vec3| (0..3).all(|d| p[d] >= region.0[d] && p[d] <= region.1[d]);
+        let near: Vec<usize> = (0..self.model.len())
+            .filter(|&i| inside(&self.model[i]))
+            .collect();
+        if near.len() < self.model.len() {
+            let target: Vec<Vec3> = near.iter().map(|&i| self.model[i]).collect();
+            let target_normals: Vec<Vec3> = near.iter().map(|&i| self.normals[i]).collect();
+            let found = icp_within(
+                points,
+                &target,
+                &target_normals,
+                self.pose,
+                &LIMITS,
+                fixed,
+                hold_below,
+                Some(&region),
+            );
+            if let Some(result) = found {
+                return result;
+            }
+        }
+        icp_with(
+            points,
+            &self.model,
+            &self.normals,
+            self.pose,
+            &LIMITS,
+            fixed,
+            hold_below,
+        )
+    }
+
+    /// Bring the ordered model up to date for voxels a frame touched, given in order.
+    /// Returns which model points changed or are new, and every position such a point
+    /// left or took.
+    fn merge(&mut self, touched: &[[i64; 3]]) -> (Vec<bool>, Vec<Vec3>) {
+        let size = self.keys.len() + touched.len();
+        let mut keys = Vec::with_capacity(size);
+        let mut model = Vec::with_capacity(size);
+        let mut normals = Vec::with_capacity(size);
+        let mut reach = Vec::with_capacity(size);
+        let mut changed = Vec::with_capacity(size);
+        let mut moved = Vec::with_capacity(2 * touched.len());
+        let (mut i, mut j) = (0, 0);
+        while i < self.keys.len() || j < touched.len() {
+            if j == touched.len() || (i < self.keys.len() && self.keys[i] < touched[j]) {
+                keys.push(self.keys[i]);
+                model.push(self.model[i]);
+                normals.push(self.normals[i]);
+                reach.push(self.reach[i]);
+                changed.push(false);
+                i += 1;
+                continue;
+            }
+            let key = touched[j];
+            let (sum, count) = self.sums[&key];
+            let average = sum.map(|v| v / f64::from(count));
+            if i < self.keys.len() && self.keys[i] == key {
+                moved.push(self.model[i]);
+                i += 1;
+            }
+            moved.push(average);
+            keys.push(key);
+            model.push(average);
+            normals.push([0.0; 3]);
+            reach.push(f64::INFINITY);
+            changed.push(true);
+            j += 1;
+        }
+        self.keys = keys;
+        self.model = model;
+        self.normals = normals;
+        self.reach = reach;
+        (changed, moved)
+    }
+
+    /// Compute normals again for the model points that changed and for those whose
+    /// neighbours could have: a point within its normal's reach of a position in `moved`.
+    /// Other points keep their normal, which the whole model would give them again.
+    fn renew_normals(&mut self, changed: Vec<bool>, moved: &[Vec3]) {
+        let cell = RENEW_CELL_VOXELS * self.voxel;
+        let (lo, hi) = bounds(moved);
+        let moved_grid = Grid::new(moved, cell);
+        let (model, reach) = (&self.model, &self.reach);
+        let affected = |i: usize| {
+            if changed[i] || reach[i].is_infinite() {
+                return true;
+            }
+            let (p, r) = (&model[i], reach[i].sqrt());
+            if (0..3).any(|d| p[d] < lo[d] - r || p[d] > hi[d] + r) {
+                return false;
+            }
+            let mut near = false;
+            let centre = Grid::key_of(p, cell);
+            for shell in 0..=(r / cell).ceil() as i64 {
+                moved_grid.shell(centre, shell, |m| {
+                    let d = sub(&moved[m as usize], p);
+                    near |= dot(&d, &d) <= reach[i];
+                });
+            }
+            near
+        };
+        let flags = chunked(model.len(), |range| range.map(affected).collect::<Vec<_>>());
+        let indices: Vec<usize> = flags
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter_map(|(i, renew)| renew.then_some(i))
+            .collect();
+        let renewed: Vec<Vec3> = indices.iter().map(|&i| model[i]).collect();
+        let margin = RENEW_MARGIN_VOXELS * self.voxel;
+        let (lo, hi) = bounds(&renewed);
+        let inside = |p: &Vec3| (0..3).all(|d| p[d] >= lo[d] - margin && p[d] <= hi[d] + margin);
+        let near: Vec<Vec3> = model.iter().filter(|p| inside(p)).copied().collect();
+        let grid = Grid::new(&near, 2.0 * self.voxel);
+        let parts = chunked(indices.len(), |range| {
+            indices[range]
+                .iter()
+                .map(|&i| normal_reach(&grid, &near, &model[i]))
+                .collect::<Vec<_>>()
+        });
+        let mut results: Vec<(Vec3, f64)> = parts.into_iter().flatten().collect();
+        let beyond: Vec<usize> = (0..results.len())
+            .filter(|&k| results[k].1 > margin * margin)
+            .collect();
+        if !beyond.is_empty() && near.len() < model.len() {
+            let whole = Grid::new(model, 2.0 * self.voxel);
+            let parts = chunked(beyond.len(), |range| {
+                beyond[range]
+                    .iter()
+                    .map(|&k| normal_reach(&whole, model, &model[indices[k]]))
+                    .collect::<Vec<_>>()
+            });
+            for (&k, result) in beyond.iter().zip(parts.into_iter().flatten()) {
+                results[k] = result;
+            }
+        }
+        for (&i, (normal, reach)) in indices.iter().zip(results) {
+            self.normals[i] = normal;
+            self.reach[i] = reach;
+        }
     }
 }
 
@@ -918,6 +1177,132 @@ mod tests {
         for n in normals(&points, 0.001) {
             assert!((n[2].abs() - 1.0).abs() < 1e-9, "normal {n:?}");
         }
+    }
+
+    /// A window of a wavy sheet that starts at `x0`, sampled every 1.3 mm, in the frame
+    /// of a camera at `pose`.
+    fn window(pose: &Pose, x0: f64) -> Vec<Vec3> {
+        let inverse = Pose {
+            rotation: transpose(&pose.rotation),
+            translation: mul_vec(&transpose(&pose.rotation), &pose.translation).map(|v| -v),
+        };
+        let mut points = Vec::new();
+        for i in 0..=120 {
+            for j in -40..=40 {
+                let (x, y) = (x0 + f64::from(i) * 0.0013, f64::from(j) * 0.0013);
+                let z = 0.5 + 0.004 * (40.0 * x).sin() * (40.0 * y).cos();
+                points.push(inverse.apply(&[x, y, z]));
+            }
+        }
+        points
+    }
+
+    /// Frame `k` of a sweep along the sheet, 12 mm further each frame under a small motion.
+    fn sweep_frame(k: u32) -> Vec<Vec3> {
+        let s = f64::from(k);
+        let pose = Pose {
+            rotation: rodrigues(&[0.0005 * s, -0.0004 * s, 0.0003 * s]),
+            translation: [0.0003 * s, -0.0002 * s, 0.0001 * s],
+        };
+        window(&pose, 0.012 * s)
+    }
+
+    /// The model and normals of a fusion from all of its voxels.
+    fn rebuilt(fusion: &Fusion) -> (Vec<Vec3>, Vec<Vec3>) {
+        let mut keys: Vec<&[i64; 3]> = fusion.sums.keys().collect();
+        keys.sort();
+        let model: Vec<Vec3> = keys
+            .into_iter()
+            .map(|k| {
+                let (s, n) = fusion.sums[k];
+                s.map(|v| v / f64::from(n))
+            })
+            .collect();
+        let normals = normals(&model, 2.0 * fusion.voxel);
+        (model, normals)
+    }
+
+    #[test]
+    fn model_and_normals_equal_a_rebuild_from_every_voxel() {
+        for (voxel, frames) in [(0.0005, 8), (0.0001, 3)] {
+            let mut fusion = Fusion::new(voxel);
+            for k in 0..frames {
+                fusion.add(&sweep_frame(k));
+                let (model, normals) = rebuilt(&fusion);
+                assert_eq!(fusion.model, model, "model after frame {k}");
+                assert_eq!(fusion.normals, normals, "normals after frame {k}");
+            }
+        }
+    }
+
+    #[test]
+    fn normals_far_from_a_frame_are_kept() {
+        let mut fusion = Fusion::new(0.0005);
+        for k in 0..8 {
+            fusion.add(&sweep_frame(k));
+        }
+        let lowest = |points: &[Vec3]| points.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min);
+        let far = (0..fusion.model.len())
+            .find(|&i| {
+                let p = fusion.model[i];
+                p[0] > 0.01 && p[0] < 0.02 && p[1].abs() < 0.01
+            })
+            .expect("a model point behind the sweep");
+        let marked = fusion.keys[far];
+        fusion.normals[far] = [9.0; 3];
+        let frame = sweep_frame(8);
+        assert!(lowest(&frame) > 0.08);
+        fusion.add(&frame);
+        let at = fusion
+            .keys
+            .binary_search(&marked)
+            .expect("the marked voxel");
+        assert_eq!(fusion.normals[at], [9.0; 3]);
+    }
+
+    #[test]
+    fn alignment_to_nearby_points_equals_alignment_to_the_whole_model() {
+        let mut fusion = Fusion::new(0.0005);
+        for k in 0..8 {
+            fusion.add(&sweep_frame(k));
+        }
+        let frame = sweep_frame(8);
+        let (lo, hi) = bounds(&frame);
+        let (lo, hi) = posed_bounds(&fusion.pose, &lo, &hi);
+        let near = fusion
+            .model
+            .iter()
+            .filter(|p| (0..3).all(|d| p[d] >= lo[d] - NEAR_MARGIN && p[d] <= hi[d] + NEAR_MARGIN))
+            .count();
+        assert!(near > 0 && near < fusion.model.len());
+        let whole = icp_with(
+            &frame,
+            &fusion.model,
+            &fusion.normals,
+            fusion.pose,
+            &LIMITS,
+            &[],
+            0.0,
+        );
+        assert_eq!(fusion.align(&frame, &[], 0.0), whole);
+    }
+
+    #[test]
+    fn alignment_stops_when_a_step_could_match_outside_its_box() {
+        let frame = window(&Pose::IDENTITY, 0.0);
+        let target_normals = normals(&frame, 0.004);
+        let region = bounds(&frame);
+        let found = icp_within(
+            &frame,
+            &frame,
+            &target_normals,
+            Pose::IDENTITY,
+            &LIMITS,
+            &[],
+            0.0,
+            Some(&region),
+        );
+        assert!(found.is_none());
     }
 
     #[test]

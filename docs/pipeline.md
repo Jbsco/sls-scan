@@ -66,6 +66,10 @@ left and right dots by the depth that the pattern-lit pair next to it measured (
 application's ports, `dots::find_dots` and `fuse::Fusion::add_with_dots`, are checked
 against them by `sls-scan dot-check` and `sls-scan fusion-check` (D75, D76).
 
+`fuse::Fusion` aligns each frame to model points near it, and updates its model and
+normals only where that frame lands. Results equal those from work on every model point
+(D100).
+
 `slscan sweep-bench` runs a synthetic sweep through matching, tracking and fusion and
 compares poses and artifacts with the truth, and `--loop` sweeps a closed loop. The application runs a Rust port of both,
 checked against them by `sls-scan fusion-check` (D42). `slscan fuse` and `slscan sweep-bench`

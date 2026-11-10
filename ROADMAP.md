@@ -45,7 +45,7 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   0.05 mm and shows no doubling at revisited surfaces. ICP tracking and a TSDF keep a
   synthetic sweep's ball bar within 0.03 mm, live (D26, D51, D54). Closed loops return
   within 15 µm (D55). Dots from light-off frames keep smooth point-frame panels within
-  0.22 mm, live (D78, D79). Live fusion runs at 16 pairs per second (D99).
+  0.22 mm, live (D78, D79). Live fusion runs at 22 pairs per second (D100).
 - Phase 6, in progress. Many static views. View poses from geometry by a coarse match
   and ICP refinement, optional markers, datums defining the object's frame, a merged
   cloud (D63). Acceptance: two scale bars in different orientations measure within 0.5 mm
