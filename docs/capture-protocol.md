@@ -52,8 +52,8 @@ A `stereo-calibration` set is one board pair, saved as `left.png` and `right.png
 A stereo request may carry `rate_hz`, the trigger rate in pairs per second, with 0 or
 absent for as fast as the node can. A node drops a pair whose trigger time passed more
 than one period before it can send it, so a client that falls behind sees missing
-indices. The stand-in plays a short pre-rendered sweep in a loop at that rate
-(`DESIGN.md` D46).
+indices. The stand-in renders a set of head poses once and plays them forth and back
+at that rate (`DESIGN.md` D46, D104).
 
 A stereo request may set `dark_every`, with 0 or absent for none. Every that many-th
 pair from the first is taken with the pattern light off and saved as `dark_000/left.png`
@@ -79,6 +79,7 @@ column Gray codes with their inverses, then the phase shifts (`gray_000` onward,
 ## Stand-in node
 
     slscan node-sim --scene plate                 # serves synthetic frames on port 5600
+    slscan node-sim --paced-poses 61              # renders a whole sweep for paced stereo sets
     slscan capture --set scan --pitch 16 --wait 30 --out data/view
     slscan capture --set calibration --out data/calibration/pose_000
     slscan capture --set stereo-calibration --out data/stereo-calibration/pose_000
@@ -90,6 +91,11 @@ The stand-in renders a sweep around a part on a mat for stereo sets, about 2° p
 at 30 fps, and the next board pose for each calibration set. With light-off pairs it
 slides 2.5 mm per pair along a flat panel with reference dots about 35 mm apart, and
 renders those pairs under room light (D79).
+
+A paced stereo set plays its poses forth and back along that sweep, or along the panel
+slide, and slows toward each end before it turns. A node keeps eight poses, rendered at
+first use. `--paced-poses 61` renders the sweep's whole arc before the node serves, at
+about 0.8 s per pose (D104).
 
 For phase-shift scan sets it renders the chosen scene with timestamps at 60 Hz, at each
 requested exposure. `--scene strips` serves a plate of dark, middle and bright strips,
