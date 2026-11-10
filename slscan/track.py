@@ -129,7 +129,7 @@ def match_dots(dots: np.ndarray, rotation: np.ndarray, translation: np.ndarray,
 
 
 def fuse(frames, voxel: float = 0.0005, dots=None, dot_radius: float = 0.03,
-         hold_below: float = 1e-4) -> tuple[list, np.ndarray]:
+         hold_below: float = 1e-4, times=None) -> tuple[list, np.ndarray]:
     """Track and fuse a sequence of point sets (each in its own camera frame).
 
     The world is the first frame's camera frame, and each frame's ICP starts from the
@@ -143,7 +143,9 @@ def fuse(frames, voxel: float = 0.0005, dots=None, dot_radius: float = 0.03,
     pair, and otherwise the pose it starts from. Once such pairs have been seen, each lit
     frame's ICP holds its starting pose along directions with eigenvalues below hold_below
     times the largest, and once two have been seen, that pose continues the motion between
-    the last two at constant velocity.
+    the last two at constant velocity. With times, each frame's capture time in one unit,
+    that motion continues by time, and without them by frame count, which is right only
+    when no frame between is left out.
     Returns each frame's pose (rotation, translation into the world) and the fused model
     as voxel averages.
     """
@@ -154,11 +156,12 @@ def fuse(frames, voxel: float = 0.0005, dots=None, dot_radius: float = 0.03,
     dot_map, dot_counts = np.empty((0, 3)), np.empty(0)
     limit = dot_radius
     for k, points in enumerate(frames):
+        now = k if times is None else times[k]
         if len(dot_map) >= 2:
             dot_radius = min(limit, 0.4 * dot_spacing(dot_map))
-        if len(fixes) >= 2:
+        if len(fixes) >= 2 and fixes[-1][0] > fixes[-2][0]:
             (k0, r0, t0), (k1, r1, t1) = fixes[-2], fixes[-1]
-            ahead = (k - k1) / (k1 - k0)
+            ahead = (now - k1) / (k1 - k0)
             r = rodrigues(ahead * rotation_vector(r1 @ r0.T)) @ r1
             t = t1 + ahead * (t1 - t0)
         seen = dots[k] if dots is not None else np.empty((0, 3))
@@ -186,7 +189,7 @@ def fuse(frames, voxel: float = 0.0005, dots=None, dot_radius: float = 0.03,
             dot_counts = np.concatenate([dot_counts, np.ones(len(fresh))])
         poses.append((r, t))
         if points is None:
-            fixes.append((k, r, t))
+            fixes.append((now, r, t))
             continue
         raw.append(points @ r.T + t)
         model = voxel_average(np.vstack(raw), voxel)

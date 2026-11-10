@@ -111,6 +111,31 @@ def test_light_off_dots_hold_tracking_along_a_smooth_panel():
     assert max(errors[8:]) < 0.0005
 
 
+def test_capture_times_hold_tracking_when_lit_frames_are_left_out():
+    clouds, dot_frames, truth = synthetic.panel_frames(np.random.default_rng(0), 40, 0.273)
+    kept = [k for k in range(40) if k % 4 != 1]
+    frames = [None if k % 4 == 0 else clouds[k] for k in kept]
+    seen = [dot_frames[k] if k % 4 == 0 else np.empty((0, 3)) for k in kept]
+
+    def worst(times):
+        poses, _ = track.fuse(frames, 0.006, dots=seen, times=times)
+        errors = [np.linalg.norm(t - truth[k]) for (_, t), k in zip(poses, kept)]
+        return max(errors[kept.index(8):])
+
+    assert worst(kept) < 0.0005
+    assert worst(None) > 0.002
+
+
+def test_frame_counts_stand_for_capture_times_when_no_frame_is_left_out():
+    clouds, dot_frames, _ = synthetic.panel_frames(np.random.default_rng(0), 12, 0.077)
+    frames = [None if k % 4 == 0 else c for k, c in enumerate(clouds)]
+    seen = [d if k % 4 == 0 else np.empty((0, 3)) for k, d in enumerate(dot_frames)]
+    counted, _ = track.fuse(frames, 0.006, dots=seen)
+    timed, _ = track.fuse(frames, 0.006, dots=seen, times=[k / 30.0 for k in range(12)])
+    for (r, t), (rt, tt) in zip(counted, timed):
+        assert np.allclose(r, rt, atol=1e-12) and np.allclose(t, tt, atol=1e-12)
+
+
 def test_dots_between_map_dots_do_not_pair():
     gx, gy = np.meshgrid(np.arange(-0.14, 0.141, 0.035), np.arange(-0.07, 0.071, 0.035))
     grid = np.column_stack([gx.ravel(), gy.ravel(), np.full(gx.size, 0.5)])
