@@ -23,6 +23,8 @@ const MIN_DOT_PAIRS: usize = 3;
 const HOLD_BELOW: f64 = 1e-4;
 /// Fewest points a thread takes, so that small frames stay on one thread.
 const CHUNK: usize = 2048;
+/// A frame's ICP runs on model points within this of the box around the frame, in metres.
+const NEAR_MARGIN: f64 = 0.02;
 
 /// Multiply-and-rotate hash for cell keys, much cheaper than the default for short
 /// integer keys that need no protection from chosen inputs.
@@ -450,6 +452,27 @@ fn normal(grid: &Grid, points: &[Vec3], p: &Vec3) -> Vec3 {
     smallest_eigenvector(&cov)
 }
 
+/// The box around points, as its lowest and highest corner.
+fn bounds(points: &[Vec3]) -> (Vec3, Vec3) {
+    let mut lo = [f64::INFINITY; 3];
+    let mut hi = [f64::NEG_INFINITY; 3];
+    for p in points {
+        for d in 0..3 {
+            lo[d] = lo[d].min(p[d]);
+            hi[d] = hi[d].max(p[d]);
+        }
+    }
+    (lo, hi)
+}
+
+/// The box around a box's corners after a pose.
+fn posed_bounds(pose: &Pose, lo: &Vec3, hi: &Vec3) -> (Vec3, Vec3) {
+    let corners: Vec<Vec3> = (0..8)
+        .map(|c| pose.apply(&[0, 1, 2].map(|d| if c >> d & 1 == 0 { lo[d] } else { hi[d] })))
+        .collect();
+    bounds(&corners)
+}
+
 /// Point-to-plane ICP of `source` onto `target` from `start`, with match distances
 /// `limits`, coarse to fine. Each of `fixed`, a source point and its target such as a
 /// reference dot, adds point-to-point terms to every step, which fixes the motion a
@@ -467,8 +490,36 @@ pub(crate) fn icp_with(
     fixed: &[(Vec3, Vec3)],
     hold_below: f64,
 ) -> (Pose, f64) {
+    icp_within(
+        source,
+        target,
+        target_normals,
+        start,
+        limits,
+        fixed,
+        hold_below,
+        None,
+    )
+    .unwrap_or((start, f64::INFINITY))
+}
+
+/// ICP as `icp_with`, on a target that holds every point of a larger one inside the box
+/// `region`. Returns nothing when a step's source points, by the box around them, could
+/// match a point outside that box, where the larger target could give another result.
+#[allow(clippy::too_many_arguments)]
+fn icp_within(
+    source: &[Vec3],
+    target: &[Vec3],
+    target_normals: &[Vec3],
+    start: Pose,
+    limits: &[f64],
+    fixed: &[(Vec3, Vec3)],
+    hold_below: f64,
+    region: Option<&(Vec3, Vec3)>,
+) -> Option<(Pose, f64)> {
     let mut pose = start;
     let mut rms = f64::INFINITY;
+    let (source_lo, source_hi) = bounds(source);
     let grids: Vec<Grid> = thread::scope(|scope| {
         let handles: Vec<_> = limits
             .iter()
@@ -481,6 +532,12 @@ pub(crate) fn icp_with(
     });
     for (&limit, grid) in limits.iter().zip(&grids) {
         for _ in 0..ITERATIONS {
+            if let Some((lo, hi)) = region {
+                let (a, b) = posed_bounds(&pose, &source_lo, &source_hi);
+                if (0..3).any(|d| a[d] - limit < lo[d] || b[d] + limit > hi[d]) {
+                    return None;
+                }
+            }
             let parts = chunked(source.len(), |range| {
                 let mut ata = [[0.0; 6]; 6];
                 let mut atb = [0.0; 6];
@@ -568,7 +625,7 @@ pub(crate) fn icp_with(
             }
         }
     }
-    (pose, rms)
+    Some((pose, rms))
 }
 
 /// A model built from depth frames, each aligned to it before it joins.
@@ -742,19 +799,12 @@ impl Fusion {
             } else {
                 Vec::new()
             };
-            let (new, rms) = icp_with(
-                points,
-                &self.model,
-                &self.normals,
-                self.pose,
-                &LIMITS,
-                &fixed,
-                if self.fixes.is_empty() {
-                    0.0
-                } else {
-                    HOLD_BELOW
-                },
-            );
+            let hold_below = if self.fixes.is_empty() {
+                0.0
+            } else {
+                HOLD_BELOW
+            };
+            let (new, rms) = self.align(points, &fixed, hold_below);
             self.pose = new;
             self.last_rms = Some(rms);
         }
@@ -780,6 +830,46 @@ impl Fusion {
             .collect();
         self.normals = normals(&self.model, 2.0 * self.voxel);
         self.pose
+    }
+
+    /// ICP of a frame's points onto the model from the current pose. It runs on the model
+    /// points within `NEAR_MARGIN` of the box around the frame, and on the whole model
+    /// when a step could reach a point outside that box, so its result is that of the
+    /// whole model.
+    fn align(&self, points: &[Vec3], fixed: &[(Vec3, Vec3)], hold_below: f64) -> (Pose, f64) {
+        let (source_lo, source_hi) = bounds(points);
+        let (lo, hi) = posed_bounds(&self.pose, &source_lo, &source_hi);
+        let region = (lo.map(|v| v - NEAR_MARGIN), hi.map(|v| v + NEAR_MARGIN));
+        let inside = |p: &Vec3| (0..3).all(|d| p[d] >= region.0[d] && p[d] <= region.1[d]);
+        let near: Vec<usize> = (0..self.model.len())
+            .filter(|&i| inside(&self.model[i]))
+            .collect();
+        if near.len() < self.model.len() {
+            let target: Vec<Vec3> = near.iter().map(|&i| self.model[i]).collect();
+            let target_normals: Vec<Vec3> = near.iter().map(|&i| self.normals[i]).collect();
+            let found = icp_within(
+                points,
+                &target,
+                &target_normals,
+                self.pose,
+                &LIMITS,
+                fixed,
+                hold_below,
+                Some(&region),
+            );
+            if let Some(result) = found {
+                return result;
+            }
+        }
+        icp_with(
+            points,
+            &self.model,
+            &self.normals,
+            self.pose,
+            &LIMITS,
+            fixed,
+            hold_below,
+        )
     }
 }
 
@@ -957,6 +1047,79 @@ mod tests {
         for n in normals(&points, 0.001) {
             assert!((n[2].abs() - 1.0).abs() < 1e-9, "normal {n:?}");
         }
+    }
+
+    /// A window of a wavy sheet that starts at `x0`, sampled every 1.3 mm, in the frame
+    /// of a camera at `pose`.
+    fn window(pose: &Pose, x0: f64) -> Vec<Vec3> {
+        let inverse = Pose {
+            rotation: transpose(&pose.rotation),
+            translation: mul_vec(&transpose(&pose.rotation), &pose.translation).map(|v| -v),
+        };
+        let mut points = Vec::new();
+        for i in 0..=120 {
+            for j in -40..=40 {
+                let (x, y) = (x0 + f64::from(i) * 0.0013, f64::from(j) * 0.0013);
+                let z = 0.5 + 0.004 * (40.0 * x).sin() * (40.0 * y).cos();
+                points.push(inverse.apply(&[x, y, z]));
+            }
+        }
+        points
+    }
+
+    /// Frame `k` of a sweep along the sheet, 12 mm further each frame under a small motion.
+    fn sweep_frame(k: u32) -> Vec<Vec3> {
+        let s = f64::from(k);
+        let pose = Pose {
+            rotation: rodrigues(&[0.0005 * s, -0.0004 * s, 0.0003 * s]),
+            translation: [0.0003 * s, -0.0002 * s, 0.0001 * s],
+        };
+        window(&pose, 0.012 * s)
+    }
+
+    #[test]
+    fn alignment_to_nearby_points_equals_alignment_to_the_whole_model() {
+        let mut fusion = Fusion::new(0.0005);
+        for k in 0..8 {
+            fusion.add(&sweep_frame(k));
+        }
+        let frame = sweep_frame(8);
+        let (lo, hi) = bounds(&frame);
+        let (lo, hi) = posed_bounds(&fusion.pose, &lo, &hi);
+        let near = fusion
+            .model
+            .iter()
+            .filter(|p| (0..3).all(|d| p[d] >= lo[d] - NEAR_MARGIN && p[d] <= hi[d] + NEAR_MARGIN))
+            .count();
+        assert!(near > 0 && near < fusion.model.len());
+        let whole = icp_with(
+            &frame,
+            &fusion.model,
+            &fusion.normals,
+            fusion.pose,
+            &LIMITS,
+            &[],
+            0.0,
+        );
+        assert_eq!(fusion.align(&frame, &[], 0.0), whole);
+    }
+
+    #[test]
+    fn alignment_stops_when_a_step_could_match_outside_its_box() {
+        let frame = window(&Pose::IDENTITY, 0.0);
+        let target_normals = normals(&frame, 0.004);
+        let region = bounds(&frame);
+        let found = icp_within(
+            &frame,
+            &frame,
+            &target_normals,
+            Pose::IDENTITY,
+            &LIMITS,
+            &[],
+            0.0,
+            Some(&region),
+        );
+        assert!(found.is_none());
     }
 
     #[test]
