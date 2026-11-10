@@ -338,13 +338,18 @@ class _Handler(socketserver.BaseRequestHandler):
             rate = float(request.get("rate_hz", 0.0))
             if request.get("set") == "stereo" and rate > 0.0:
                 sent = 0
-                for i, left, right, stamp in server.paced_pairs(int(request.get("frames", 1)),
-                                                                rate,
-                                                                int(request.get("dark_every", 0))):
-                    send(self.request, FRAME, frame_payload(sequence, 2 * i, 0, stamp, left))
-                    send(self.request, FRAME, frame_payload(sequence, 2 * i + 1, 0, stamp, right))
-                    sent += 2
-                send(self.request, END, json.dumps({"sequence": sequence, "frames": sent}).encode())
+                pairs = server.paced_pairs(int(request.get("frames", 1)), rate,
+                                           int(request.get("dark_every", 0)))
+                try:
+                    for i, left, right, stamp in pairs:
+                        send(self.request, FRAME, frame_payload(sequence, 2 * i, 0, stamp, left))
+                        send(self.request, FRAME,
+                             frame_payload(sequence, 2 * i + 1, 0, stamp, right))
+                        sent += 2
+                    send(self.request, END,
+                         json.dumps({"sequence": sequence, "frames": sent}).encode())
+                except (ConnectionError, OSError):
+                    return
                 sequence += 1
                 continue
             try:

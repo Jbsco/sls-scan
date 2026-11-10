@@ -200,6 +200,16 @@ def test_paced_stream_returns_through_the_poses_it_came_by(tmp_path):
     assert not np.array_equal(left[1], left[2]) and not np.array_equal(left[0], left[1])
 
 
+def test_paced_stream_goes_on_after_a_client_leaves(stand_in, tmp_path):
+    host, port = stand_in
+    sock, _ = node.connect(host, port)
+    request = {"set": "stereo", "frames": 6, "rate_hz": 40.0}
+    node.send(sock, node.SEQUENCE, json.dumps(request).encode())
+    sock.close()
+    result = node.capture(host, port, "stereo", str(tmp_path / "next"), frames=2, rate_hz=5.0)
+    assert result["missing"] == [] and result["frames"] == 4
+
+
 def test_stereo_sequence_takes_light_off_pairs(stand_in, tmp_path):
     host, port = stand_in
     out = tmp_path / "dark"
