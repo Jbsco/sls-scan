@@ -1077,4 +1077,61 @@ mod tests {
         }
         Ok(())
     }
+
+    /// Run a stereo set at 30 pairs per second from the stand-in at `SLS_WINDOW_NODE`
+    /// through the window with the depth parameters at `SLS_WINDOW_DEPTH_PARAMS`, and
+    /// check that every pair arrived and was measured or replaced by a newer one. Skipped
+    /// unless `SLS_WINDOW_DEPTH_PARAMS` is set, as the application gate sets it.
+    #[test]
+    fn window_follows_a_paced_stereo_stream() -> Result<(), String> {
+        const PAIRS: u32 = 24;
+        let Ok(params) = std::env::var("SLS_WINDOW_DEPTH_PARAMS") else {
+            return Ok(());
+        };
+        let node = std::env::var("SLS_WINDOW_NODE").map_err(|_| "SLS_WINDOW_NODE not set")?;
+        let mut harness = Harness::builder()
+            .with_size(egui::vec2(1600.0, 1200.0))
+            .build_eframe(|_| ScanApp::default());
+        {
+            let app = harness.state_mut();
+            app.node = node;
+            app.set = "stereo".to_owned();
+            app.params_path = params;
+            app.stereo_frames = PAIRS;
+            app.stereo_rate = 30;
+        }
+        harness.run_steps(2);
+        harness.get_by_label("Run sequence").click();
+        let start = Instant::now();
+        loop {
+            harness.run_steps(1);
+            let app = harness.state();
+            if !app.busy() && app.depth_frames + app.depth_skipped == PAIRS as usize {
+                break;
+            }
+            if app.status.starts_with("failed") || start.elapsed() > Duration::from_secs(180) {
+                return Err(format!(
+                    "no paced run: {}, {}, {} measured and {} replaced",
+                    app.status, app.depth_status, app.depth_frames, app.depth_skipped
+                ));
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        let app = harness.state();
+        let stats = app.stats.as_ref().ok_or("no capture statistics")?;
+        println!(
+            "window stream: {} of {PAIRS} pairs measured, {} replaced, {}",
+            app.depth_frames, app.depth_skipped, app.fusion_status
+        );
+        if !stats.missing.is_empty() || !stats.in_step {
+            return Err(format!(
+                "missing frames {:?}, pairs in step {}",
+                stats.missing, stats.in_step
+            ));
+        }
+        if app.depth_frames == 0 {
+            return Err(app.depth_status.clone());
+        }
+        Ok(())
+    }
 }
