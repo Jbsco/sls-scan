@@ -351,14 +351,7 @@ mod tests {
     use super::*;
 
     fn refiner() -> Option<Refiner> {
-        match Refiner::new(false) {
-            Ok(r) => Some(r),
-            Err(e) if std::env::var_os("SLS_REQUIRE_GPU").is_none() => {
-                eprintln!("no GPU adapter, test skipped: {e}");
-                None
-            }
-            Err(e) => panic!("no GPU adapter: {e}"),
-        }
+        crate::gpu::test_device().map(Refiner::with)
     }
 
     fn texture(width: u32, height: u32, shift: f32) -> Vec<u8> {

@@ -169,14 +169,7 @@ mod tests {
     use super::*;
 
     fn rectifier() -> Option<Rectifier> {
-        match Rectifier::new(false) {
-            Ok(r) => Some(r),
-            Err(e) if std::env::var_os("SLS_REQUIRE_GPU").is_none() => {
-                eprintln!("no GPU adapter, test skipped: {e}");
-                None
-            }
-            Err(e) => panic!("no GPU adapter: {e}"),
-        }
+        crate::gpu::test_device().map(Rectifier::with)
     }
 
     fn camera(f: f32, cx: f32, cy: f32, distortion: [f32; 5]) -> RectifyParams {

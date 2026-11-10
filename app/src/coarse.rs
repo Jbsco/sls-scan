@@ -306,14 +306,7 @@ mod tests {
     use super::*;
 
     fn matcher() -> Option<BlockMatcher> {
-        match BlockMatcher::new(false) {
-            Ok(m) => Some(m),
-            Err(e) if std::env::var_os("SLS_REQUIRE_GPU").is_none() => {
-                eprintln!("no GPU adapter, test skipped: {e}");
-                None
-            }
-            Err(e) => panic!("no GPU adapter: {e}"),
-        }
+        crate::gpu::test_device().map(BlockMatcher::with)
     }
 
     #[test]
