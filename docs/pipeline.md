@@ -281,7 +281,9 @@ Recorded pairs replay through the same path (D47):
     app/target/debug/sls-scan replay --frames data/recorded --params data/replay.json
 
 `slscan replay-reference` writes a NumPy reference beside each pair, and `sls-scan
-replay` compares each GPU depth frame with it.
+replay` compares each GPU depth frame with it. It then runs the pairs through the live
+pipeline and prints its rate. With `--rate 30` it offers them at 30 per second and skips
+those that find the pipeline full, as the window does (D99).
 
 On the CPU fallback a preview skips refinement (D49). It matches blocks at 1/8
 resolution, keeps lit blocks and triangulates each at its centre. Replay compares
@@ -296,9 +298,12 @@ and the three panels. Calibration YAML comes from the Python tools and goes back
 each scan. Selected frame pairs are written for the deferred path, and results as PLY,
 OBJ and STL with the report.
 
-A stereo run sends each frame pair through the depth frame on a worker thread, and the
-scene panel draws the latest frame's points (`DESIGN.md` D40). `slscan depth-params`
-writes the parameters it needs for a calibration, a sample every 12 px and a refinement
+A stereo run measures each frame pair on one thread and fuses it on another, so a pair
+is measured while the pair before it is fused (`DESIGN.md` D40, D99). Three lit pairs at
+most are in that pipeline, and pairs that arrive while it is full are skipped. The scene
+panel draws the latest frame's points.
+
+`slscan depth-params` writes the parameters it needs for a calibration, a sample every 12 px and a refinement
 exit at 10⁻⁴ px by default (D74), and `sls-scan depth` runs the same path without the
 window. The calibration panel captures board pairs, solves the stereo
 calibration through the Python tool and writes those parameters for the next run (D41).
