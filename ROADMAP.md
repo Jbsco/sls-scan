@@ -76,11 +76,11 @@ A phase is complete when its acceptance test passes on the bench and `verify.do`
   bars within the Phase 6 figure and datum residuals within the Phase 7 figure.
 - Phase 11, in progress. Phase-shift static scans with a calibrated projector (D23, D24),
   HDR capture, color texture, a third camera for occlusion, the Haskell reference core,
-  Futhark kernels. The application takes phase-shift scans at several exposures and in
-  color, matching NumPy (D82 to D89). A Haskell reference decodes bit for bit and
-  triangulates within a femtometre (D90, D91). A third camera above the light would see
-  all of a 40 mm deep slot floor across the baseline, against 30% for the pair (D92).
-  Futhark decodes bit for bit on four backends, as fast on the GPU as WGSL (D93).
+  Futhark kernels. The application scans at several exposures and in color, matching
+  NumPy (D82 to D89). Haskell decodes bit for bit and triangulates within a femtometre
+  (D90, D91). A third camera would see a whole 40 mm deep slot floor across the baseline,
+  against 30% for the pair, and stays off the rig for now (D92, D97). Futhark decodes bit
+  for bit on four backends, as fast on the GPU as WGSL (D93).
 
 ## Open questions
 
