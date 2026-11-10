@@ -2615,6 +2615,9 @@ struct FusionMeta {
     dot_counts: Vec<usize>,
     #[serde(default)]
     dark: Vec<bool>,
+    /// Capture time of each frame, when some frames of a sequence were left out.
+    #[serde(default)]
+    times: Vec<f64>,
 }
 
 fn doubles(bytes: &[u8]) -> Vec<f64> {
@@ -2664,6 +2667,7 @@ fn fusion_check(args: &[String]) -> ExitCode {
         || poses.len() != 12 * meta.counts.len()
         || dots.len() != 3 * meta.dot_counts.iter().sum::<usize>()
         || !(meta.dot_counts.is_empty() || meta.dot_counts.len() == meta.counts.len())
+        || !(meta.times.is_empty() || meta.times.len() == meta.counts.len())
     {
         eprintln!("fusion vectors do not match meta.json");
         return ExitCode::FAILURE;
@@ -2684,11 +2688,15 @@ fn fusion_check(args: &[String]) -> ExitCode {
             .collect();
         dot_offset += 3 * dot_count;
         let start = Instant::now();
-        if meta.dark.get(k).copied().unwrap_or(false) {
-            fusion.add_dark(&seen);
-        } else {
-            fusion.add_with_dots(&points, &seen);
-        }
+        match (
+            meta.dark.get(k).copied().unwrap_or(false),
+            meta.times.get(k),
+        ) {
+            (true, Some(&time)) => fusion.add_dark_at(time, &seen),
+            (true, None) => fusion.add_dark(&seen),
+            (false, Some(&time)) => fusion.add_at(time, &points, &seen),
+            (false, None) => fusion.add_with_dots(&points, &seen),
+        };
         times.push(start.elapsed().as_secs_f64() * 1000.0);
     }
     let (mut translation, mut rotation) = (0.0f64, 0.0f64);
