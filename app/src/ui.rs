@@ -604,7 +604,7 @@ impl ScanApp {
     /// Keep a left frame until its right arrives, then send the pair to the worker when it
     /// is idle, or count the pair as skipped. A light-off pair is always sent, since the
     /// lit pair after it needs it.
-    fn pair_frame(&mut self, name: &str, pixels: Vec<u8>) {
+    fn pair_frame(&mut self, name: &str, time: f64, pixels: Vec<u8>) {
         if name.ends_with("/left") {
             self.pending_left = Some(pixels);
             return;
@@ -614,10 +614,11 @@ impl ScanApp {
         };
         let pair = name.trim_end_matches("/right").to_owned();
         if name.starts_with("dark_") {
-            worker.pipeline.send(Job::Dark(pair, left, pixels));
+            worker.pipeline.send(Job::Dark(pair, time, left, pixels));
             return;
         }
-        if worker.in_flight < live::IN_FLIGHT && worker.pipeline.send(Job::Pair(pair, left, pixels))
+        if worker.in_flight < live::IN_FLIGHT
+            && worker.pipeline.send(Job::Pair(pair, time, left, pixels))
         {
             worker.in_flight += 1;
         } else {
@@ -696,7 +697,7 @@ impl ScanApp {
                     }
                     self.frames += 1;
                     if self.set == "stereo" {
-                        self.pair_frame(&name, pixels);
+                        self.pair_frame(&name, header.timestamp_ns as f64 * 1e-9, pixels);
                     } else if self.set == "scan" && self.scan_params.is_some() {
                         self.scan_frames.insert(name.clone(), pixels);
                     }

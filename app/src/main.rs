@@ -364,15 +364,20 @@ fn headless_depth(args: &[String]) -> ExitCode {
     let (mut sent, mut dark_pairs, mut in_flight) = (0usize, 0usize, 0usize);
     let captured = client::capture(&node, &request, wait, |event| match event {
         Event::Connected(hello) => println!("connected to {} at {node}", hello.node),
-        Event::Frame { name, pixels, .. } => {
+        Event::Frame {
+            header,
+            name,
+            pixels,
+        } => {
             if name.ends_with("/left") {
                 left = Some(pixels);
             } else if let Some(l) = left.take() {
                 let pair = name.trim_end_matches("/right").to_owned();
+                let time = header.timestamp_ns as f64 * 1e-9;
                 if pair.starts_with("dark_") {
                     dark_pairs += 1;
-                    pipeline.send(live::Job::Dark(pair, l, pixels));
-                } else if pipeline.send(live::Job::Pair(pair, l, pixels)) {
+                    pipeline.send(live::Job::Dark(pair, time, l, pixels));
+                } else if pipeline.send(live::Job::Pair(pair, time, l, pixels)) {
                     sent += 1;
                     in_flight += 1;
                     while in_flight >= live::IN_FLIGHT {
@@ -1757,6 +1762,9 @@ fn replay_frame(
     matched
 }
 
+/// Capture rate given to recorded pairs, which have no timestamps, when none is asked for.
+const REPLAY_RATE_HZ: f64 = 30.0;
+
 /// Run recorded pairs through the live pipeline and print its rate. Pairs go in back to
 /// back, or at `rate` per second with those that find the pipeline full skipped, as the
 /// window skips them.
@@ -1800,7 +1808,8 @@ fn replay_live(
                 }
             }
         }
-        if pipeline.send(live::Job::Pair(name, left, right)) {
+        let time = i as f64 / rate.unwrap_or(REPLAY_RATE_HZ);
+        if pipeline.send(live::Job::Pair(name, time, left, right)) {
             sent += 1;
         }
     }
