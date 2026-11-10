@@ -660,8 +660,8 @@ pub struct Fusion {
     pub last_rms: Option<f64>,
     dot_map: Vec<Vec3>,
     dot_counts: Vec<f64>,
-    /// Frame index and pose of each pair taken with the pattern light off.
-    fixes: Vec<(usize, Pose)>,
+    /// Frame time and pose of each pair taken with the pattern light off.
+    fixes: Vec<(f64, Pose)>,
 }
 
 impl Fusion {
@@ -683,12 +683,15 @@ impl Fusion {
     }
 
     /// Once two light-off pairs have been posed, continue the motion between the last two
-    /// at constant velocity to the next frame's starting pose.
-    fn predict(&mut self) {
-        let [.., (k0, before), (k1, last)] = self.fixes[..] else {
+    /// at constant velocity to the starting pose of a frame at `time`.
+    fn predict(&mut self, time: f64) {
+        let [.., (t0, before), (t1, last)] = self.fixes[..] else {
             return;
         };
-        let ahead = (self.poses.len() - k1) as f64 / (k1 - k0) as f64;
+        if t1 <= t0 {
+            return;
+        }
+        let ahead = (time - t1) / (t1 - t0);
         let w = rotation_vector(&mul(&last.rotation, &transpose(&before.rotation)));
         let rotation = mul(&rodrigues(&w.map(|v| v * ahead)), &last.rotation);
         let translation = [0, 1, 2]
@@ -720,7 +723,15 @@ impl Fusion {
     /// rigid fit of its dots to their map dots when three or more pair, and add its dots
     /// to the map. Returns its pose.
     pub fn add_dark(&mut self, dots: &[Vec3]) -> Pose {
-        self.predict();
+        self.add_dark_at(self.poses.len() as f64, dots)
+    }
+
+    /// Pose a light-off pair as `add_dark` does, captured at `time`. Times are in one unit
+    /// for every frame of a fusion: capture times here and in `add_at`, or the frame
+    /// counts that `add`, `add_with_dots` and `add_dark` give, which are right only when
+    /// no frame between is left out.
+    pub fn add_dark_at(&mut self, time: f64, dots: &[Vec3]) -> Pose {
+        self.predict(time);
         let matched = self.match_dots(dots, &self.pose);
         if matched.len() >= MIN_DOT_PAIRS {
             let source: Vec<Vec3> = matched.iter().map(|&(i, _)| dots[i]).collect();
@@ -728,7 +739,7 @@ impl Fusion {
             self.pose = crate::register::rigid_fit(&source, &target);
         }
         self.place_dots(dots);
-        self.fixes.push((self.poses.len(), self.pose));
+        self.fixes.push((time, self.pose));
         self.poses.push(self.pose);
         self.pose
     }
@@ -807,7 +818,12 @@ impl Fusion {
     /// pair. Paired dots then refine their map dot by averaging, and unpaired dots join the
     /// map, following `track.fuse`.
     pub fn add_with_dots(&mut self, points: &[Vec3], dots: &[Vec3]) -> Pose {
-        self.predict();
+        self.add_at(self.poses.len() as f64, points, dots)
+    }
+
+    /// Align and add a frame as `add_with_dots` does, captured at `time`.
+    pub fn add_at(&mut self, time: f64, points: &[Vec3], dots: &[Vec3]) -> Pose {
+        self.predict(time);
         if points.is_empty() {
             self.poses.push(self.pose);
             return self.pose;
@@ -1115,6 +1131,55 @@ mod tests {
             let x = pose.translation[0];
             assert!((x - 0.005 * i as f64).abs() < 1e-6, "frame {i} at {x}");
         }
+    }
+
+    #[test]
+    fn capture_times_hold_a_slide_when_lit_frames_are_left_out() {
+        let plate: Vec<Vec3> = (0..6000)
+            .map(|k| {
+                [
+                    f64::from(k % 100) * 0.006 - 0.3,
+                    f64::from(k / 100) * 0.006 - 0.18,
+                    1.0,
+                ]
+            })
+            .collect();
+        let dots: Vec<Vec3> = (0..35)
+            .map(|k| {
+                [
+                    f64::from(k % 7) * 0.1 - 0.3,
+                    f64::from(k / 7) * 0.08 - 0.16,
+                    1.0,
+                ]
+            })
+            .collect();
+        let view = |points: &[Vec3], shift: f64| -> Vec<Vec3> {
+            points
+                .iter()
+                .map(|p| [p[0] - shift, p[1], p[2]])
+                .filter(|p| p[0].abs() < 0.2)
+                .collect()
+        };
+        let kept: Vec<u32> = (0..16).filter(|i| i % 4 != 1).collect();
+        let worst = |timed: bool| {
+            let mut fusion = Fusion::new(0.004);
+            for &i in &kept {
+                let (shift, time) = (0.005 * f64::from(i), f64::from(i) / 30.0);
+                match (i % 4 == 0, timed) {
+                    (true, true) => fusion.add_dark_at(time, &view(&dots, shift)),
+                    (true, false) => fusion.add_dark(&view(&dots, shift)),
+                    (false, true) => fusion.add_at(time, &view(&plate, shift), &[]),
+                    (false, false) => fusion.add(&view(&plate, shift)),
+                };
+            }
+            kept.iter()
+                .zip(&fusion.poses)
+                .skip(6)
+                .map(|(&i, pose)| (pose.translation[0] - 0.005 * f64::from(i)).abs())
+                .fold(0.0, f64::max)
+        };
+        assert!(worst(true) < 1e-6, "by capture time: {}", worst(true));
+        assert!(worst(false) > 1e-3, "by frame count: {}", worst(false));
     }
 
     #[test]

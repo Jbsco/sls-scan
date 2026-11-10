@@ -364,15 +364,20 @@ fn headless_depth(args: &[String]) -> ExitCode {
     let (mut sent, mut dark_pairs, mut in_flight) = (0usize, 0usize, 0usize);
     let captured = client::capture(&node, &request, wait, |event| match event {
         Event::Connected(hello) => println!("connected to {} at {node}", hello.node),
-        Event::Frame { name, pixels, .. } => {
+        Event::Frame {
+            header,
+            name,
+            pixels,
+        } => {
             if name.ends_with("/left") {
                 left = Some(pixels);
             } else if let Some(l) = left.take() {
                 let pair = name.trim_end_matches("/right").to_owned();
+                let time = header.timestamp_ns as f64 * 1e-9;
                 if pair.starts_with("dark_") {
                     dark_pairs += 1;
-                    pipeline.send(live::Job::Dark(pair, l, pixels));
-                } else if pipeline.send(live::Job::Pair(pair, l, pixels)) {
+                    pipeline.send(live::Job::Dark(pair, time, l, pixels));
+                } else if pipeline.send(live::Job::Pair(pair, time, l, pixels)) {
                     sent += 1;
                     in_flight += 1;
                     while in_flight >= live::IN_FLIGHT {
@@ -1757,6 +1762,9 @@ fn replay_frame(
     matched
 }
 
+/// Capture rate given to recorded pairs, which have no timestamps, when none is asked for.
+const REPLAY_RATE_HZ: f64 = 30.0;
+
 /// Run recorded pairs through the live pipeline and print its rate. Pairs go in back to
 /// back, or at `rate` per second with those that find the pipeline full skipped, as the
 /// window skips them.
@@ -1800,7 +1808,8 @@ fn replay_live(
                 }
             }
         }
-        if pipeline.send(live::Job::Pair(name, left, right)) {
+        let time = i as f64 / rate.unwrap_or(REPLAY_RATE_HZ);
+        if pipeline.send(live::Job::Pair(name, time, left, right)) {
             sent += 1;
         }
     }
@@ -2615,6 +2624,9 @@ struct FusionMeta {
     dot_counts: Vec<usize>,
     #[serde(default)]
     dark: Vec<bool>,
+    /// Capture time of each frame, when some frames of a sequence were left out.
+    #[serde(default)]
+    times: Vec<f64>,
 }
 
 fn doubles(bytes: &[u8]) -> Vec<f64> {
@@ -2664,6 +2676,7 @@ fn fusion_check(args: &[String]) -> ExitCode {
         || poses.len() != 12 * meta.counts.len()
         || dots.len() != 3 * meta.dot_counts.iter().sum::<usize>()
         || !(meta.dot_counts.is_empty() || meta.dot_counts.len() == meta.counts.len())
+        || !(meta.times.is_empty() || meta.times.len() == meta.counts.len())
     {
         eprintln!("fusion vectors do not match meta.json");
         return ExitCode::FAILURE;
@@ -2684,11 +2697,15 @@ fn fusion_check(args: &[String]) -> ExitCode {
             .collect();
         dot_offset += 3 * dot_count;
         let start = Instant::now();
-        if meta.dark.get(k).copied().unwrap_or(false) {
-            fusion.add_dark(&seen);
-        } else {
-            fusion.add_with_dots(&points, &seen);
-        }
+        match (
+            meta.dark.get(k).copied().unwrap_or(false),
+            meta.times.get(k),
+        ) {
+            (true, Some(&time)) => fusion.add_dark_at(time, &seen),
+            (true, None) => fusion.add_dark(&seen),
+            (false, Some(&time)) => fusion.add_at(time, &points, &seen),
+            (false, None) => fusion.add_with_dots(&points, &seen),
+        };
         times.push(start.elapsed().as_secs_f64() * 1000.0);
     }
     let (mut translation, mut rotation) = (0.0f64, 0.0f64);

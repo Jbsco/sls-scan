@@ -17,11 +17,12 @@ pub const FUSION_VOXEL_M: f64 = 0.0005;
 pub const IN_FLIGHT: usize = 3;
 
 pub enum Job {
-    /// A lit stereo pair, by name: left and right raw images.
-    Pair(String, Vec<u8>, Vec<u8>),
+    /// A lit stereo pair: its name, its capture time in seconds, and its left and right
+    /// raw images.
+    Pair(String, f64, Vec<u8>, Vec<u8>),
     /// A pair taken with the pattern light off, kept until the next lit pair's points
     /// place its dots.
-    Dark(String, Vec<u8>, Vec<u8>),
+    Dark(String, f64, Vec<u8>, Vec<u8>),
     /// Start again with no model and no volume.
     Reset,
     /// Mesh the live volume, closing holes up to a size in metres and decimating to a
@@ -57,10 +58,12 @@ pub struct LiveFrame {
 
 struct Measured {
     name: String,
+    time: f64,
     depth: Result<DepthResult, String>,
     /// Points to fuse, when the pair was measured in full.
     points: Option<Vec<Vec3>>,
-    dark: Option<(String, Result<Vec<Vec3>, String>)>,
+    /// Name, capture time and dots of a light-off pair before this one.
+    dark: Option<(String, f64, Result<Vec<Vec3>, String>)>,
 }
 
 enum Fuse {
@@ -108,13 +111,13 @@ impl Pipeline {
         let measuring = thread::spawn(move || {
             let params = measure_params;
             let cameras = (&cameras.left, &cameras.right);
-            let mut pending: Option<(String, Vec<u8>, Vec<u8>)> = None;
+            let mut pending: Option<(String, f64, Vec<u8>, Vec<u8>)> = None;
             let mut unused = 0;
             for job in jobs_rx {
                 let message = match job {
-                    Job::Dark(name, left, right) => {
+                    Job::Dark(name, time, left, right) => {
                         unused += usize::from(pending.is_some());
-                        pending = Some((name, left, right));
+                        pending = Some((name, time, left, right));
                         continue;
                     }
                     Job::Reset => {
@@ -122,7 +125,7 @@ impl Pipeline {
                         Fuse::Reset
                     }
                     Job::Mesh(fill_m, faces, reply) => Fuse::Mesh(fill_m, faces, reply),
-                    Job::Pair(name, left, right) => {
+                    Job::Pair(name, time, left, right) => {
                         let depth =
                             frame.measure(&params, preview.as_ref(), cameras, &left, &right);
                         let points = match (&depth, &preview) {
@@ -135,12 +138,13 @@ impl Pipeline {
                             _ => None,
                         };
                         let dark = points.as_ref().and_then(|points| {
-                            pending.take().map(|(dark, l, r)| {
-                                (dark, frame.dots(&params, cameras, &l, &r, points))
+                            pending.take().map(|(dark, at, l, r)| {
+                                (dark, at, frame.dots(&params, cameras, &l, &r, points))
                             })
                         });
                         Fuse::Frame(Measured {
                             name,
+                            time,
                             depth,
                             points,
                             dark,
@@ -183,9 +187,9 @@ impl Pipeline {
                 };
                 if let (Ok(d), Some(points)) = (&live.depth, &measured.points) {
                     live.dropped = d.points.len() - points.len();
-                    live.dark = measured.dark.map(|(name, found)| {
+                    live.dark = measured.dark.map(|(name, at, found)| {
                         let before = fusion.dots().len();
-                        let found = found.map(|dots| (dots.len(), fusion.add_dark(&dots)));
+                        let found = found.map(|dots| (dots.len(), fusion.add_dark_at(at, &dots)));
                         Dark {
                             name,
                             found,
@@ -193,7 +197,7 @@ impl Pipeline {
                         }
                     });
                     let start = Instant::now();
-                    fusion.add(points);
+                    fusion.add_at(measured.time, points, &[]);
                     live.fuse_ms = start.elapsed().as_secs_f64() * 1000.0;
                     let start = Instant::now();
                     let grid = tsdf::depth_grid(points, &camera, params.step, params.window, size);
