@@ -333,8 +333,13 @@ def cmd_node_sim(args: argparse.Namespace) -> int:
     import signal
 
     signal.signal(signal.SIGTERM, _interrupt)
-    server = node.StandIn((args.host, args.port), scene=args.scene, seed=args.seed)
-    print(f"stand-in node on {args.host}:{server.server_address[1]}, scene {args.scene}")
+    server = node.StandIn((args.host, args.port), scene=args.scene, seed=args.seed,
+                          paced_poses=args.paced_poses or node.PACED_POSES)
+    if args.paced_poses:
+        print(f"rendering {server.paced_poses} poses of the paced sweep", flush=True)
+        server.render_paced()
+    print(f"stand-in node on {args.host}:{server.server_address[1]}, scene {args.scene}",
+          flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -1615,6 +1620,10 @@ def main(argv=None) -> int:
                                               **synthetic.strip_scenes(),
                                               **synthetic.color_scenes()}), default="plate")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--paced-poses", type=int, default=0,
+                   help="head poses a paced stereo stream plays forth and back, rendered "
+                        f"before the node serves ({node.PACED_POSES} when absent, rendered "
+                        "on first use)")
     p.set_defaults(func=cmd_node_sim)
 
     p = sub.add_parser("occlusion-bench", help="share of a slot the near head measures, with "

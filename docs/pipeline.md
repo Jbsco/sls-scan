@@ -312,6 +312,11 @@ Over the fused model, that panel draws the newest frame at its tracked pose. It 
 when its pair was measured as it arrived and amber when it waited for the measuring
 stage, so amber means the camera outruns the pipeline (D103).
 
+A stereo run asks its node for pairs as fast as it can, or at the trigger rate set
+beside its frame count. Against a stand-in started with `slscan node-sim --paced-poses
+61`, a rate of 30 pairs per second drives the window as a camera on a moving head would
+(D104).
+
 `slscan depth-params` writes the parameters it needs for a calibration, a sample every 12 px and a refinement
 exit at 10⁻⁴ px by default (D74), and `sls-scan depth` runs the same path without the
 window. The calibration panel captures board pairs, solves the stereo

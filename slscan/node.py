@@ -7,10 +7,12 @@ is developed against the same interface as the capture node.
 """
 
 import json
+import math
 import os
 import socket
 import socketserver
 import struct
+import threading
 import time
 
 import numpy as np
@@ -24,7 +26,8 @@ HELLO, SEQUENCE, FRAME, END, ERROR = 1, 2, 3, 4, 5
 MONO8 = 0
 FRAME_PERIOD_NS = 16_666_667
 STEREO_PERIOD_NS = 33_333_333
-PACED_CYCLE = 8
+PACED_POSES = 8
+PACED_ARC_POSES = 61
 
 
 def send(sock: socket.socket, kind: int, payload: bytes) -> None:
@@ -70,6 +73,30 @@ def is_dark(pair: int, dark_every: int) -> bool:
     """Return whether a stereo pair is taken with the pattern light off: every
     dark_every-th pair from the first, none when dark_every is 0."""
     return dark_every > 0 and pair % dark_every == 0
+
+
+def paced_index(pair: int, poses: int) -> int:
+    """Return which of a paced stream's head poses a pair shows. The poses play forth and
+    back, so the one before the last follows the last."""
+    if poses < 2:
+        return 0
+    k = pair % (2 * (poses - 1))
+    return k if k < poses else 2 * (poses - 1) - k
+
+
+def paced_motion(poses: int, panel: bool = False) -> tuple[dict, list]:
+    """The scene and the head poses a paced stereo stream plays forth and back: an arc
+    around a part on a mat, or with panel a slide along a dotted panel. PACED_ARC_POSES
+    poses or more span 25° of yaw to either side, or 150 mm of slide, and fewer span less
+    at the same spacing. Poses lie closer together toward both ends, so the head slows
+    before it turns."""
+    eased = [(1.0 - math.cos(math.pi * k / max(poses - 1, 1))) / 2.0 for k in range(poses)]
+    reach = min(1.0, (poses - 1) / (PACED_ARC_POSES - 1))
+    if panel:
+        return synthetic.panel_scene(), [(np.eye(3), np.array([-0.15 * reach * s, 0.0, 0.0]))
+                                         for s in eased]
+    return synthetic.sweep_scene(), [synthetic.sweep_pose(s, 25.0 * reach, 8.0 * reach)
+                                     for s in eased]
 
 
 def pattern_names(pattern_set: str, width: int, height: int, steps: int,
@@ -173,7 +200,8 @@ class StandIn(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
 
-    def __init__(self, address, scene: str = "plate", seed: int = 0):
+    def __init__(self, address, scene: str = "plate", seed: int = 0,
+                 paced_poses: int = PACED_POSES):
         self.rig = synthetic.reference_rig()
         self.spec = calibrate.BoardSpec(9, 6, 0.04, 0.03)
         self.scene = {**synthetic.acceptance_scenes(), **synthetic.strip_scenes(),
@@ -188,7 +216,9 @@ class StandIn(socketserver.ThreadingTCPServer):
         self.dots = synthetic.random_dots(self.stereo.light.width, self.stereo.light.height, 3.0,
                                           1.0, np.random.default_rng(seed))
         self.seed = seed
-        self.cycle = None
+        self.paced_poses = max(1, paced_poses)
+        self.paced = {}
+        self.paced_lock = threading.Lock()
         super().__init__(address, _Handler)
 
     def hello(self) -> dict:
@@ -235,33 +265,42 @@ class StandIn(socketserver.ThreadingTCPServer):
                                       pitch_deg=min(8.0, 0.3 * count))
         return synthetic.sweep_scene(), poses
 
+    def paced_pair(self, panel: bool, index: int, dark: bool) -> tuple:
+        """Return the left and right images of one paced head pose, rendered on first use."""
+        key = (panel, index, dark)
+        with self.paced_lock:
+            if key not in self.paced:
+                scene, poses = paced_motion(self.paced_poses, panel)
+                rng = np.random.default_rng([self.seed, int(panel), index, int(dark)])
+                pair = synthetic.sweep_capture(self.stereo, scene, poses[index], self.dots, rng,
+                                               dark)
+                self.paced[key] = (pair["left"], pair["right"])
+            return self.paced[key]
+
+    def render_paced(self) -> None:
+        """Render every lit pose of the paced sweep, so a paced stream starts at once."""
+        for index in range(self.paced_poses):
+            self.paced_pair(False, index, False)
+
     def paced_pairs(self, count: int, rate_hz: float, dark_every: int = 0):
         """Yield (pair index, left, right, timestamp in nanoseconds) for count pairs on a
-        trigger clock at rate_hz, playing a short pre-rendered sweep in a loop. A pair whose
-        trigger time passed more than one period before the node reaches it is dropped, as
-        a node with a full queue drops it."""
-        if self.cycle is None or self.cycle[0] != (dark_every > 0):
-            if dark_every > 0:
-                scene, poses = self.stereo_sequence(PACED_CYCLE, dark_every)
-            else:
-                scene = synthetic.sweep_scene()
-                poses = synthetic.sweep_poses(PACED_CYCLE, yaw_deg=float(PACED_CYCLE),
-                                              pitch_deg=0.3 * PACED_CYCLE)
-            lit = [(pair["left"], pair["right"]) for pair in synthetic.sweep_captures(
-                self.stereo, scene, poses, self.dots, self.seed)]
-            dark = [(pair["left"], pair["right"]) for pair in synthetic.sweep_captures(
-                self.stereo, scene, poses, self.dots, self.seed, 1)] if dark_every > 0 else []
-            self.cycle = (dark_every > 0, lit, dark)
+        trigger clock at rate_hz, playing its head poses forth and back. Poses are rendered
+        before the clock starts. A pair whose trigger time passed more than one period
+        before the node reaches it is dropped, as a node with a full queue drops it."""
+        panel = dark_every > 0
+        shown = [(paced_index(i, self.paced_poses), is_dark(i, dark_every))
+                 for i in range(count)]
+        rendered = {key: self.paced_pair(panel, *key) for key in dict.fromkeys(shown)}
         period = 1.0 / rate_hz
         start = time.monotonic() + period
-        for i in range(count):
+        for i, (index, dark) in enumerate(shown):
             due = start + i * period
             now = time.monotonic()
             if now < due:
                 time.sleep(due - now)
             elif now - due > period:
                 continue
-            left, right = self.cycle[2 if is_dark(i, dark_every) else 1][i % PACED_CYCLE]
+            left, right = rendered[index, dark]
             yield i, left, right, int(round(i * period * 1e9))
 
     def _pattern_frames(self, request: dict) -> tuple[list, list]:
@@ -304,13 +343,18 @@ class _Handler(socketserver.BaseRequestHandler):
             rate = float(request.get("rate_hz", 0.0))
             if request.get("set") == "stereo" and rate > 0.0:
                 sent = 0
-                for i, left, right, stamp in server.paced_pairs(int(request.get("frames", 1)),
-                                                                rate,
-                                                                int(request.get("dark_every", 0))):
-                    send(self.request, FRAME, frame_payload(sequence, 2 * i, 0, stamp, left))
-                    send(self.request, FRAME, frame_payload(sequence, 2 * i + 1, 0, stamp, right))
-                    sent += 2
-                send(self.request, END, json.dumps({"sequence": sequence, "frames": sent}).encode())
+                pairs = server.paced_pairs(int(request.get("frames", 1)), rate,
+                                           int(request.get("dark_every", 0)))
+                try:
+                    for i, left, right, stamp in pairs:
+                        send(self.request, FRAME, frame_payload(sequence, 2 * i, 0, stamp, left))
+                        send(self.request, FRAME,
+                             frame_payload(sequence, 2 * i + 1, 0, stamp, right))
+                        sent += 2
+                    send(self.request, END,
+                         json.dumps({"sequence": sequence, "frames": sent}).encode())
+                except (ConnectionError, OSError):
+                    return
                 sequence += 1
                 continue
             try:

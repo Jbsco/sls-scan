@@ -54,6 +54,9 @@ python3 -m slscan.cli measure "$SESSION/plate.ply" --shape plane
 (cd app && SLS_WINDOW_NODE="127.0.0.1:$PORT" SLS_WINDOW_SCAN_PARAMS="$SESSION/scan.json" \
     SLS_WINDOW_OUT="$SESSION/window.ply" SLS_WINDOW_REFERENCE="$SESSION/plate.ply" \
     cargo test --locked --quiet --lib window_scan)
+(cd app && SLS_WINDOW_NODE="127.0.0.1:$PORT" \
+    SLS_WINDOW_DEPTH_PARAMS="$SESSION/stereo/depth.json" \
+    cargo test --locked --quiet --lib window_follows)
 python3 -m slscan.cli scan-params --calibration "$SESSION/calibration.yaml" --pitch 16 \
     --exposures 0.25,1,4,16 --color --out "$SESSION/strips.json" >/dev/null
 $RUN scan --node "127.0.0.1:$STRIPS_PORT" --params "$SESSION/strips.json" --wait 30 \

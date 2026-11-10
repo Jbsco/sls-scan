@@ -160,6 +160,56 @@ def test_paced_stereo_stream_keeps_pairs_in_step(stand_in, tmp_path):
     assert np.allclose(np.diff(stamps[::2]), 200_000_000, atol=1)
 
 
+def test_paced_poses_play_forth_and_back():
+    assert [node.paced_index(i, 4) for i in range(9)] == [0, 1, 2, 3, 2, 1, 0, 1, 2]
+    assert [node.paced_index(i, 1) for i in range(3)] == [0, 0, 0]
+
+
+def test_paced_motion_slows_to_turn_and_never_jumps():
+    _, poses = node.paced_motion(61)
+    for end, s in ((poses[0], 0.0), (poses[-1], 1.0)):
+        r, t = synthetic.sweep_pose(s)
+        assert np.allclose(end[0], r) and np.allclose(end[1], t)
+    centres = np.array([-r.T @ t for r, t in poses])
+    played = centres[[node.paced_index(i, 61) for i in range(250)]]
+    steps = np.linalg.norm(np.diff(played, axis=0), axis=1)
+    assert steps.max() < 0.02
+    assert steps[0] < 0.001 and steps[59] < 0.001 and steps[60] < 0.001
+    _, short = node.paced_motion(7)
+    r, t = synthetic.sweep_pose(1.0, 2.5, 0.8)
+    assert np.allclose(short[-1][0], r) and np.allclose(short[-1][1], t)
+    _, slide = node.paced_motion(61, panel=True)
+    assert np.allclose(slide[-1][1], [-0.15, 0.0, 0.0])
+    assert abs(slide[1][1][0]) < abs(slide[31][1][0] - slide[30][1][0])
+
+
+def test_paced_stream_returns_through_the_poses_it_came_by(tmp_path):
+    server = node.StandIn(("127.0.0.1", 0), paced_poses=3)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        host, port = server.server_address
+        out = tmp_path / "paced"
+        result = node.capture(host, port, "stereo", str(out), frames=5, rate_hz=5.0)
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert result["missing"] == [] and result["frames"] == 10
+    left = [cv2.imread(str(out / f"frame_{k:03d}" / "left.png"), cv2.IMREAD_GRAYSCALE)
+            for k in range(5)]
+    assert np.array_equal(left[0], left[4]) and np.array_equal(left[1], left[3])
+    assert not np.array_equal(left[1], left[2]) and not np.array_equal(left[0], left[1])
+
+
+def test_paced_stream_goes_on_after_a_client_leaves(stand_in, tmp_path):
+    host, port = stand_in
+    sock, _ = node.connect(host, port)
+    request = {"set": "stereo", "frames": 6, "rate_hz": 40.0}
+    node.send(sock, node.SEQUENCE, json.dumps(request).encode())
+    sock.close()
+    result = node.capture(host, port, "stereo", str(tmp_path / "next"), frames=2, rate_hz=5.0)
+    assert result["missing"] == [] and result["frames"] == 4
+
+
 def test_stereo_sequence_takes_light_off_pairs(stand_in, tmp_path):
     host, port = stand_in
     out = tmp_path / "dark"
