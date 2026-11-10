@@ -308,6 +308,10 @@ is measured while the pair before it is fused (`DESIGN.md` D40, D99). One pair w
 the measuring stage, and a newer pair replaces it, so that stage starts on the newest
 pair offered (D102). The scene panel draws the latest frame's points.
 
+Over the fused model, that panel draws the newest frame at its tracked pose. It is green
+when its pair was measured as it arrived and amber when it waited for the measuring
+stage, so amber means the camera outruns the pipeline (D103).
+
 `slscan depth-params` writes the parameters it needs for a calibration, a sample every 12 px and a refinement
 exit at 10⁻⁴ px by default (D74), and `sls-scan depth` runs the same path without the
 window. The calibration panel captures board pairs, solves the stereo
