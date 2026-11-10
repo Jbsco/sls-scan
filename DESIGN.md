@@ -2000,3 +2000,35 @@ A debug build of our application can still meet this fault on that loader, when 
 thread opens a device while another uses one, as a scan started during live depth frames
 does. Release builds leave object naming off.
 
+## D99. Live frames in two stages (2026-11-09)
+
+The window measured a stereo pair and fused it on one thread, and took no new pair until
+both were done (D40, D54). `app/src/live.rs` now runs two threads. One measures a pair on
+the GPU while the other fuses the pair before it and folds it into the TSDF volume.
+`sls-scan depth` and the window both run it, so our application gate covers what the
+window does. A caller keeps three lit pairs in it at most, one per stage and one
+waiting, and the window skips pairs that arrive while it is full.
+
+`sls-scan replay` now ends by running its recorded pairs through this pipeline and
+printing its rate. Pairs go in back to back, or at `--rate` per second with skips as in
+the window.
+
+Rates below are for 60 recorded stand-in sweep pairs at live settings, on a Radeon RX
+7900 GRE and a Ryzen 7 7700X at a load average of 5 to 7.
+
+| Arrangement | Depth stages | Fusion | Pairs per second |
+|---|---|---|---|
+| One thread, as before, in a temporary build | 63 ms | 58 to 59 ms | 8.2 to 8.3 |
+| Two stages, back to back | 46 ms | 55 ms | 16.6 |
+| Two stages, pairs offered at 30 per second | 48 ms | 52 to 54 ms | 15.5 to 16.1 |
+| Two stages at 30 per second, two pairs at most | 50 to 51 ms | 54 to 55 ms | 14.1 to 14.5 |
+
+Each pair's result is unchanged. `sls-scan depth` gave equal point counts, model sizes
+and ICP residuals before and after.
+
+Fusion no longer waits in line with measuring, and the GPU no longer idles through it.
+On twelve pairs, refinement took 35 to 37 ms back to back, 37 ms after 10 ms of idle and
+56 ms after 20 ms. D96's 24 per second counted depth stages alone.
+
+Fusion now sets this rate. It averaged 55 ms over that sweep and took 68 to 74 ms on its
+last pair, since each pair is tracked against a growing model.

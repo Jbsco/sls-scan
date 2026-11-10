@@ -2,11 +2,11 @@
 
 use crate::calibration::{self, Board, Detection, Solve, StereoSolve, Tool};
 use crate::client::{self, Event, Stats};
-use crate::depth::{DepthFrame, DepthResult, DepthSetup};
-use crate::fuse::{self, Fusion, Vec3};
+use crate::depth::{DepthFrame, DepthSetup};
+use crate::live::{self, Job, Pipeline};
 use crate::protocol::{FrameHeader, Hello, Projector, SequenceRequest};
 use crate::scan::{self, ScanParams};
-use crate::{depth, gpu, mesh, tsdf};
+use crate::{depth, gpu, mesh};
 use eframe::egui;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -34,39 +34,16 @@ fn limit_label(value: f64, limit: f64, what: &str) -> egui::RichText {
     egui::RichText::new(format!("{what} {value:.3} px (limit {limit})")).color(colour)
 }
 
-/// Voxel size of the fused model, as `track.fuse` uses by default.
-const FUSION_VOXEL_M: f64 = 0.0005;
 /// With reference dots on, every this many-th stereo pair is taken with the pattern
 /// light off (`DESIGN.md` D77).
 const DARK_EVERY: u32 = 4;
 /// Points drawn in the scene at most, every so many of a larger cloud.
 const MAX_DRAWN: usize = 20_000;
 
-enum DepthJob {
-    Pair(Vec<u8>, Vec<u8>),
-    /// A pair taken with the pattern light off, kept until the next lit pair's points
-    /// place its dots.
-    Dark(Vec<u8>, Vec<u8>),
-    Reset,
-    /// Mesh the live volume, closing holes up to a size in metres and decimating to a
-    /// triangle count when it is not 0, and reply with the mesh.
-    Mesh(f64, usize, mpsc::Sender<Result<mesh::Mesh, String>>),
-}
-
-struct LiveFrame {
-    depth: Result<DepthResult, String>,
-    /// The TSDF surface, or the fused points when the TSDF failed.
-    model: Result<Vec<Vec3>, (String, Vec<Vec3>)>,
-    fuse_ms: f64,
-    rms: Option<f64>,
-    /// Dots found in the light-off pair before this frame, and dots in the map.
-    dots: Option<(Result<usize, String>, usize)>,
-}
-
 struct DepthWorker {
     params_path: String,
-    jobs: mpsc::Sender<DepthJob>,
-    results: Receiver<LiveFrame>,
+    pipeline: Pipeline,
+    /// Lit pairs sent whose results have not come back.
     in_flight: usize,
 }
 
@@ -173,92 +150,17 @@ impl ScanApp {
         let setup = DepthSetup::load(Path::new(&self.params_path))?;
         let frame = DepthFrame::new(false)?;
         let adapter = frame.adapter.clone();
-        let params = setup.params();
         let preview = setup.preview_params().filter(|_| frame.software());
         let kind = if preview.is_some() {
             "previews"
         } else {
             "depth frames"
         };
-        let (jobs_tx, jobs_rx) = mpsc::channel::<DepthJob>();
-        let (results_tx, results_rx) = mpsc::channel();
         let repaint = ctx.clone();
-        thread::spawn(move || {
-            let mut fusion = Fusion::new(FUSION_VOXEL_M);
-            let mut volume = tsdf::Live::coarse();
-            let camera = tsdf::LeftCamera {
-                rotation: setup.cameras.left.rotation,
-                projection: setup.cameras.left.projection,
-            };
-            let size = (params.coarse.width, params.coarse.height);
-            let mut pending_dark: Option<(Vec<u8>, Vec<u8>)> = None;
-            for job in jobs_rx {
-                let (left, right) = match job {
-                    DepthJob::Pair(left, right) => (left, right),
-                    DepthJob::Dark(left, right) => {
-                        pending_dark = Some((left, right));
-                        continue;
-                    }
-                    DepthJob::Reset => {
-                        fusion = Fusion::new(FUSION_VOXEL_M);
-                        volume.reset();
-                        pending_dark = None;
-                        continue;
-                    }
-                    DepthJob::Mesh(fill_m, faces, reply) => {
-                        let _ = reply.send(volume.mesh(fill_m, faces));
-                        continue;
-                    }
-                };
-                let cameras = (&setup.cameras.left, &setup.cameras.right);
-                let depth = frame.measure(&params, preview.as_ref(), cameras, &left, &right);
-                let start = std::time::Instant::now();
-                let mut surface = Ok(Vec::new());
-                let mut dots = None;
-                if let (Ok(d), None) = (&depth, &preview) {
-                    let points = fuse::drop_isolated(
-                        &d.points,
-                        f64::from(params.step),
-                        camera.projection[0],
-                        fuse::ISOLATED_SPACINGS,
-                    );
-                    if let Some((l, r)) = pending_dark.take() {
-                        let found = frame.dots(&params, cameras, &l, &r, &points);
-                        if let Ok(seen) = &found {
-                            fusion.add_dark(seen);
-                        }
-                        dots = Some((found.map(|seen| seen.len()), fusion.dots().len()));
-                    }
-                    fusion.add(&points);
-                    if let Some(pose) = fusion.poses.last() {
-                        let grid =
-                            tsdf::depth_grid(&points, &camera, params.step, params.window, size);
-                        let rotation: [f64; 9] =
-                            std::array::from_fn(|k| pose.rotation[k / 3][k % 3]);
-                        surface = volume.add(
-                            frame.gpu(),
-                            &grid,
-                            &points,
-                            &camera,
-                            (&rotation, &pose.translation),
-                        );
-                    }
-                }
-                let live = LiveFrame {
-                    depth,
-                    model: surface.map_err(|e| (e, fusion.model().to_vec())),
-                    fuse_ms: start.elapsed().as_secs_f64() * 1000.0,
-                    rms: fusion.last_rms,
-                    dots,
-                };
-                let _ = results_tx.send(live);
-                repaint.request_repaint();
-            }
-        });
+        let pipeline = Pipeline::start(&setup, frame, preview, move || repaint.request_repaint());
         self.depth = Some(DepthWorker {
             params_path: self.params_path.clone(),
-            jobs: jobs_tx,
-            results: results_rx,
+            pipeline,
             in_flight: 0,
         });
         self.depth_status = format!("{kind} on {adapter}");
@@ -282,7 +184,7 @@ impl ScanApp {
         self.depth_frames = 0;
         self.depth_skipped = 0;
         if let Some(worker) = &self.depth {
-            let _ = worker.jobs.send(DepthJob::Reset);
+            worker.pipeline.send(Job::Reset);
         }
         self.cloud.clear();
         self.cloud_colors.clear();
@@ -710,11 +612,13 @@ impl ScanApp {
         let (Some(left), Some(worker)) = (self.pending_left.take(), self.depth.as_mut()) else {
             return;
         };
+        let pair = name.trim_end_matches("/right").to_owned();
         if name.starts_with("dark_") {
-            let _ = worker.jobs.send(DepthJob::Dark(left, pixels));
+            worker.pipeline.send(Job::Dark(pair, left, pixels));
             return;
         }
-        if worker.in_flight == 0 && worker.jobs.send(DepthJob::Pair(left, pixels)).is_ok() {
+        if worker.in_flight < live::IN_FLIGHT && worker.pipeline.send(Job::Pair(pair, left, pixels))
+        {
             worker.in_flight += 1;
         } else {
             self.depth_skipped += 1;
@@ -725,13 +629,13 @@ impl ScanApp {
         let Some(worker) = self.depth.as_mut() else {
             return;
         };
-        while let Ok(live) = worker.results.try_recv() {
+        while let Ok(live) = worker.pipeline.results.try_recv() {
             worker.in_flight = worker.in_flight.saturating_sub(1);
             let rms = live
                 .rms
                 .map_or_else(String::new, |r| format!(", ICP residual {:.1} µm", r * 1e6));
-            let rms = match &live.dots {
-                Some((Ok(found), map)) => format!("{rms}, {found} dots seen, {map} in map"),
+            let rms = match live.dark.as_ref().map(|d| (&d.found, d.mapped.1)) {
+                Some((Ok((found, _)), map)) => format!("{rms}, {found} dots seen, {map} in map"),
                 Some((Err(e), _)) => format!("{rms}, dot finding failed: {e}"),
                 None => rms,
             };
@@ -742,7 +646,7 @@ impl ScanApp {
             self.fusion_status = format!(
                 "model: {} {kind}, fused in {:.0} ms{rms}",
                 model.len(),
-                live.fuse_ms
+                live.fuse_ms + live.tsdf_ms
             );
             self.cloud = model;
             match live.depth {
@@ -920,12 +824,12 @@ impl ScanApp {
         };
         let out = PathBuf::from(&self.mesh_path);
         let (mesh_tx, mesh_rx) = mpsc::channel();
-        let job = DepthJob::Mesh(
+        let job = Job::Mesh(
             self.mesh_fill_mm / 1000.0,
             self.mesh_faces as usize,
             mesh_tx,
         );
-        if worker.jobs.send(job).is_err() {
+        if !worker.pipeline.send(job) {
             self.export_status = "depth worker stopped".to_owned();
             return;
         }
