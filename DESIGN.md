@@ -2076,3 +2076,33 @@ of three. In both others, depth stages took 46 ms against 41 ms, and its TSDF st
 has skipped some, and that our GPU slows as in D99. Keeping the newest skipped pair for
 the next free place would test that.
 
+## D101. Motion between light-off pairs by capture time (2026-11-10)
+
+D78 starts each lit frame from the motion between its last two light-off pairs,
+continued at constant velocity, and ICP keeps that start along directions a smooth panel
+leaves free. It measured that motion in frames. Our live view leaves out lit pairs that arrive
+while it is busy (D40, D99), so a frame count there runs ahead of time or behind it.
+
+`track.fuse` now takes `times`, one capture time per frame, and continues motion by
+time. `fuse::Fusion::add_at` and `add_dark_at` do so in our application, and its live
+pipeline passes each pair's timestamp from its frame header. Without times both count
+frames as before.
+
+Errors below are pose errors against truth from the third light-off pair on, in
+`track.fuse` on D78's panel: every 4th frame light-off, 30 µm of point noise and 50 µm
+of dot noise.
+
+| Slide and frames used | By frame count, largest and median | By capture time, largest and median |
+|---|---|---|
+| 7 mm per capture, every frame | 0.206 mm, 0.073 mm | 0.206 mm, 0.073 mm |
+| 7 mm, without each lit frame after a light-off pair | 4.755 mm, 2.323 mm | 0.244 mm, 0.075 mm |
+| 7 mm, without three of every six lit frames | 7.119 mm, 4.719 mm | 0.204 mm, 0.077 mm |
+| 3 mm per capture, every frame | 0.215 mm, 0.063 mm | 0.215 mm, 0.063 mm |
+| 3 mm, without each lit frame after a light-off pair | 2.038 mm, 0.989 mm | 0.269 mm, 0.081 mm |
+| 3 mm, without three of every six lit frames | 3.063 mm, 1.957 mm | 0.243 mm, 0.074 mm |
+
+`slscan dot-fusion-vectors --drop` writes a set with frames left out, and `sls-scan
+fusion-check` finds Rust equal to NumPy on it. With every frame used, results did not
+change: `sls-scan depth` wrote a fused model equal byte for byte for 24 stand-in pairs
+with light-off pairs among them.
+
