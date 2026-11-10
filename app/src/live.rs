@@ -6,14 +6,17 @@ use crate::depth::{DepthFrame, DepthResult, DepthSetup};
 use crate::fuse::{self, Fusion, Pose, Vec3};
 use crate::mesh::Mesh;
 use crate::tsdf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 /// Voxel size of the fused model, as `track.fuse` uses by default.
 pub const FUSION_VOXEL_M: f64 = 0.0005;
 
-/// Lit pairs to keep in a pipeline at once: one in each stage and one waiting.
+/// Lit pairs a caller that sends every pair keeps in a pipeline at once: one in each
+/// stage and one waiting.
 pub const IN_FLIGHT: usize = 3;
 
 pub enum Job {
@@ -42,6 +45,12 @@ pub struct Dark {
 /// One lit pair, measured and fused.
 pub struct LiveFrame {
     pub name: String,
+    /// The pair was offered while the measuring stage was busy, and waited for it.
+    pub held: bool,
+    /// Offered pairs passed over for this newer one.
+    pub skipped: usize,
+    /// Milliseconds from the pair's arrival at the pipeline to this result.
+    pub latency_ms: f64,
     pub depth: Result<DepthResult, String>,
     /// Isolated points left out of fusion.
     pub dropped: usize,
@@ -56,9 +65,52 @@ pub struct LiveFrame {
     pub model: Result<Vec<Vec3>, (String, Vec<Vec3>)>,
 }
 
+/// A lit pair on its way to the measuring stage.
+struct Arrival {
+    name: String,
+    time: f64,
+    left: Vec<u8>,
+    right: Vec<u8>,
+    arrived: Instant,
+    /// Resets sent before this pair.
+    epoch: usize,
+    held: bool,
+}
+
+/// A light-off pair kept for the lit pair after it.
+struct DarkPair {
+    name: String,
+    time: f64,
+    epoch: usize,
+    left: Vec<u8>,
+    right: Vec<u8>,
+}
+
+/// What callers and the measuring stage share.
+#[derive(Default)]
+struct Intake {
+    /// The newest offered pair that the measuring stage has not taken.
+    newest: Mutex<Option<Arrival>>,
+    /// Offered pairs replaced by a newer one since a pair was last taken.
+    replaced: AtomicUsize,
+    busy: AtomicBool,
+    resets: AtomicUsize,
+}
+
+enum Message {
+    /// A job with its arrival time and the resets sent before it.
+    Job(Job, Instant, usize),
+    /// A pair was offered.
+    Offered,
+}
+
 struct Measured {
     name: String,
     time: f64,
+    held: bool,
+    skipped: usize,
+    arrived: Instant,
+    epoch: usize,
     depth: Result<DepthResult, String>,
     /// Points to fuse, when the pair was measured in full.
     points: Option<Vec<Vec3>>,
@@ -68,7 +120,8 @@ struct Measured {
 
 enum Fuse {
     Frame(Measured),
-    Reset,
+    /// Start again; the count is of resets up to this one.
+    Reset(usize),
     Mesh(f64, usize, Sender<Result<Mesh, String>>),
 }
 
@@ -78,11 +131,15 @@ pub struct Finished {
     pub volume: tsdf::Live,
     /// Light-off pairs that no measured lit pair followed.
     pub unused_dark: usize,
+    /// Results not yet taken from `results`.
+    pub rest: Vec<LiveFrame>,
 }
 
 pub struct Pipeline {
-    jobs: Sender<Job>,
-    /// One `LiveFrame` per lit pair, in the order sent.
+    jobs: Sender<Message>,
+    intake: Arc<Intake>,
+    /// One `LiveFrame` per lit pair measured, in order. A pair measured before a reset
+    /// and fused after it has none.
     pub results: Receiver<LiveFrame>,
     measuring: JoinHandle<usize>,
     fusing: JoinHandle<(Fusion, tsdf::Live)>,
@@ -97,9 +154,11 @@ impl Pipeline {
         preview: Option<CoarseParams>,
         notify: impl Fn() + Send + 'static,
     ) -> Self {
-        let (jobs, jobs_rx) = mpsc::channel::<Job>();
-        let (measured_tx, measured_rx) = mpsc::channel::<Fuse>();
+        let (jobs, jobs_rx) = mpsc::channel::<Message>();
+        let (measured_tx, measured_rx) = mpsc::sync_channel::<Fuse>(0);
         let (results_tx, results) = mpsc::channel();
+        let intake = Arc::new(Intake::default());
+        let shared = Arc::clone(&intake);
         let params = setup.params();
         let camera = tsdf::LeftCamera {
             rotation: setup.cameras.left.rotation,
@@ -111,47 +170,86 @@ impl Pipeline {
         let measuring = thread::spawn(move || {
             let params = measure_params;
             let cameras = (&cameras.left, &cameras.right);
-            let mut pending: Option<(String, f64, Vec<u8>, Vec<u8>)> = None;
+            let mut pending: Option<DarkPair> = None;
             let mut unused = 0;
-            for job in jobs_rx {
-                let message = match job {
-                    Job::Dark(name, time, left, right) => {
-                        unused += usize::from(pending.is_some());
-                        pending = Some((name, time, left, right));
-                        continue;
+            for message in jobs_rx {
+                let (pair, skipped) = match message {
+                    Message::Offered => {
+                        let taken = shared.newest.lock().ok().and_then(|mut n| n.take());
+                        let Some(pair) = taken else { continue };
+                        (pair, shared.replaced.swap(0, Ordering::AcqRel))
                     }
-                    Job::Reset => {
-                        pending = None;
-                        Fuse::Reset
-                    }
-                    Job::Mesh(fill_m, faces, reply) => Fuse::Mesh(fill_m, faces, reply),
-                    Job::Pair(name, time, left, right) => {
-                        let depth =
-                            frame.measure(&params, preview.as_ref(), cameras, &left, &right);
-                        let points = match (&depth, &preview) {
-                            (Ok(d), None) => Some(fuse::drop_isolated(
-                                &d.points,
-                                f64::from(params.step),
-                                focal,
-                                fuse::ISOLATED_SPACINGS,
-                            )),
-                            _ => None,
-                        };
-                        let dark = points.as_ref().and_then(|points| {
-                            pending.take().map(|(dark, at, l, r)| {
-                                (dark, at, frame.dots(&params, cameras, &l, &r, points))
-                            })
-                        });
-                        Fuse::Frame(Measured {
+                    Message::Job(Job::Pair(name, time, left, right), arrived, epoch) => {
+                        let pair = Arrival {
                             name,
                             time,
-                            depth,
-                            points,
-                            dark,
-                        })
+                            left,
+                            right,
+                            arrived,
+                            epoch,
+                            held: false,
+                        };
+                        (pair, 0)
+                    }
+                    Message::Job(Job::Dark(name, time, left, right), _, epoch) => {
+                        unused += usize::from(pending.is_some());
+                        pending = Some(DarkPair {
+                            name,
+                            time,
+                            epoch,
+                            left,
+                            right,
+                        });
+                        continue;
+                    }
+                    Message::Job(Job::Reset, _, epoch) => {
+                        pending = None;
+                        if measured_tx.send(Fuse::Reset(epoch)).is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+                    Message::Job(Job::Mesh(fill_m, faces, reply), ..) => {
+                        if measured_tx.send(Fuse::Mesh(fill_m, faces, reply)).is_err() {
+                            break;
+                        }
+                        continue;
                     }
                 };
-                if measured_tx.send(message).is_err() {
+                shared.busy.store(true, Ordering::Release);
+                let depth =
+                    frame.measure(&params, preview.as_ref(), cameras, &pair.left, &pair.right);
+                let points = match (&depth, &preview) {
+                    (Ok(d), None) => Some(fuse::drop_isolated(
+                        &d.points,
+                        f64::from(params.step),
+                        focal,
+                        fuse::ISOLATED_SPACINGS,
+                    )),
+                    _ => None,
+                };
+                if pending.as_ref().is_some_and(|d| d.epoch != pair.epoch) {
+                    pending = None;
+                }
+                let dark = points.as_ref().and_then(|points| {
+                    pending.take().map(|d| {
+                        let dots = frame.dots(&params, cameras, &d.left, &d.right, points);
+                        (d.name, d.time, dots)
+                    })
+                });
+                let sent = measured_tx.send(Fuse::Frame(Measured {
+                    name: pair.name,
+                    time: pair.time,
+                    held: pair.held,
+                    skipped,
+                    arrived: pair.arrived,
+                    epoch: pair.epoch,
+                    depth,
+                    points,
+                    dark,
+                }));
+                shared.busy.store(false, Ordering::Release);
+                if sent.is_err() {
                     break;
                 }
             }
@@ -161,11 +259,15 @@ impl Pipeline {
             let mut fusion = Fusion::new(FUSION_VOXEL_M);
             let mut volume = tsdf::Live::coarse();
             let size = (params.coarse.width, params.coarse.height);
+            let mut epoch = 0;
             for message in measured_rx {
                 let measured = match message {
-                    Fuse::Reset => {
-                        fusion = Fusion::new(FUSION_VOXEL_M);
-                        volume.reset();
+                    Fuse::Reset(count) => {
+                        if count > epoch {
+                            epoch = count;
+                            fusion = Fusion::new(FUSION_VOXEL_M);
+                            volume.reset();
+                        }
                         continue;
                     }
                     Fuse::Mesh(fill_m, faces, reply) => {
@@ -174,8 +276,19 @@ impl Pipeline {
                     }
                     Fuse::Frame(measured) => measured,
                 };
+                if measured.epoch < epoch {
+                    continue;
+                }
+                if measured.epoch > epoch {
+                    epoch = measured.epoch;
+                    fusion = Fusion::new(FUSION_VOXEL_M);
+                    volume.reset();
+                }
                 let mut live = LiveFrame {
                     name: measured.name,
+                    held: measured.held,
+                    skipped: measured.skipped,
+                    latency_ms: 0.0,
                     dropped: 0,
                     dark: None,
                     fuse_ms: 0.0,
@@ -214,6 +327,7 @@ impl Pipeline {
                     live.fused = fusion.model().len();
                     live.model = surface.map_err(|e| (e, fusion.model().to_vec()));
                 }
+                live.latency_ms = measured.arrived.elapsed().as_secs_f64() * 1000.0;
                 if results_tx.send(live).is_err() {
                     break;
                 }
@@ -223,15 +337,48 @@ impl Pipeline {
         });
         Self {
             jobs,
+            intake,
             results,
             measuring,
             fusing,
         }
     }
 
-    /// Queue a job. False when the pipeline has stopped.
+    /// Queue a job, to be done in order. False when the pipeline has stopped.
     pub fn send(&self, job: Job) -> bool {
-        self.jobs.send(job).is_ok()
+        let mut epoch = self.intake.resets.load(Ordering::Acquire);
+        if matches!(job, Job::Reset) {
+            epoch = self.intake.resets.fetch_add(1, Ordering::AcqRel) + 1;
+            if let Ok(mut newest) = self.intake.newest.lock() {
+                *newest = None;
+            }
+        }
+        self.jobs
+            .send(Message::Job(job, Instant::now(), epoch))
+            .is_ok()
+    }
+
+    /// Offer a lit pair, as `Job::Pair` names it, to be measured once the measuring stage
+    /// is free. It takes the place of an offered pair still waiting, so that stage always
+    /// finds the newest one. False when the pipeline has stopped.
+    pub fn offer(&self, name: String, time: f64, left: Vec<u8>, right: Vec<u8>) -> bool {
+        let pair = Arrival {
+            name,
+            time,
+            left,
+            right,
+            arrived: Instant::now(),
+            epoch: self.intake.resets.load(Ordering::Acquire),
+            held: self.intake.busy.load(Ordering::Acquire),
+        };
+        let Ok(mut newest) = self.intake.newest.lock() else {
+            return false;
+        };
+        if newest.replace(pair).is_some() {
+            self.intake.replaced.fetch_add(1, Ordering::AcqRel);
+        }
+        drop(newest);
+        self.jobs.send(Message::Offered).is_ok()
     }
 
     /// Close the pipeline once every queued job is done, and return its model and volume.
@@ -249,6 +396,7 @@ impl Pipeline {
             fusion,
             volume,
             unused_dark,
+            rest: self.results.try_iter().collect(),
         })
     }
 }
