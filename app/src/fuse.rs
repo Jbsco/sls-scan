@@ -469,8 +469,17 @@ pub(crate) fn icp_with(
 ) -> (Pose, f64) {
     let mut pose = start;
     let mut rms = f64::INFINITY;
-    for &limit in limits {
-        let grid = Grid::new(target, limit);
+    let grids: Vec<Grid> = thread::scope(|scope| {
+        let handles: Vec<_> = limits
+            .iter()
+            .map(|&limit| scope.spawn(move || Grid::new(target, limit)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+            .collect()
+    });
+    for (&limit, grid) in limits.iter().zip(&grids) {
         for _ in 0..ITERATIONS {
             let parts = chunked(source.len(), |range| {
                 let mut ata = [[0.0; 6]; 6];
