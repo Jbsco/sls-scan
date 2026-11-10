@@ -74,6 +74,8 @@ pub struct ScanApp {
     stats: Option<Stats>,
     params_path: String,
     stereo_frames: u32,
+    /// Stereo pairs per second asked of the node, or 0 for as fast as it can.
+    stereo_rate: u32,
     /// Take every `DARK_EVERY`-th stereo pair with the pattern light off for reference dots.
     dots: bool,
     depth: Option<DepthWorker>,
@@ -128,6 +130,7 @@ impl Default for ScanApp {
             stats: None,
             params_path: "data/depth.json".to_owned(),
             stereo_frames: 30,
+            stereo_rate: 0,
             dots: false,
             depth: None,
             pending_left: None,
@@ -227,7 +230,7 @@ impl ScanApp {
             pitch: self.pitch,
             steps: self.steps,
             frames: if stereo { self.stereo_frames } else { 1 },
-            rate_hz: 0,
+            rate_hz: if stereo { self.stereo_rate } else { 0 },
             dark_every: if stereo && self.dots { DARK_EVERY } else { 0 },
             exposures: self
                 .scan_params
@@ -753,6 +756,12 @@ impl ScanApp {
                     .range(1..=1000)
                     .prefix("frames "),
             );
+            ui.add(
+                egui::DragValue::new(&mut self.stereo_rate)
+                    .range(0..=120)
+                    .prefix("pairs per second "),
+            )
+            .on_hover_text("Trigger rate asked of the node, or 0 for as fast as it can");
             ui.label("Depth parameters");
             ui.text_edit_singleline(&mut self.params_path);
             ui.checkbox(&mut self.dots, "Reference dots (smooth panels)")
