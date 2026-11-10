@@ -1765,9 +1765,9 @@ fn replay_frame(
 /// Capture rate given to recorded pairs, which have no timestamps, when none is asked for.
 const REPLAY_RATE_HZ: f64 = 30.0;
 
-/// Run recorded pairs through the live pipeline and print its rate. Pairs go in back to
-/// back, or at `rate` per second with those that find the pipeline full skipped, as the
-/// window skips them.
+/// Run recorded pairs through the live pipeline and print its rate. Every pair goes in,
+/// back to back, or pairs are offered at `rate` per second as the window offers them, and
+/// the pipeline measures the newest one offered whenever its measuring stage is free.
 fn replay_live(
     setup: &depth::DepthSetup,
     frame: depth::DepthFrame,
@@ -1786,38 +1786,35 @@ fn replay_live(
     let mut frames: Vec<live::LiveFrame> = Vec::new();
     let start = Instant::now();
     for (i, (name, left, right)) in pairs.into_iter().enumerate() {
-        match rate {
-            Some(hz) => {
-                let due = Duration::from_secs_f64(i as f64 / hz);
-                while let Some(wait) = due.checked_sub(start.elapsed()) {
-                    if let Ok(live) = pipeline.results.recv_timeout(wait) {
-                        frames.push(live);
-                    }
-                }
-                frames.extend(pipeline.results.try_iter());
-                if sent - frames.len() >= live::IN_FLIGHT {
-                    continue;
-                }
-            }
-            None => {
-                while sent - frames.len() >= live::IN_FLIGHT {
-                    let Ok(live) = pipeline.results.recv() else {
-                        break;
-                    };
-                    frames.push(live);
-                }
-            }
-        }
         let time = i as f64 / rate.unwrap_or(REPLAY_RATE_HZ);
-        if pipeline.send(live::Job::Pair(name, time, left, right)) {
-            sent += 1;
+        let Some(hz) = rate else {
+            while sent - frames.len() >= live::IN_FLIGHT {
+                let Ok(live) = pipeline.results.recv() else {
+                    break;
+                };
+                frames.push(live);
+            }
+            sent += usize::from(pipeline.send(live::Job::Pair(name, time, left, right)));
+            continue;
+        };
+        let due = Duration::from_secs_f64(i as f64 / hz);
+        while let Some(wait) = due.checked_sub(start.elapsed()) {
+            if let Ok(live) = pipeline.results.recv_timeout(wait) {
+                frames.push(live);
+            }
         }
+        pipeline.offer(name, time, left, right);
     }
-    while frames.len() < sent {
+    while rate.is_none() && frames.len() < sent {
         let Ok(live) = pipeline.results.recv() else {
             break;
         };
         frames.push(live);
+    }
+    let finished = pipeline.finish();
+    let closed = finished.is_ok();
+    if let Ok(f) = finished {
+        frames.extend(f.rest);
     }
     let seconds = start.elapsed().as_secs_f64();
     let n = frames.len().max(1) as f64;
@@ -1828,6 +1825,8 @@ fn replay_live(
         .sum();
     let fuse_ms: f64 = frames.iter().map(|f| f.fuse_ms).sum();
     let tsdf_ms: f64 = frames.iter().map(|f| f.tsdf_ms).sum();
+    let latency: f64 = frames.iter().map(|f| f.latency_ms).sum();
+    let slowest = frames.iter().map(|f| f.latency_ms).fold(0.0, f64::max);
     let pace = rate.map_or_else(String::new, |hz| format!(" at {hz} per second"));
     println!(
         "live{pace}: {} of {offered} pairs as {kind} in {:.0} ms, {:.1} per second (depth {:.1}, fusion {:.1}, TSDF {:.1} ms)",
@@ -1838,8 +1837,14 @@ fn replay_live(
         fuse_ms / n,
         tsdf_ms / n
     );
+    println!(
+        "live{pace}: result {:.0} ms after arrival, {slowest:.0} ms at most; {} pairs waited for the measuring stage",
+        latency / n,
+        frames.iter().filter(|f| f.held).count()
+    );
     let measured = frames.iter().all(|f| f.depth.is_ok());
-    pipeline.finish().is_ok() && measured && sent > 0 && frames.len() == sent
+    let all = rate.is_some() || frames.len() == sent;
+    closed && measured && all && !frames.is_empty()
 }
 
 fn replay(args: &[String]) -> ExitCode {

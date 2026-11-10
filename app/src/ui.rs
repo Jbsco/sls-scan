@@ -3,7 +3,7 @@
 use crate::calibration::{self, Board, Detection, Solve, StereoSolve, Tool};
 use crate::client::{self, Event, Stats};
 use crate::depth::{DepthFrame, DepthSetup};
-use crate::live::{self, Job, Pipeline};
+use crate::live::{Job, Pipeline};
 use crate::protocol::{FrameHeader, Hello, Projector, SequenceRequest};
 use crate::scan::{self, ScanParams};
 use crate::{depth, gpu, mesh};
@@ -43,8 +43,6 @@ const MAX_DRAWN: usize = 20_000;
 struct DepthWorker {
     params_path: String,
     pipeline: Pipeline,
-    /// Lit pairs sent whose results have not come back.
-    in_flight: usize,
 }
 
 pub struct ScanApp {
@@ -161,7 +159,6 @@ impl ScanApp {
         self.depth = Some(DepthWorker {
             params_path: self.params_path.clone(),
             pipeline,
-            in_flight: 0,
         });
         self.depth_status = format!("{kind} on {adapter}");
         Ok(())
@@ -601,9 +598,9 @@ impl ScanApp {
         }
     }
 
-    /// Keep a left frame until its right arrives, then send the pair to the worker when it
-    /// is idle, or count the pair as skipped. A light-off pair is always sent, since the
-    /// lit pair after it needs it.
+    /// Keep a left frame until its right arrives, then offer the pair to the pipeline,
+    /// which measures the newest pair offered whenever its measuring stage is free. A
+    /// light-off pair is always sent, since the lit pair after it needs it.
     fn pair_frame(&mut self, name: &str, time: f64, pixels: Vec<u8>) {
         if name.ends_with("/left") {
             self.pending_left = Some(pixels);
@@ -617,13 +614,7 @@ impl ScanApp {
             worker.pipeline.send(Job::Dark(pair, time, left, pixels));
             return;
         }
-        if worker.in_flight < live::IN_FLIGHT
-            && worker.pipeline.send(Job::Pair(pair, time, left, pixels))
-        {
-            worker.in_flight += 1;
-        } else {
-            self.depth_skipped += 1;
-        }
+        worker.pipeline.offer(pair, time, left, pixels);
     }
 
     fn poll_depth(&mut self) {
@@ -631,7 +622,7 @@ impl ScanApp {
             return;
         };
         while let Ok(live) = worker.pipeline.results.try_recv() {
-            worker.in_flight = worker.in_flight.saturating_sub(1);
+            self.depth_skipped += live.skipped;
             let rms = live
                 .rms
                 .map_or_else(String::new, |r| format!(", ICP residual {:.1} µm", r * 1e6));
@@ -645,9 +636,10 @@ impl ScanApp {
                 Err((e, fused)) => (fused, format!("fused points (TSDF failed: {e})")),
             };
             self.fusion_status = format!(
-                "model: {} {kind}, fused in {:.0} ms{rms}",
+                "model: {} {kind}, fused in {:.0} ms{rms}, {:.0} ms after arrival",
                 model.len(),
-                live.fuse_ms + live.tsdf_ms
+                live.fuse_ms + live.tsdf_ms,
+                live.latency_ms
             );
             self.cloud = model;
             match live.depth {

@@ -2106,3 +2106,55 @@ fusion-check` finds Rust equal to NumPy on it. With every frame used, results di
 change: `sls-scan depth` wrote a fused model equal byte for byte for 24 stand-in pairs
 with light-off pairs among them.
 
+## D102. Newest pair for a free measuring stage (2026-11-10)
+
+D99's callers skipped each lit pair that arrived while three were in the pipeline. A
+pair that waited there was then older than those skipped after it, and after a run of
+skips the measuring stage sat idle until another pair came (D100).
+
+`live::Pipeline::offer` keeps one waiting pair, and a newer offer replaces it. The
+measuring stage takes that pair as soon as it is free, so it starts on the newest pair
+offered and does not wait while one is on hand. A measured pair stays with that stage
+until fusion takes it. The window and `sls-scan replay --rate` offer pairs this way.
+`sls-scan depth` and replay without a rate still send every pair in order.
+
+Each result now says whether its pair waited for the measuring stage, how many offered
+pairs it replaced, and its delay from arrival. Window status and `sls-scan replay` print
+that delay.
+
+Figures below are for 60 recorded stand-in sweep pairs offered at 30 per second, three
+runs of each build in turn, on a Radeon RX 7900 GRE and a Ryzen 7 7700X at a load
+average of 8 to 10.
+
+| Measurement | Pairs skipped while full | Newest pair kept |
+|---|---|---|
+| Pairs measured | 37 to 38 | 46 to 47 |
+| Pairs per second | 17.6 to 18.1 | 22.2 to 22.7 |
+| Depth stages per pair | 45.8 to 46.6 ms | 40.7 to 41.0 ms |
+| TSDF step per pair | 17.9 to 19.7 ms | 5.8 to 6.3 ms |
+| Result after arrival, mean | 144 to 149 ms | 101 to 103 ms |
+| Result after arrival, largest | 189 to 198 ms | 123 to 133 ms |
+
+Offered pairs now pass at D100's back-to-back rate in every run. Depth stages and the
+TSDF step take their back-to-back times again, which agrees with D100's reading of GPU
+idle gaps. With every pair sent in order, three runs gave 22.1 to 22.8 pairs per second
+against 22.5, 22.5 and 18.5 before.
+
+Accuracy did not depend on which pairs were fused. Position errors below are against
+true sweep poses, from those same runs.
+
+| Pairs fused | Largest | Median |
+|---|---|---|
+| Every pair | 0.216 mm | 0.082 mm |
+| Skipped while full, 37 to 38 pairs | 0.148 to 0.157 mm | 0.052 to 0.056 mm |
+| Newest kept, 46 to 47 pairs | 0.179 to 0.183 mm | 0.064 to 0.065 mm |
+
+Fused models were measured in a later set of runs at a load average near 30, where 18
+to 25 pairs passed. Ball bar spacing error was 2.6 to 3.6 µm for either build and
+4.7 µm with every pair fused. Mat flatness was 12.3 to 14.8 µm RMS across all of them.
+
+A pair that waited is measured and fused as any other. This change raises update rate
+and shortens delay on this sweep. It does not change accuracy. Our stand-in sweep keeps
+its whole scene in view, so a model from 18 pairs covers what one from 60 does. It
+seems likely that a sweep which leaves surface behind gains coverage from each pair
+that is no longer skipped.
