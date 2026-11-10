@@ -277,6 +277,11 @@ class StandIn(socketserver.ThreadingTCPServer):
                 self.paced[key] = (pair["left"], pair["right"])
             return self.paced[key]
 
+    def render_paced(self) -> None:
+        """Render every lit pose of the paced sweep, so a paced stream starts at once."""
+        for index in range(self.paced_poses):
+            self.paced_pair(False, index, False)
+
     def paced_pairs(self, count: int, rate_hz: float, dark_every: int = 0):
         """Yield (pair index, left, right, timestamp in nanoseconds) for count pairs on a
         trigger clock at rate_hz, playing its head poses forth and back. Poses are rendered
