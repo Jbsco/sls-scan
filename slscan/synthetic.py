@@ -591,21 +591,25 @@ def stereo_scenes(crossing_m: float = 0.5) -> dict:
                          Ball(np.array([0.04, -0.004, z + 0.002]), 0.0125)]}
 
 
+def sweep_pose(s: float, yaw_deg: float = 25.0, pitch_deg: float = 8.0,
+               distance_m: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
+    """Head pose (world to head) at fraction s of an arc around a target at distance_m
+    ahead of its first pose, yawing from -yaw_deg to +yaw_deg and pitching through
+    ±pitch_deg."""
+    target = np.array([0.0, 0.0, distance_m])
+    yaw = -yaw_deg + 2.0 * yaw_deg * s
+    pitch = pitch_deg * math.sin(2.0 * math.pi * s)
+    orient = rotation(pitch, yaw)
+    centre = target - orient @ np.array([0.0, 0.0, distance_m])
+    r = orient.T
+    return r, -r @ centre
+
+
 def sweep_poses(frames: int, yaw_deg: float = 25.0, pitch_deg: float = 8.0,
                 distance_m: float = 0.5) -> list:
-    """Head poses (world to head) along an arc around a target at distance_m ahead of the
-    first pose, yawing from -yaw_deg to +yaw_deg and pitching through ±pitch_deg."""
-    target = np.array([0.0, 0.0, distance_m])
-    poses = []
-    for i in range(frames):
-        s = i / max(frames - 1, 1)
-        yaw = -yaw_deg + 2.0 * yaw_deg * s
-        pitch = pitch_deg * math.sin(2.0 * math.pi * s)
-        orient = rotation(pitch, yaw)
-        centre = target - orient @ np.array([0.0, 0.0, distance_m])
-        r = orient.T
-        poses.append((r, -r @ centre))
-    return poses
+    """Head poses (world to head) at equal steps along the arc of sweep_pose."""
+    return [sweep_pose(i / max(frames - 1, 1), yaw_deg, pitch_deg, distance_m)
+            for i in range(frames)]
 
 
 def loop_poses(frames: int, yaw_deg: float = 25.0, pitch_deg: float = 8.0,
@@ -653,20 +657,27 @@ def slide_poses(frames: int, step_m: float = 0.0025) -> list:
     return [(np.eye(3), np.array([-step_m * k, 0.0, 0.0])) for k in range(frames)]
 
 
-def sweep_captures(rig: StereoRig, scene: dict, poses: list, pattern: np.ndarray, seed: int = 0,
-                   dark_every: int = 0):
-    """Yield the stereo capture at each head pose; the pattern light moves with the head.
-    With dark_every, every dark_every-th pair from the first is taken under room light
-    alone, with the pattern light off."""
-    rng = np.random.default_rng(seed)
+def sweep_capture(rig: StereoRig, scene: dict, pose: tuple, pattern: np.ndarray,
+                  rng: np.random.Generator, dark: bool = False) -> dict:
+    """Return the stereo capture at one head pose (world to head); the pattern light moves
+    with the head. With dark it is taken under room light alone, with the pattern light
+    off."""
     shapes = [shape for value in scene.values()
               for shape in (value if isinstance(value, list) else [value])]
-    for i, (r, t) in enumerate(poses):
-        moved = transform_scene(shapes, r, t)
-        if dark_every > 0 and i % dark_every == 0:
-            yield stereo_room_view(rig, moved, rng)
-        else:
-            yield stereo_capture(rig, moved, pattern, rng)
+    moved = transform_scene(shapes, *pose)
+    if dark:
+        return stereo_room_view(rig, moved, rng)
+    return stereo_capture(rig, moved, pattern, rng)
+
+
+def sweep_captures(rig: StereoRig, scene: dict, poses: list, pattern: np.ndarray, seed: int = 0,
+                   dark_every: int = 0):
+    """Yield the stereo capture at each head pose. With dark_every, every dark_every-th
+    pair from the first is taken with the pattern light off."""
+    rng = np.random.default_rng(seed)
+    for i, pose in enumerate(poses):
+        yield sweep_capture(rig, scene, pose, pattern, rng,
+                            dark_every > 0 and i % dark_every == 0)
 
 
 def look_at(eye: np.ndarray, target: np.ndarray, up=(0.0, 0.0, 1.0)) -> tuple[np.ndarray, np.ndarray]:
