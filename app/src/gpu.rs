@@ -390,19 +390,29 @@ fn write_words(queue: &wgpu::Queue, buffer: &wgpu::Buffer, bytes: &[u8]) {
     }
 }
 
+/// One device for every GPU test, opened once, so tests on parallel threads never open
+/// devices at the same time. None without an adapter, unless `SLS_REQUIRE_GPU` is set.
+#[cfg(test)]
+pub(crate) fn test_device() -> Option<&'static Gpu> {
+    static DEVICE: std::sync::OnceLock<Option<Gpu>> = std::sync::OnceLock::new();
+    DEVICE
+        .get_or_init(|| match Gpu::open(false) {
+            Ok(gpu) => Some(gpu),
+            Err(e) if std::env::var_os("SLS_REQUIRE_GPU").is_none() => {
+                eprintln!("no GPU adapter, GPU tests skipped: {e}");
+                None
+            }
+            Err(e) => panic!("no GPU adapter: {e}"),
+        })
+        .as_ref()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn decoder() -> Option<Decoder> {
-        match Decoder::new(false) {
-            Ok(d) => Some(d),
-            Err(e) if std::env::var_os("SLS_REQUIRE_GPU").is_none() => {
-                eprintln!("no GPU adapter, test skipped: {e}");
-                None
-            }
-            Err(e) => panic!("no GPU adapter: {e}"),
-        }
+        crate::gpu::test_device().map(Decoder::with)
     }
 
     /// Stacks that encode the given columns exactly, with their parameters.
