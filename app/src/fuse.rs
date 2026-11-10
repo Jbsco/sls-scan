@@ -341,20 +341,50 @@ impl Grid {
         }
     }
 
-    /// Nearest point closer than `limit`, which must not exceed the cell size.
+    /// Nearest point closer than `limit`, which must not exceed the cell size. Cells are
+    /// visited in the order of `shell`, and one is passed over when every point in it
+    /// would lie farther than the limit or the nearest found so far.
     pub(crate) fn nearest(&self, points: &[Vec3], q: &Vec3, limit: f64) -> Option<usize> {
         let centre = Self::key_of(q, self.cell);
-        let mut best: Option<(f64, usize)> = None;
-        for shell in 0..=1 {
-            self.shell(centre, shell, |i| {
-                let d = sub(&points[i as usize], q);
-                let d2 = dot(&d, &d);
-                if d2 < limit * limit && best.is_none_or(|(b, _)| d2 < b) {
-                    best = Some((d2, i as usize));
+        let slack = 1e-9 * self.cell;
+        let gap = |d: usize, offset: i64| -> f64 {
+            let to_face = match offset {
+                0 => return 0.0,
+                1 => (centre[d] + 1) as f64 * self.cell - q[d],
+                _ => q[d] - centre[d] as f64 * self.cell,
+            };
+            (to_face - slack).max(0.0)
+        };
+        let mut bound = limit * limit;
+        let mut best = None;
+        for shell in 0..=1i64 {
+            for dx in -shell..=shell {
+                for dy in -shell..=shell {
+                    for dz in -shell..=shell {
+                        if dx.abs().max(dy.abs()).max(dz.abs()) != shell {
+                            continue;
+                        }
+                        let g = [gap(0, dx), gap(1, dy), gap(2, dz)];
+                        if dot(&g, &g) >= bound {
+                            continue;
+                        }
+                        let key = [centre[0] + dx, centre[1] + dy, centre[2] + dz];
+                        let Some(list) = self.cells.get(&key) else {
+                            continue;
+                        };
+                        for &i in list {
+                            let d = sub(&points[i as usize], q);
+                            let d2 = dot(&d, &d);
+                            if d2 < bound {
+                                bound = d2;
+                                best = Some(i as usize);
+                            }
+                        }
+                    }
                 }
-            });
+            }
         }
-        best.map(|(_, i)| i)
+        best
     }
 
     /// The `k` nearest points, nearest first.
