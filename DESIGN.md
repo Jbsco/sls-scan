@@ -2192,3 +2192,53 @@ GPU idle gap.
 
 This overlay lasts until the next result. We checked it in a window snapshot over
 recorded stand-in pairs. Our gate does not cover it.
+
+## D104. Continuous sweep from the paced stand-in (2026-11-10)
+
+D46's paced stream played eight poses in a loop, so its head jumped back to its first
+pose at every eighth pair. Our window asked for no trigger rate, and a stand-in then
+rendered a whole set before it sent any of it. Neither gave the window what a camera
+gives: pairs at a steady rate from a head in motion.
+
+A paced stereo stream now plays its poses forth and back. Poses lie closer together
+toward both ends, so the head slows before it turns and no pair jumps. With light-off
+pairs a stream slides along D78's panel and back, 150 mm for 61 poses.
+
+`slscan node-sim --paced-poses` sets their count and renders them before the node
+serves. 61 poses span our stand-in sweep's whole arc, 25° of yaw to either side, and
+fewer span less of it at that spacing. A node started without that option keeps eight
+poses, rendered at first use, so our gate's stream costs what it did.
+
+Stereo controls in the window now have a trigger rate in pairs per second, with 0 for
+as fast as the node can.
+
+Figures below are from a Radeon RX 7900 GRE and a Ryzen 7 7700X at a load average of 7
+to 9. Rendering 61 poses took 45 s at node start. `sls-scan capture` then took 180 pairs
+at 30 per second with no frame missing and every pair in step. Those pairs go along the
+arc, back, and along it again. `sls-scan replay` ran them through our live pipeline.
+
+| Pairs fused | Position error, largest | Median | Ball bar spacing error |
+|---|---|---|---|
+| Offered at 30 per second, 141 to 142 of 180 | 0.128 to 0.132 mm | 0.048 to 0.049 mm | 1.0 to 1.3 µm |
+| Every pair | 0.159 mm | 0.056 mm | 0.9 µm |
+
+At 30 per second that pipeline ran 23.1 to 23.3 pairs per second, and a result came
+100 ms after its pair arrived.
+
+A window run against that node, at a load average of 10 to 15, gave D103's colours.
+
+| Trigger rate | Pairs measured | Overlay at each result |
+|---|---|---|
+| 30 per second | 121 of 180 | amber at 117 of 119 |
+| 20 per second | 113 of 120 | green at 91 of 112 |
+| 15 per second | 115 of 120 | green at 109 of 114 |
+
+Our gate now runs a stereo set at 30 pairs per second through the window and checks
+that every pair arrived and was measured or replaced by a newer one.
+
+Head speed follows trigger rate, since a stream has a fixed set of poses: at 15 pairs
+per second its sweep takes twice as long as at 30. A panel pose takes 1.9 s to render
+and is rendered at first use. A first long run with light-off pairs can then outlast a
+client's 60 s read limit, and a second request finds those poses rendered. One such run
+of 17 poses passed through the window at 30 pairs per second and placed its dots. Its
+pose error was not measured.
