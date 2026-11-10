@@ -2158,3 +2158,37 @@ and shortens delay on this sweep. It does not change accuracy. Our stand-in swee
 its whole scene in view, so a model from 18 pairs covers what one from 60 does. It
 seems likely that a sweep which leaves surface behind gains coverage from each pair
 that is no longer skipped.
+
+## D103. Newest frame over the model in the scene panel (2026-11-10)
+
+The scene panel draws the volume's surface (D54). During a sweep that surface grows
+without showing which part of it the head sees now, or whether the view keeps up with
+the camera.
+
+`live::LiveFrame` now reports the pose fusion gave its pair. The window moves that
+frame's points into the model's frame and draws 1,000 of them at most over the surface.
+They are green when their pair was measured as it arrived and amber when it waited for
+the measuring stage (D102). A "Newest frame" checkbox with both colours beside it turns
+them off.
+
+Colour reports delay. D102 found a pair that waited as accurate as any other, so amber
+does not mark a worse or a better frame. It means pairs arrive faster than they are
+measured.
+
+Figures below are for 60 recorded stand-in sweep pairs, two runs at each rate, on a
+Radeon RX 7900 GRE at a load average near 10.
+
+| Pairs offered per second | Pairs measured | Pairs that waited | Result after arrival, mean |
+|---|---|---|---|
+| 15 | 60 | 0 | 116 to 117 ms |
+| 20 | 60 | 0 to 1 | 93 ms |
+| 25 | 51 to 55 | all but one | 107 to 114 ms |
+| 30 | 45 to 46 | all but one | 104 ms |
+
+By those counts our overlay is green at 15 and 20 pairs per second and amber at 25
+and 30, where the camera outruns the pipeline. At 15 per second depth stages took 51 ms
+against 42 ms, and a result came later than at 20. It seems likely that this is D99's
+GPU idle gap.
+
+This overlay lasts until the next result. We checked it in a window snapshot over
+recorded stand-in pairs. Our gate does not cover it.
