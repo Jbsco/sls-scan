@@ -1967,3 +1967,36 @@ would add a capture channel, its calibration, and matching for two more pairs pe
 `slscan occlusion-bench` stays, so a part that a second view cannot reach can be
 measured before this is decided again.
 
+## D98. One device for GPU unit tests (2026-11-09)
+
+Unit tests of our decoder, rectifier, block matcher and refiner each opened a device,
+and `cargo test` runs them on parallel threads. GitHub moved our runs to its
+ubuntu-26.04 image on 2026-11-09, and that test binary then ended with a segmentation
+fault in some runs. Its backtrace is in the Vulkan loader, `libvulkan1` 1.4.341, under
+`vkSetDebugUtilsObjectNameEXT`, which wgpu calls to name objects in debug builds, while
+another thread opens or closes a device.
+
+An Ubuntu 26.04 container on four CPUs, with that image's Mesa 26.0.8 and LLVM 21.1.8
+packages, reproduced it.
+
+| Unit tests of main in that container | Runs with a fault |
+|---|---|
+| Parallel threads | 9 of 40 |
+| Parallel threads, object naming off with `WGPU_DEBUG=0` | 0 of 30 |
+| Parallel threads, loader 1.4.363 in place of 1.4.341 | 0 of 30 |
+| One thread | 0 of 30 |
+| Parallel threads, release build | 0 of 40 |
+| Parallel threads, release build with `WGPU_DEBUG=1` | 15 of 40 |
+| Parallel threads, one shared device | 0 of 40 |
+
+On GitHub's runner, main's tests faulted in 7 of 36 parallel runs and in none of 12 on
+one thread. With one shared device they faulted in none of 24.
+
+GPU tests now take one device from `gpu::test_device`, opened once, so no test opens a
+device while another names an object. Our application's kernels share a device in that
+way already (D37).
+
+A debug build of our application can still meet this fault on that loader, when one
+thread opens a device while another uses one, as a scan started during live depth frames
+does. Release builds leave object naming off.
+
