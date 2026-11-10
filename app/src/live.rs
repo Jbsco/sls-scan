@@ -59,6 +59,8 @@ pub struct LiveFrame {
     pub fuse_ms: f64,
     pub tsdf_ms: f64,
     pub rms: Option<f64>,
+    /// Where fusion placed the pair in the model's frame.
+    pub pose: Option<Pose>,
     /// Points in the fused model.
     pub fused: usize,
     /// The TSDF surface, or the fused points when the TSDF failed.
@@ -294,6 +296,7 @@ impl Pipeline {
                     fuse_ms: 0.0,
                     tsdf_ms: 0.0,
                     rms: None,
+                    pose: None,
                     fused: 0,
                     model: Ok(Vec::new()),
                     depth: measured.depth,
@@ -324,6 +327,7 @@ impl Pipeline {
                     };
                     live.tsdf_ms = start.elapsed().as_secs_f64() * 1000.0;
                     live.rms = fusion.last_rms;
+                    live.pose = fusion.poses.last().copied();
                     live.fused = fusion.model().len();
                     live.model = surface.map_err(|e| (e, fusion.model().to_vec()));
                 }

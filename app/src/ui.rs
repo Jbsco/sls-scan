@@ -39,6 +39,12 @@ fn limit_label(value: f64, limit: f64, what: &str) -> egui::RichText {
 const DARK_EVERY: u32 = 4;
 /// Points drawn in the scene at most, every so many of a larger cloud.
 const MAX_DRAWN: usize = 20_000;
+/// Points of the newest frame drawn over the model at most.
+const MAX_NEWEST: usize = 1_000;
+/// Colour of the newest frame when its pair was measured as it arrived.
+const ARRIVED: egui::Color32 = egui::Color32::from_rgb(70, 200, 120);
+/// Colour of the newest frame when its pair waited for the measuring stage.
+const WAITED: egui::Color32 = egui::Color32::from_rgb(240, 170, 60);
 
 struct DepthWorker {
     params_path: String,
@@ -75,6 +81,11 @@ pub struct ScanApp {
     cloud: Vec<[f64; 3]>,
     /// A color per point of `cloud` from a scan with the projector's fields, else empty.
     cloud_colors: Vec<[u8; 3]>,
+    /// Points of the newest fused frame in the model's frame, and whether its pair waited
+    /// for the measuring stage.
+    newest: Vec<[f64; 3]>,
+    newest_held: bool,
+    show_newest: bool,
     fusion_status: String,
     depth_status: String,
     depth_frames: usize,
@@ -122,6 +133,9 @@ impl Default for ScanApp {
             pending_left: None,
             cloud: Vec::new(),
             cloud_colors: Vec::new(),
+            newest: Vec::new(),
+            newest_held: false,
+            show_newest: true,
             fusion_status: String::new(),
             depth_status: String::new(),
             depth_frames: 0,
@@ -185,6 +199,7 @@ impl ScanApp {
         }
         self.cloud.clear();
         self.cloud_colors.clear();
+        self.newest.clear();
         self.fusion_status.clear();
         self.scan_frames.clear();
         self.scan_params = None;
@@ -642,6 +657,16 @@ impl ScanApp {
                 live.latency_ms
             );
             self.cloud = model;
+            if let (Ok(d), Some(pose)) = (&live.depth, &live.pose) {
+                let stride = d.points.len().div_ceil(MAX_NEWEST).max(1);
+                self.newest = d
+                    .points
+                    .iter()
+                    .step_by(stride)
+                    .map(|p| pose.apply(p))
+                    .collect();
+                self.newest_held = live.held;
+            }
             match live.depth {
                 Ok(d) => {
                     let total: f64 = d.timings.iter().map(|(_, ms)| ms).sum();
@@ -920,6 +945,13 @@ impl ScanApp {
             self.depth_frames,
             self.depth_skipped
         ));
+        if !self.newest.is_empty() {
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.show_newest, "Newest frame:");
+                ui.colored_label(ARRIVED, "measured as it arrived");
+                ui.colored_label(WAITED, "after waiting");
+            });
+        }
         let (response, painter) = ui.allocate_painter(ui.available_size(), egui::Sense::hover());
         let rect = response.rect.shrink(4.0);
         let span = [0, 1, 2].map(|i| (hi[i] - lo[i]).max(1e-9));
@@ -936,6 +968,15 @@ impl ScanApp {
                 egui::Color32::from_gray((255.0 - 160.0 * (p[2] - lo[2]) / span[2]) as u8)
             };
             painter.circle_filled(egui::pos2(x, y), 1.5, color);
+        }
+        let color = if self.newest_held { WAITED } else { ARRIVED };
+        let newest = self.newest.iter().filter(|_| self.show_newest);
+        for p in newest {
+            let x = rect.left() + ((p[0] - lo[0]) * scale) as f32;
+            let y = rect.top() + ((p[1] - lo[1]) * scale) as f32;
+            if rect.contains(egui::pos2(x, y)) {
+                painter.circle_filled(egui::pos2(x, y), 1.2, color);
+            }
         }
     }
 }
