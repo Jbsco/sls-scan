@@ -2286,3 +2286,35 @@ A light-off pair takes about 62 ms of the measuring stage: with every pair in or
 that stage spends near half its time on light-off pairs, and 8.2 to 8.4 lit pairs per
 second pass, each 204 to 208 ms after it arrived. Every pair in order ran 13.0 lit pairs
 per second.
+
+## D106. Live pipeline stages joined at drop (2026-11-11)
+
+One gate run of our paced window test (D104) passed and then aborted with "thread
+result panicked on drop". Our fusing thread returns its model and TSDF volume. The
+window dropped its pipeline without joining, so that thread could end while the process
+exited, and its volume's integrator was then the last owner of wgpu's instance.
+
+`live::Pipeline` now waits for both stages when it is dropped, as `finish` does. A
+window that closes, or starts another run, waits for its pair in flight. At D105's
+times that is 70 ms of depth stages, 62 ms for a light-off pair, 35 ms of fusion and
+35 ms for its TSDF step, about 0.2 s at most.
+
+That failure is rare. At a load average near 20 from other work, 70 runs of that test
+passed. With twelve busy loops added beside it, at a load average of 26 to 37, its
+binary from before this change failed at exit in 20 of 487 runs, each after its test
+had passed. Of those, 11 printed a panic from wgpu's EGL instance, 6 ended in a
+segmentation fault and 3 in glibc's abort on a corrupt heap.
+
+Core dumps show two threads in that teardown at once. In one dump, the fusing thread's
+result is dropped as that thread ends: its TSDF integrator drops wgpu's instance,
+`eglTerminate` fails, and that panic is raised inside the drop of a thread's result.
+Rust's runtime aborts there with our gate's message. In three other dumps the main
+thread is inside `exit`: once in libEGL's own teardown, and twice at an address no
+longer mapped. Our loops did not print that message itself.
+
+With stages joined, 320 runs under that load ended with no panic and no abort.
+
+That test had a second weakness on a busy host. A stand-in that runs late drops a pair,
+and this test waited for all 24 and failed after 180 s. It now waits for those that
+arrived and needs half of them. With its stand-in paused for 100 ms in every 300 ms,
+21 of 24 pairs arrived and it passed three times of three.
