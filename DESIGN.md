@@ -2242,3 +2242,47 @@ and is rendered at first use. A first long run with light-off pairs can then out
 client's 60 s read limit, and a second request finds those poses rendered. One such run
 of 17 poses passed through the window at 30 pairs per second and placed its dots. Its
 pose error was not measured.
+
+## D105. Light-off pairs among offered pairs (2026-11-11)
+
+D104 left pose error unmeasured for a paced run with light-off pairs. We measured it on
+a 61-pose stand-in: 180 pairs at 30 per second, every 4th one light-off, along D78's
+panel for 150 mm, back, and along it again. Poses are compared with true ones, with true
+calibration at live settings.
+
+That run lost tracking. D102 put a wake in the pipeline's queue for every offered lit
+pair, and light-off pairs went into that queue in arrival order. Each wake took the
+newest lit pair, so wakes ran behind arrivals, and a light-off pair reached the
+measuring stage after lit pairs captured later. Light-off pair 32 was placed after lit
+pair 47. Lit frames then started from old motion, and dots were found against a far
+later frame.
+
+`live::Pipeline::offer_dark` now keeps a light-off pair beside the waiting lit pair.
+The measuring stage takes a lit pair with the light-off pair offered before it, and a
+light-off pair offered after a waiting lit pair goes with a later one. An offered pair
+puts one wake in the queue while it waits. The window offers light-off pairs this way.
+
+`sls-scan replay` now takes recorded `dark_` pairs and reports whether each was placed
+between the lit pairs around it. Our gate replays eight recorded pairs at 30 per second.
+On those pairs the earlier intake placed light-off pair 4 after lit pair 5.
+
+| Run of those 180 pairs, three at each rate | Light-off pairs placed | Light-off pose error, largest and median | Lit pose error, largest and median |
+|---|---|---|---|
+| Every pair in order | 45 of 45 | 1.003 mm, 0.300 mm | 2.352 mm, 0.449 mm |
+| 30 per second, earlier intake | 26 of 45 | 398 to 849 mm, 0.4 to 159 mm | 451 to 978 mm, 86 to 194 mm |
+| 30 per second, this intake | 45 of 45 | 1.003 mm, 0.300 mm | 2.351 mm, 0.441 to 0.457 mm |
+
+Two sources remain, and neither is changed here. D78 starts a lit frame at constant
+velocity, and this slide accelerates at up to 0.21 mm per pair², which is 0.19 m/s². A
+frame j pairs after a light-off pair then starts a × j × (j / 2 + 2) short. For j of 3
+that is 0.21 × 3 × 3.5, or 2.2 mm. Three pairs after a light-off pair, lit frames read
+0.9 to 2.3 mm off near both ends of a slide and 0.03 to 0.8 mm off at its middle.
+
+Light-off poses drift along a slide, to 0.98 mm short at 145 mm. D79 read 9.95 mm
+between two such poses 10 mm apart.
+
+A light-off pair takes about 62 ms of the measuring stage: with every pair in order,
+135 lit pairs at 56.2 ms and 45 light-off pairs took 10,390 ms. At 30 pairs per second
+that stage spends near half its time on light-off pairs, and 8.2 to 8.4 lit pairs per
+second pass, each 204 to 208 ms after it arrived. Every pair in order ran 13.0 lit pairs
+per second.
