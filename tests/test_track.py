@@ -111,6 +111,37 @@ def test_light_off_dots_hold_tracking_along_a_smooth_panel():
     assert max(errors[8:]) < 0.0005
 
 
+def test_start_on_curve_follows_a_parabola_through_three_light_off_poses():
+    def fix(k):
+        return float(k), track.rodrigues(np.array([0.0, 0.0, 0.01 * k * k])), \
+            np.array([0.001 * k * k, 0.0, 0.0])
+
+    fixes = [fix(k) for k in (0, 4, 8, 12)]
+    for now, used, more in ((6.0, (0, 4, 8), False), (2.0, (0, 4, 8), False),
+                            (13.0, (4, 8, 12), True)):
+        chosen, could_change = track.fixes_around(now, fixes)
+        assert [f[0] for f in chosen] == list(used) and could_change == more
+        r, t = track.start_on_curve(now, chosen, np.eye(3), np.zeros(3))
+        assert np.allclose(r, fix(now)[1], atol=1e-12)
+        assert np.allclose(t, fix(now)[2], atol=1e-12)
+    chosen, could_change = track.fixes_around(2.0, fixes[:2])
+    assert [f[0] for f in chosen] == [0.0, 4.0] and could_change
+    _, t = track.start_on_curve(2.0, chosen, np.eye(3), np.zeros(3))
+    assert np.allclose(t, [0.008, 0.0, 0.0], atol=1e-12)
+    r, t = track.start_on_curve(1.0, fixes[:1], np.eye(3), np.ones(3))
+    assert np.allclose(r, np.eye(3)) and np.allclose(t, np.ones(3))
+
+
+def test_lit_frames_follow_a_slide_that_speeds_up_and_slows_between_light_off_pairs():
+    positions = synthetic.eased_slide(41, 0.15)
+    clouds, dot_frames, truth = synthetic.panel_frames_at(np.random.default_rng(0), positions)
+    frames = [None if k % 4 == 0 else c for k, c in enumerate(clouds)]
+    seen = [d if k % 4 == 0 else np.empty((0, 3)) for k, d in enumerate(dot_frames)]
+    poses, _ = track.fuse(frames, 0.006, dots=seen)
+    errors = [np.linalg.norm(t - true_t) for (_, t), true_t in zip(poses, truth)]
+    assert max(errors) < 0.0005
+
+
 def test_capture_times_hold_tracking_when_lit_frames_are_left_out():
     clouds, dot_frames, truth = synthetic.panel_frames(np.random.default_rng(0), 40, 0.273)
     kept = [k for k in range(40) if k % 4 != 1]
