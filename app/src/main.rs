@@ -362,6 +362,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
     let pipeline = live::Pipeline::start(&setup, frame, preview, || {});
     let mut left: Option<Vec<u8>> = None;
     let (mut sent, mut dark_pairs, mut in_flight) = (0usize, 0usize, 0usize);
+    let in_flight_limit = live::IN_FLIGHT + live::WAITING_AT_MOST * usize::from(dark_every > 0);
     let captured = client::capture(&node, &request, wait, |event| match event {
         Event::Connected(hello) => println!("connected to {} at {node}", hello.node),
         Event::Frame {
@@ -380,7 +381,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
                 } else if pipeline.send(live::Job::Pair(pair, time, l, pixels)) {
                     sent += 1;
                     in_flight += 1;
-                    while in_flight >= live::IN_FLIGHT {
+                    while in_flight >= in_flight_limit {
                         let Ok(live) = pipeline.results.recv() else {
                             break;
                         };
@@ -396,6 +397,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
         eprintln!("capture failed: {e}");
         return ExitCode::FAILURE;
     }
+    pipeline.send(live::Job::Flush);
     while report.frames < sent {
         let Ok(live) = pipeline.results.recv() else {
             break;
@@ -1788,6 +1790,8 @@ fn replay_live(
     };
     let pipeline = live::Pipeline::start(setup, frame, preview, || {});
     let offered = pairs.iter().filter(|p| !p.0.starts_with("dark_")).count();
+    let in_flight_limit =
+        live::IN_FLIGHT + live::WAITING_AT_MOST * usize::from(offered < pairs.len());
     let mut sent = 0usize;
     let mut frames: Vec<live::LiveFrame> = Vec::new();
     let start = Instant::now();
@@ -1799,7 +1803,7 @@ fn replay_live(
                 pipeline.send(live::Job::Dark(name, time, left, right));
                 continue;
             }
-            while sent - frames.len() >= live::IN_FLIGHT {
+            while sent - frames.len() >= in_flight_limit {
                 let Ok(live) = pipeline.results.recv() else {
                     break;
                 };
@@ -1820,6 +1824,7 @@ fn replay_live(
             pipeline.offer(name, time, left, right);
         }
     }
+    pipeline.send(live::Job::Flush);
     while rate.is_none() && frames.len() < sent {
         let Ok(live) = pipeline.results.recv() else {
             break;

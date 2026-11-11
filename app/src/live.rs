@@ -6,6 +6,7 @@ use crate::depth::{DepthFrame, DepthResult, DepthSetup};
 use crate::fuse::{self, Fusion, Pose, Vec3};
 use crate::mesh::Mesh;
 use crate::tsdf;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -16,8 +17,12 @@ use std::time::Instant;
 pub const FUSION_VOXEL_M: f64 = 0.0005;
 
 /// Lit pairs a caller that sends every pair keeps in a pipeline at once: one in each
-/// stage and one waiting.
+/// stage and one waiting. With light-off pairs it adds `WAITING_AT_MOST`.
 pub const IN_FLIGHT: usize = 3;
+
+/// Measured lit pairs the fusing stage keeps for a later light-off pair at most. Beyond
+/// that it fuses the oldest from the light-off poses there are.
+pub const WAITING_AT_MOST: usize = 8;
 
 pub enum Job {
     /// A lit stereo pair: its name, its capture time in seconds, and its left and right
@@ -28,6 +33,8 @@ pub enum Job {
     Dark(String, f64, Vec<u8>, Vec<u8>),
     /// Start again with no model and no volume.
     Reset,
+    /// Fuse the lit pairs still waiting for a light-off pair, as at the end of a stream.
+    Flush,
     /// Mesh the live volume, closing holes up to a size in metres and decimating to a
     /// triangle count when it is not 0, and reply with the mesh.
     Mesh(f64, usize, Sender<Result<Mesh, String>>),
@@ -169,10 +176,20 @@ struct Measured {
     dark: Option<(String, f64, Result<Vec<Vec3>, String>)>,
 }
 
+/// A measured lit pair in the fusing stage, until it is fused and its result sent.
+struct Unfused {
+    live: LiveFrame,
+    time: f64,
+    arrived: Instant,
+    /// Points to fuse, when the pair was measured in full.
+    points: Option<Vec<Vec3>>,
+}
+
 enum Fuse {
     Frame(Measured),
     /// Start again; the count is of resets up to this one.
     Reset(usize),
+    Flush,
     Mesh(f64, usize, Sender<Result<Mesh, String>>),
 }
 
@@ -273,6 +290,12 @@ impl Pipeline {
                         }
                         continue;
                     }
+                    Message::Job(Job::Flush, ..) => {
+                        if measured_tx.send(Fuse::Flush).is_err() {
+                            break;
+                        }
+                        continue;
+                    }
                     Message::Job(Job::Mesh(fill_m, faces, reply), ..) => {
                         if measured_tx.send(Fuse::Mesh(fill_m, faces, reply)).is_err() {
                             break;
@@ -328,13 +351,82 @@ impl Pipeline {
             let mut volume = tsdf::Live::coarse();
             let size = (params.coarse.width, params.coarse.height);
             let mut epoch = 0;
-            for message in measured_rx {
+            let mut waiting: VecDeque<Unfused> = VecDeque::new();
+            // Fuse a pair that has points, and send its result. False once nobody takes
+            // results.
+            let complete = |fusion: &mut Fusion, volume: &mut tsdf::Live, pair: Unfused| {
+                let mut live = pair.live;
+                if let Some(points) = &pair.points {
+                    let start = Instant::now();
+                    let pose = fusion.add_at(pair.time, points, &[]);
+                    live.fuse_ms = start.elapsed().as_secs_f64() * 1000.0;
+                    let start = Instant::now();
+                    let grid = tsdf::depth_grid(points, &camera, params.step, params.window, size);
+                    let rotation: [f64; 9] = std::array::from_fn(|k| pose.rotation[k / 3][k % 3]);
+                    let surface =
+                        volume.add(&gpu, &grid, points, &camera, (&rotation, &pose.translation));
+                    live.tsdf_ms = start.elapsed().as_secs_f64() * 1000.0;
+                    live.rms = fusion.last_rms;
+                    live.pose = Some(pose);
+                    live.fused = fusion.model().len();
+                    live.model = surface.map_err(|e| (e, fusion.model().to_vec()));
+                }
+                live.latency_ms = pair.arrived.elapsed().as_secs_f64() * 1000.0;
+                let sent = results_tx.send(live).is_ok();
+                if sent {
+                    notify();
+                }
+                sent
+            };
+            // Complete waiting pairs from the oldest on: down to `keep` of them, then those
+            // that no later light-off pair would start differently, and those captured
+            // before `passed`, which two light-off pairs have followed. After each one,
+            // take what the measuring stage has ready into `inbox`, so that stage goes on.
+            let release = |fusion: &mut Fusion,
+                           volume: &mut tsdf::Live,
+                           waiting: &mut VecDeque<Unfused>,
+                           inbox: &mut VecDeque<Fuse>,
+                           (keep, passed): (usize, f64)| {
+                while let Some(front) = waiting.front() {
+                    let ready =
+                        front.points.is_none() || front.time < passed || !fusion.waits(front.time);
+                    if waiting.len() <= keep && !ready {
+                        break;
+                    }
+                    let done = waiting
+                        .pop_front()
+                        .is_none_or(|pair| complete(fusion, volume, pair));
+                    if !done {
+                        return false;
+                    }
+                    while inbox.len() < WAITING_AT_MOST {
+                        match measured_rx.try_recv() {
+                            Ok(message) => inbox.push_back(message),
+                            Err(_) => break,
+                        }
+                    }
+                }
+                true
+            };
+            let mut inbox: VecDeque<Fuse> = VecDeque::new();
+            // Capture times of the last two light-off pairs to come through, posed or not.
+            let mut dark_times = [f64::NEG_INFINITY; 2];
+            while let Some(message) = inbox.pop_front().or_else(|| measured_rx.recv().ok()) {
                 let measured = match message {
                     Fuse::Reset(count) => {
                         if count > epoch {
                             epoch = count;
                             fusion = Fusion::new(FUSION_VOXEL_M);
                             volume.reset();
+                            waiting.clear();
+                            dark_times = [f64::NEG_INFINITY; 2];
+                        }
+                        continue;
+                    }
+                    Fuse::Flush => {
+                        let all = (0, f64::INFINITY);
+                        if !release(&mut fusion, &mut volume, &mut waiting, &mut inbox, all) {
+                            break;
                         }
                         continue;
                     }
@@ -351,25 +443,33 @@ impl Pipeline {
                     epoch = measured.epoch;
                     fusion = Fusion::new(FUSION_VOXEL_M);
                     volume.reset();
+                    waiting.clear();
+                    dark_times = [f64::NEG_INFINITY; 2];
                 }
-                let mut live = LiveFrame {
-                    name: measured.name,
-                    held: measured.held,
-                    skipped: measured.skipped,
-                    latency_ms: 0.0,
-                    dropped: 0,
-                    dark: None,
-                    fuse_ms: 0.0,
-                    tsdf_ms: 0.0,
-                    rms: None,
-                    pose: None,
-                    fused: 0,
-                    model: Ok(Vec::new()),
-                    depth: measured.depth,
+                let mut pair = Unfused {
+                    live: LiveFrame {
+                        name: measured.name,
+                        held: measured.held,
+                        skipped: measured.skipped,
+                        latency_ms: 0.0,
+                        dropped: 0,
+                        dark: None,
+                        fuse_ms: 0.0,
+                        tsdf_ms: 0.0,
+                        rms: None,
+                        pose: None,
+                        fused: 0,
+                        model: Ok(Vec::new()),
+                        depth: measured.depth,
+                    },
+                    time: measured.time,
+                    arrived: measured.arrived,
+                    points: None,
                 };
-                if let (Ok(d), Some(points)) = (&live.depth, &measured.points) {
-                    live.dropped = d.points.len() - points.len();
-                    live.dark = measured.dark.map(|(name, at, found)| {
+                if let (Ok(d), Some(points)) = (&pair.live.depth, measured.points) {
+                    pair.live.dropped = d.points.len() - points.len();
+                    pair.live.dark = measured.dark.map(|(name, at, found)| {
+                        dark_times = [dark_times[1], at];
                         let before = fusion.dots().len();
                         let found = found.map(|dots| (dots.len(), fusion.add_dark_at(at, &dots)));
                         Dark {
@@ -378,31 +478,16 @@ impl Pipeline {
                             mapped: (before, fusion.dots().len()),
                         }
                     });
-                    let start = Instant::now();
-                    fusion.add_at(measured.time, points, &[]);
-                    live.fuse_ms = start.elapsed().as_secs_f64() * 1000.0;
-                    let start = Instant::now();
-                    let grid = tsdf::depth_grid(points, &camera, params.step, params.window, size);
-                    let surface = match fusion.poses.last() {
-                        Some(pose) => {
-                            let rotation: [f64; 9] =
-                                std::array::from_fn(|k| pose.rotation[k / 3][k % 3]);
-                            volume.add(&gpu, &grid, points, &camera, (&rotation, &pose.translation))
-                        }
-                        None => Ok(Vec::new()),
-                    };
-                    live.tsdf_ms = start.elapsed().as_secs_f64() * 1000.0;
-                    live.rms = fusion.last_rms;
-                    live.pose = fusion.poses.last().copied();
-                    live.fused = fusion.model().len();
-                    live.model = surface.map_err(|e| (e, fusion.model().to_vec()));
+                    pair.points = Some(points);
                 }
-                live.latency_ms = measured.arrived.elapsed().as_secs_f64() * 1000.0;
-                if results_tx.send(live).is_err() {
+                waiting.push_back(pair);
+                let some = (WAITING_AT_MOST, dark_times[0]);
+                if !release(&mut fusion, &mut volume, &mut waiting, &mut inbox, some) {
                     break;
                 }
-                notify();
             }
+            let all = (0, f64::INFINITY);
+            release(&mut fusion, &mut volume, &mut waiting, &mut inbox, all);
             (fusion, volume)
         });
         Self {
