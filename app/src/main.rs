@@ -1765,9 +1765,15 @@ fn replay_frame(
 /// Capture rate given to recorded pairs, which have no timestamps, when none is asked for.
 const REPLAY_RATE_HZ: f64 = 30.0;
 
+/// The number that ends a recorded pair's name, as `frame_012` or `dark_012`.
+fn pair_number(name: &str) -> Option<u32> {
+    name.rsplit('_').next()?.parse().ok()
+}
+
 /// Run recorded pairs through the live pipeline and print its rate. Every pair goes in,
 /// back to back, or pairs are offered at `rate` per second as the window offers them, and
-/// the pipeline measures the newest one offered whenever its measuring stage is free.
+/// the pipeline measures the newest lit one offered whenever its measuring stage is free.
+/// A pair named `dark_` goes in as a light-off pair.
 fn replay_live(
     setup: &depth::DepthSetup,
     frame: depth::DepthFrame,
@@ -1781,13 +1787,18 @@ fn replay_live(
         "depth frames"
     };
     let pipeline = live::Pipeline::start(setup, frame, preview, || {});
-    let offered = pairs.len();
+    let offered = pairs.iter().filter(|p| !p.0.starts_with("dark_")).count();
     let mut sent = 0usize;
     let mut frames: Vec<live::LiveFrame> = Vec::new();
     let start = Instant::now();
     for (i, (name, left, right)) in pairs.into_iter().enumerate() {
         let time = i as f64 / rate.unwrap_or(REPLAY_RATE_HZ);
+        let dark = name.starts_with("dark_");
         let Some(hz) = rate else {
+            if dark {
+                pipeline.send(live::Job::Dark(name, time, left, right));
+                continue;
+            }
             while sent - frames.len() >= live::IN_FLIGHT {
                 let Ok(live) = pipeline.results.recv() else {
                     break;
@@ -1803,7 +1814,11 @@ fn replay_live(
                 frames.push(live);
             }
         }
-        pipeline.offer(name, time, left, right);
+        if dark {
+            pipeline.offer_dark(name, time, left, right);
+        } else {
+            pipeline.offer(name, time, left, right);
+        }
     }
     while rate.is_none() && frames.len() < sent {
         let Ok(live) = pipeline.results.recv() else {
@@ -1842,9 +1857,28 @@ fn replay_live(
         latency / n,
         frames.iter().filter(|f| f.held).count()
     );
+    let placed = frames.iter().filter(|f| f.dark.is_some()).count();
+    let mut in_order = true;
+    let mut last = None;
+    for f in &frames {
+        let lit = pair_number(&f.name);
+        let dark = f.dark.as_ref().and_then(|d| pair_number(&d.name));
+        in_order &= dark.is_none_or(|d| last < Some(d) && Some(d) < lit) && last < lit;
+        last = lit;
+    }
+    if placed > 0 || !in_order {
+        println!(
+            "live{pace}: {placed} light-off pairs placed, {}",
+            if in_order {
+                "each between the lit pairs around it"
+            } else {
+                "out of capture order"
+            }
+        );
+    }
     let measured = frames.iter().all(|f| f.depth.is_ok());
     let all = rate.is_some() || frames.len() == sent;
-    closed && measured && all && !frames.is_empty()
+    closed && measured && all && in_order && !frames.is_empty()
 }
 
 fn replay(args: &[String]) -> ExitCode {
@@ -1890,8 +1924,10 @@ fn replay(args: &[String]) -> ExitCode {
             .filter_map(Result::ok)
             .map(|e| e.path())
             .filter(|p| {
-                p.file_name()
-                    .is_some_and(|n| n.to_string_lossy().starts_with("frame_"))
+                p.file_name().is_some_and(|n| {
+                    let n = n.to_string_lossy();
+                    n.starts_with("frame_") || n.starts_with("dark_")
+                })
             })
             .collect(),
         Err(e) => {
@@ -1899,9 +1935,15 @@ fn replay(args: &[String]) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    pairs.sort();
+    pairs.sort_by_key(|p| {
+        let name = p.file_name().map(|n| n.to_string_lossy().into_owned());
+        (name.as_deref().and_then(pair_number), name)
+    });
     if pairs.is_empty() {
-        eprintln!("no frame_* directories in {}", frames_dir.display());
+        eprintln!(
+            "no frame_* or dark_* directories in {}",
+            frames_dir.display()
+        );
         return ExitCode::FAILURE;
     }
     let frame = match depth::DepthFrame::new(false) {
@@ -1940,6 +1982,10 @@ fn replay(args: &[String]) -> ExitCode {
         if (lw, lh) != (setup.width, setup.height) || (rw, rh) != (setup.width, setup.height) {
             println!("{name}: images are not {} × {}", setup.width, setup.height);
             ok = false;
+            continue;
+        }
+        if name.starts_with("dark_") {
+            recorded.push((name, left, right));
             continue;
         }
         let cameras = (&setup.cameras.left, &setup.cameras.right);
