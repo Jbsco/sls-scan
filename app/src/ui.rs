@@ -617,8 +617,8 @@ impl ScanApp {
     }
 
     /// Keep a left frame until its right arrives, then offer the pair to the pipeline,
-    /// which measures the newest pair offered whenever its measuring stage is free. A
-    /// light-off pair is always sent, since the lit pair after it needs it.
+    /// which measures the newest lit pair offered whenever its measuring stage is free,
+    /// with the light-off pair offered before it.
     fn pair_frame(&mut self, name: &str, time: f64, pixels: Vec<u8>) {
         if name.ends_with("/left") {
             self.pending_left = Some(pixels);
@@ -629,7 +629,7 @@ impl ScanApp {
         };
         let pair = name.trim_end_matches("/right").to_owned();
         if name.starts_with("dark_") {
-            worker.pipeline.send(Job::Dark(pair, time, left, pixels));
+            worker.pipeline.offer_dark(pair, time, left, pixels);
             return;
         }
         worker.pipeline.offer(pair, time, left, pixels);
