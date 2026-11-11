@@ -187,11 +187,18 @@ pub struct Finished {
 }
 
 pub struct Pipeline {
-    jobs: Sender<Message>,
+    /// None once the pipeline is closed.
+    jobs: Option<Sender<Message>>,
     intake: Arc<Intake>,
     /// One `LiveFrame` per lit pair measured, in order. A pair measured before a reset
     /// and fused after it has none.
     pub results: Receiver<LiveFrame>,
+    /// Until they are joined.
+    stages: Option<Stages>,
+}
+
+/// The measuring thread, which returns its unused light-off pairs, and the fusing thread.
+struct Stages {
     measuring: JoinHandle<usize>,
     fusing: JoinHandle<(Fusion, tsdf::Live)>,
 }
@@ -399,11 +406,10 @@ impl Pipeline {
             (fusion, volume)
         });
         Self {
-            jobs,
+            jobs: Some(jobs),
             intake,
             results,
-            measuring,
-            fusing,
+            stages: Some(Stages { measuring, fusing }),
         }
     }
 
@@ -417,8 +423,8 @@ impl Pipeline {
             }
         }
         self.jobs
-            .send(Message::Job(job, Instant::now(), epoch))
-            .is_ok()
+            .as_ref()
+            .is_some_and(|jobs| jobs.send(Message::Job(job, Instant::now(), epoch)).is_ok())
     }
 
     /// Offer a lit pair, as `Job::Pair` names it, to be measured once the measuring stage
@@ -439,7 +445,11 @@ impl Pipeline {
         };
         let first = waiting.offer(pair);
         drop(waiting);
-        !first || self.jobs.send(Message::Offered).is_ok()
+        !first
+            || self
+                .jobs
+                .as_ref()
+                .is_some_and(|jobs| jobs.send(Message::Offered).is_ok())
     }
 
     /// Offer a light-off pair, as `Job::Dark` names it, among offered lit pairs. It goes
@@ -458,23 +468,38 @@ impl Pipeline {
         }
     }
 
-    /// Close the pipeline once every queued job is done, and return its model and volume.
-    pub fn finish(self) -> Result<Finished, String> {
-        drop(self.jobs);
-        let unused_dark = self
+    /// Take no more jobs, wait for both stages to finish those queued, and return the
+    /// light-off pairs left unused, the model and the volume. None when already closed.
+    fn close(&mut self) -> Option<Result<(usize, Fusion, tsdf::Live), String>> {
+        self.jobs = None;
+        let stages = self.stages.take()?;
+        let unused = stages
             .measuring
             .join()
-            .map_err(|_| "the measuring stage panicked".to_owned())?;
-        let (fusion, volume) = self
+            .map_err(|_| "the measuring stage panicked".to_owned());
+        let fused = stages
             .fusing
             .join()
-            .map_err(|_| "the fusing stage panicked".to_owned())?;
+            .map_err(|_| "the fusing stage panicked".to_owned());
+        Some(unused.and_then(|unused| fused.map(|(fusion, volume)| (unused, fusion, volume))))
+    }
+
+    /// Close the pipeline once every queued job is done, and return its model and volume.
+    pub fn finish(mut self) -> Result<Finished, String> {
+        let (unused_dark, fusion, volume) = self.close().ok_or("the pipeline is closed")??;
         Ok(Finished {
             fusion,
             volume,
             unused_dark,
             rest: self.results.try_iter().collect(),
         })
+    }
+}
+
+impl Drop for Pipeline {
+    /// Wait for both stages, so no thread still uses the device once its owner goes on.
+    fn drop(&mut self) {
+        let _ = self.close();
     }
 }
 
