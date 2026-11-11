@@ -329,6 +329,10 @@ it from them before the lit frame joins, and `sls-scan depth --dark-every 4` doe
 same without the window (D79). A light-off pair waits beside the lit pair offered after
 it, so it is placed in capture order when newer lit pairs replace older ones (D105).
 
+With that switch on, a lit frame starts between light-off poses: on a curve through the
+two before it and the one after. It is fused once that later pair is posed, so the model
+follows the head about 140 ms later than without dots (D107).
+
 On a software adapter such as lavapipe, the worker and `sls-scan depth` run previews in
 place of depth frames and leave them out of the fused model (D50). Each depth frame drops
 isolated points (D59) and folds into a coarse TSDF at its tracked pose, and the scene
