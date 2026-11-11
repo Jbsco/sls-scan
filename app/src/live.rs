@@ -88,13 +88,62 @@ struct DarkPair {
     right: Vec<u8>,
 }
 
+/// Offered pairs that the measuring stage has not taken.
+#[derive(Default)]
+struct Waiting {
+    /// The newest offered lit pair.
+    lit: Option<Arrival>,
+    /// The newest offered light-off pair.
+    dark: Option<DarkPair>,
+    /// `dark` was offered after `lit`, so it goes with a later lit pair.
+    dark_after_lit: bool,
+    /// Offered lit pairs replaced by a newer one since a pair was last taken.
+    replaced: usize,
+    /// Offered light-off pairs replaced by a newer one.
+    unused_dark: usize,
+}
+
+impl Waiting {
+    /// Keep a lit pair in place of one still waiting. True when none was waiting.
+    fn offer(&mut self, pair: Arrival) -> bool {
+        let first = self.lit.replace(pair).is_none();
+        self.replaced += usize::from(!first);
+        self.dark_after_lit = false;
+        first
+    }
+
+    /// Keep a light-off pair in place of one still waiting.
+    fn offer_dark(&mut self, pair: DarkPair) {
+        self.unused_dark += usize::from(self.dark.replace(pair).is_some());
+        self.dark_after_lit = self.lit.is_some();
+    }
+
+    /// The waiting lit pair, the light-off pair offered before it, and the count of lit
+    /// pairs it replaced.
+    fn take(&mut self) -> Option<(Arrival, Option<DarkPair>, usize)> {
+        let lit = self.lit.take()?;
+        let dark = if self.dark_after_lit {
+            None
+        } else {
+            self.dark.take()
+        };
+        self.dark_after_lit = false;
+        Some((lit, dark, std::mem::take(&mut self.replaced)))
+    }
+
+    /// Drop both waiting pairs, as a reset does.
+    fn clear(&mut self) {
+        self.lit = None;
+        self.dark = None;
+        self.dark_after_lit = false;
+        self.replaced = 0;
+    }
+}
+
 /// What callers and the measuring stage share.
 #[derive(Default)]
 struct Intake {
-    /// The newest offered pair that the measuring stage has not taken.
-    newest: Mutex<Option<Arrival>>,
-    /// Offered pairs replaced by a newer one since a pair was last taken.
-    replaced: AtomicUsize,
+    waiting: Mutex<Waiting>,
     busy: AtomicBool,
     resets: AtomicUsize,
 }
@@ -177,9 +226,15 @@ impl Pipeline {
             for message in jobs_rx {
                 let (pair, skipped) = match message {
                     Message::Offered => {
-                        let taken = shared.newest.lock().ok().and_then(|mut n| n.take());
-                        let Some(pair) = taken else { continue };
-                        (pair, shared.replaced.swap(0, Ordering::AcqRel))
+                        let taken = shared.waiting.lock().ok().and_then(|mut w| w.take());
+                        let Some((pair, dark, skipped)) = taken else {
+                            continue;
+                        };
+                        if let Some(dark) = dark {
+                            unused += usize::from(pending.is_some());
+                            pending = Some(dark);
+                        }
+                        (pair, skipped)
                     }
                     Message::Job(Job::Pair(name, time, left, right), arrived, epoch) => {
                         let pair = Arrival {
@@ -255,7 +310,11 @@ impl Pipeline {
                     break;
                 }
             }
-            unused + usize::from(pending.is_some())
+            let waiting = shared
+                .waiting
+                .lock()
+                .map_or(0, |w| w.unused_dark + usize::from(w.dark.is_some()));
+            unused + usize::from(pending.is_some()) + waiting
         });
         let fusing = thread::spawn(move || {
             let mut fusion = Fusion::new(FUSION_VOXEL_M);
@@ -353,8 +412,8 @@ impl Pipeline {
         let mut epoch = self.intake.resets.load(Ordering::Acquire);
         if matches!(job, Job::Reset) {
             epoch = self.intake.resets.fetch_add(1, Ordering::AcqRel) + 1;
-            if let Ok(mut newest) = self.intake.newest.lock() {
-                *newest = None;
+            if let Ok(mut waiting) = self.intake.waiting.lock() {
+                waiting.clear();
             }
         }
         self.jobs
@@ -375,14 +434,28 @@ impl Pipeline {
             epoch: self.intake.resets.load(Ordering::Acquire),
             held: self.intake.busy.load(Ordering::Acquire),
         };
-        let Ok(mut newest) = self.intake.newest.lock() else {
+        let Ok(mut waiting) = self.intake.waiting.lock() else {
             return false;
         };
-        if newest.replace(pair).is_some() {
-            self.intake.replaced.fetch_add(1, Ordering::AcqRel);
+        let first = waiting.offer(pair);
+        drop(waiting);
+        !first || self.jobs.send(Message::Offered).is_ok()
+    }
+
+    /// Offer a light-off pair, as `Job::Dark` names it, among offered lit pairs. It goes
+    /// with the next lit pair offered after it that the measuring stage takes, and takes
+    /// the place of an offered light-off pair still waiting.
+    pub fn offer_dark(&self, name: String, time: f64, left: Vec<u8>, right: Vec<u8>) {
+        let pair = DarkPair {
+            name,
+            time,
+            epoch: self.intake.resets.load(Ordering::Acquire),
+            left,
+            right,
+        };
+        if let Ok(mut waiting) = self.intake.waiting.lock() {
+            waiting.offer_dark(pair);
         }
-        drop(newest);
-        self.jobs.send(Message::Offered).is_ok()
     }
 
     /// Close the pipeline once every queued job is done, and return its model and volume.
@@ -402,5 +475,101 @@ impl Pipeline {
             unused_dark,
             rest: self.results.try_iter().collect(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lit(name: &str) -> Arrival {
+        Arrival {
+            name: name.to_owned(),
+            time: 0.0,
+            left: Vec::new(),
+            right: Vec::new(),
+            arrived: Instant::now(),
+            epoch: 0,
+            held: false,
+        }
+    }
+
+    fn dark(name: &str) -> DarkPair {
+        DarkPair {
+            name: name.to_owned(),
+            time: 0.0,
+            epoch: 0,
+            left: Vec::new(),
+            right: Vec::new(),
+        }
+    }
+
+    fn names(taken: Option<(Arrival, Option<DarkPair>, usize)>) -> Option<(String, String, usize)> {
+        taken.map(|(l, d, n)| (l.name, d.map_or_else(String::new, |d| d.name), n))
+    }
+
+    fn took(lit: &str, dark: &str, replaced: usize) -> Option<(String, String, usize)> {
+        Some((lit.to_owned(), dark.to_owned(), replaced))
+    }
+
+    #[test]
+    fn newest_lit_pair_replaces_one_still_waiting() {
+        let mut waiting = Waiting::default();
+        assert!(waiting.offer(lit("1")));
+        assert!(!waiting.offer(lit("2")));
+        assert!(!waiting.offer(lit("3")));
+        assert_eq!(names(waiting.take()), took("3", "", 2));
+        assert!(waiting.take().is_none());
+        assert!(waiting.offer(lit("4")));
+        assert_eq!(names(waiting.take()), took("4", "", 0));
+    }
+
+    #[test]
+    fn light_off_pair_goes_with_the_lit_pair_after_it() {
+        let mut waiting = Waiting::default();
+        waiting.offer_dark(dark("0"));
+        assert!(waiting.take().is_none());
+        waiting.offer(lit("1"));
+        waiting.offer(lit("2"));
+        assert_eq!(names(waiting.take()), took("2", "0", 1));
+        waiting.offer(lit("3"));
+        waiting.offer_dark(dark("4"));
+        assert_eq!(names(waiting.take()), took("3", "", 0));
+        assert!(waiting.take().is_none());
+        waiting.offer(lit("5"));
+        assert_eq!(names(waiting.take()), took("5", "4", 0));
+    }
+
+    #[test]
+    fn light_off_pair_waits_for_a_lit_pair_newer_than_one_it_followed() {
+        let mut waiting = Waiting::default();
+        waiting.offer(lit("3"));
+        waiting.offer_dark(dark("4"));
+        waiting.offer(lit("5"));
+        assert_eq!(names(waiting.take()), took("5", "4", 1));
+    }
+
+    #[test]
+    fn newer_light_off_pair_replaces_one_still_waiting() {
+        let mut waiting = Waiting::default();
+        waiting.offer_dark(dark("0"));
+        waiting.offer(lit("1"));
+        waiting.offer_dark(dark("4"));
+        assert_eq!(waiting.unused_dark, 1);
+        assert_eq!(names(waiting.take()), took("1", "", 0));
+        waiting.offer(lit("5"));
+        assert_eq!(names(waiting.take()), took("5", "4", 0));
+    }
+
+    #[test]
+    fn reset_drops_waiting_pairs() {
+        let mut waiting = Waiting::default();
+        waiting.offer_dark(dark("0"));
+        waiting.offer(lit("1"));
+        waiting.offer(lit("2"));
+        waiting.clear();
+        assert!(waiting.take().is_none());
+        assert!(waiting.offer(lit("3")));
+        assert_eq!(names(waiting.take()), took("3", "", 0));
     }
 }

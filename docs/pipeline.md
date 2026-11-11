@@ -288,7 +288,8 @@ Recorded pairs replay through the same path (D47):
 `slscan replay-reference` writes a NumPy reference beside each pair, and `sls-scan
 replay` compares each GPU depth frame with it. It then runs the pairs through the live
 pipeline and prints its rate. With `--rate 30` it offers them at 30 per second as the
-window does, and a newer pair replaces one still waiting (D102).
+window does, and a newer pair replaces one still waiting (D102). Recorded light-off
+pairs, `dark_000` onward, go in with them (D105).
 
 On the CPU fallback a preview skips refinement (D49). It matches blocks at 1/8
 resolution, keeps lit blocks and triangulates each at its centre. Replay compares
@@ -325,7 +326,8 @@ calibration through the Python tool and writes those parameters for the next run
 The "Reference dots (smooth panels)" switch takes every 4th stereo pair with the pattern
 light off. The worker finds that pair's dots against the next lit depth frame and poses
 it from them before the lit frame joins, and `sls-scan depth --dark-every 4` does the
-same without the window (D79).
+same without the window (D79). A light-off pair waits beside the lit pair offered after
+it, so it is placed in capture order when newer lit pairs replace older ones (D105).
 
 On a software adapter such as lavapipe, the worker and `sls-scan depth` run previews in
 place of depth frames and leave them out of the fused model (D50). Each depth frame drops
