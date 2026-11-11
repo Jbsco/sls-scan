@@ -2318,3 +2318,60 @@ That test had a second weakness on a busy host. A stand-in that runs late drops 
 and this test waited for all 24 and failed after 180 s. It now waits for those that
 arrived and needs half of them. With its stand-in paused for 100 ms in every 300 ms,
 21 of 24 pairs arrived and it passed three times of three.
+
+## D107. Lit frames between light-off poses (2026-11-11)
+
+D78 started each lit frame at constant velocity from its last two light-off pairs. D105
+measured what that costs once a head changes speed. On a smooth panel ICP keeps that
+start along the panel, so a lit frame is as wrong as its start.
+
+A lit frame now starts on a curve through light-off poses around it, by capture time:
+a parabola through the two before it and the one after. Between a run's first two
+light-off pairs it uses that one before and two after. After its last one it uses the
+last three, as a light-off pair's own start does. A lit frame therefore waits for the
+light-off pair after it.
+
+`track.fuse` keeps lit frames until those poses are known and returns poses in frame
+order. `fuse::Fusion::track` adds a sequence in that order, and `sls-scan fusion-check`
+finds Rust equal to NumPy on plain, dotted, light-off, dropped and eased sets. `slscan
+dot-fusion-vectors --ease` writes a slide that starts and ends at rest.
+
+In our live pipeline the fusing stage keeps measured lit pairs until the next light-off
+pair is posed. It releases them as well once two light-off pairs have followed, eight
+are waiting, or a caller sends `Job::Flush` at a stream's end. While it fuses a run of
+them it goes on taking measured pairs, so the measuring stage does not stop.
+
+Lit pose errors below are from `track.fuse` on D78's panel, along a 150 mm stroke and
+back that slows at each end, with every 4th frame light-off. Light-off poses there read
+0.10 to 0.11 mm at most.
+
+| Peak acceleration | D78's start, after the third light-off pair | This start, every lit frame |
+|---|---|---|
+| 0.19 m/s² | 2.110 mm largest, 0.556 mm median | 0.111 mm, 0.050 mm |
+| 0.74 m/s² | 8.323 mm, 2.139 mm | 0.344 mm, 0.204 mm |
+| 1.67 m/s² | 18.920 mm, 4.680 mm | 1.132 mm, 0.669 mm |
+
+At one speed, D78's 3 and 7 mm per frame, lit frames before the second light-off pair
+now read 0.07 and 0.10 mm, where they were 9 and 21 mm off. Later ones read 0.35 and
+0.24 mm at most against 0.22 and 0.21 mm. Those largest values are frames after a
+run's last light-off pair, where three noisy poses are continued.
+
+D105's stand-in run through our live pipeline, 180 pairs with every 4th one light-off:
+
+| Measurement | D105 | Now |
+|---|---|---|
+| Lit pose error at 30 per second, largest | 2.351 mm | 1.008 to 1.018 mm |
+| Lit pose error at 30 per second, median | 0.441 to 0.457 mm | 0.278 to 0.314 mm |
+| Lit pose error, every pair in order | 2.352 mm, 0.449 mm | 1.012 mm, 0.203 mm |
+| Lit pairs per second at 30 per second | 8.2 to 8.4 | 7.7 to 7.8 |
+| Result after arrival | 204 to 208 ms | 348 to 351 ms |
+
+Lit frames now sit at that run's light-off pose error, 1.003 mm at most, which D105
+left open. Each result comes about 140 ms later, since a lit pair waits for the
+light-off pair after it and for the lit pair that places its dots. Without light-off
+pairs nothing waits: our sweep ran 22.0 to 22.3 pairs per second with results 102 to
+104 ms after arrival, as before.
+
+A curve shows only what light-off poses show. A 40 mm stroke from rest to rest in 8
+frames, with light-off pairs at its start, middle and end, reads as one speed, and its
+lit frames were up to 3.5 mm off.
