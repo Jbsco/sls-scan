@@ -2375,3 +2375,54 @@ pairs nothing waits: our sweep ran 22.0 to 22.3 pairs per second with results 10
 A curve shows only what light-off poses show. A 40 mm stroke from rest to rest in 8
 frames, with light-off pairs at its start, middle and end, reads as one speed, and its
 lit frames were up to 3.5 mm off.
+
+## D108. Held ICP steps about a frame's points (2026-11-11)
+
+D105 read light-off poses as drifting along a slide, to 0.98 mm short at 145 mm. That
+reading compared camera positions. Split into parts, those poses tilt: up to 1.97 mrad
+about an axis in the panel, with their view's centre at the panel within 0.044 mm. At
+0.5 m that tilt moves a camera 0.99 mm and leaves the panel under it in place.
+
+Lit frames took that tilt as a slide. D78's ICP keeps a lit frame's start along
+directions a surface leaves nearly free and solves the others. It wrote each step as a
+turn about the model's origin plus a shift. A flat panel leaves shifts along it free, so
+ICP removed a start's tilt by a turn about that origin, which is our first camera, 0.5 m
+from the panel. A 1.9 mrad turn there moves a frame's points 0.96 mm along the panel.
+
+Each step is now written about the centroid of a frame's points at its start. A turn
+counts by the shift it gives a point at those points' RMS distance from that centroid,
+which puts turns and shifts in one unit. A tilt that ICP corrects then leaves that
+centroid where its start put it. `track.icp` and `fuse::icp_within` do this only with a
+hold, so frames without light-off pairs are computed as before. `sls-scan fusion-check`
+finds Rust equal to NumPy on our gate's six sets.
+
+D105's stand-in run, 180 pairs with every 4th one light-off, largest and median:
+
+| Poses | Camera position | Turn | View centre at the panel |
+|---|---|---|---|
+| Light-off, D107 and now | 1.003 mm, 0.300 mm | 1.97 mrad, 0.61 mrad | 0.044 mm, 0.021 mm |
+| Lit, every pair in order, D107 | 1.012 mm, 0.203 mm | 0.18 mrad, 0.11 mrad | 1.001 mm, 0.177 mm |
+| Lit, every pair in order, now | 0.145 mm, 0.045 mm | 0.16 mrad, 0.10 mrad | 0.134 mm, 0.030 mm |
+| Lit at 30 per second, D107, three runs | 1.008 to 1.018 mm, 0.278 to 0.314 mm | 0.16 mrad, 0.09 to 0.10 mrad | 1.001 to 1.015 mm, 0.238 to 0.289 mm |
+| Lit at 30 per second, now, six runs | 0.135 to 0.143 mm, 0.043 to 0.047 mm | 0.16 to 0.24 mrad, 0.09 to 0.10 mrad | 0.133 mm, 0.027 to 0.028 mm |
+
+Between light-off pairs, lit frames now read 0.079 mm at most. That 0.145 mm is one of
+three frames after this run's last light-off pair, where a curve is continued. At 30
+per second 7.9 to 8.0 lit pairs per second pass, each result 349 to 351 ms after
+arrival, as in D107.
+
+On D107's bench in `track.fuse`, lit frames read 0.071, 0.355 and 1.123 mm at 0.19,
+0.74 and 1.67 m/s², against 0.111, 0.344 and 1.132 mm. Its two faster rows are set by
+their curve, not by tilt. At one speed, 3 and 7 mm per frame, lit frames read 0.084 and
+0.052 mm at most against 0.352 and 0.242 mm.
+
+A curved panel can leave a turn and a slide mixed. On that bench's cylinder of 1.5 m
+radius, a 2 mrad tilt about a line along its axis equals a 3 mm slide around it, and no
+surface term tells them apart. Started with that tilt, a frame ended 1.42 mm along the
+panel before this change, 0.92 mm with turns about its centroid in radians, and 0.11 mm
+with turns in that one unit. Tilted across its axis, it ended 2.01 mm off before and
+0.0003 mm now.
+
+Light-off poses still tilt by up to 2 mrad. A pair shows 12 to 15 dots across about
+100 mm, so 0.1 mm of depth error at one side tilts its pose 1 mrad. Dots first seen in
+that pair join the map at that tilt.
