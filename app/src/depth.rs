@@ -9,6 +9,7 @@ use crate::rectify::{Rectifier, RectifyParams};
 use crate::refine::{RefineParams, Refiner, SAMPLE_FLOATS};
 use std::io::{self, Write};
 use std::path::Path;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Instant;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -180,6 +181,8 @@ pub struct DepthFrame {
     rectifier: Rectifier,
     matcher: BlockMatcher,
     refiner: Refiner,
+    /// Dot masks of the cameras and image size `dots` last saw.
+    valid: Mutex<Option<Arc<crate::dots::Valid>>>,
     pub adapter: String,
 }
 
@@ -414,6 +417,7 @@ impl DepthFrame {
             rectifier: Rectifier::with(&gpu),
             matcher: BlockMatcher::with(&gpu),
             refiner: Refiner::with(&gpu),
+            valid: Mutex::new(None),
             adapter: gpu.adapter.clone(),
             gpu,
         })
@@ -442,12 +446,26 @@ impl DepthFrame {
         let (w, h) = (params.coarse.width, params.coarse.height);
         let left = self.rectifier.rectify(cameras.0, w, h, left_raw)?;
         let right = self.rectifier.rectify(cameras.1, w, h, right_raw)?;
-        Ok(crate::dots::find_dots(
-            cameras.0,
-            cameras.1,
+        let size = (w as usize, h as usize);
+        let valid = {
+            let mut kept = self.valid.lock().unwrap_or_else(PoisonError::into_inner);
+            match kept
+                .as_ref()
+                .filter(|v| v.serves(cameras.0, cameras.1, size.0, size.1))
+            {
+                Some(valid) => Arc::clone(valid),
+                None => {
+                    let valid = Arc::new(crate::dots::Valid::new(
+                        cameras.0, cameras.1, size.0, size.1,
+                    ));
+                    *kept = Some(Arc::clone(&valid));
+                    valid
+                }
+            }
+        };
+        Ok(crate::dots::find_dots_within(
+            &valid,
             (&left, &right),
-            w as usize,
-            h as usize,
             surface,
             params.near_m,
             params.far_m,

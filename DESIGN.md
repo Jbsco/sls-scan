@@ -2426,3 +2426,43 @@ with turns in that one unit. Tilted across its axis, it ended 2.01 mm off before
 Light-off poses still tilt by up to 2 mrad. A pair shows 12 to 15 dots across about
 100 mm, so 0.1 mm of depth error at one side tilts its pose 1 mrad. Dots first seen in
 that pair join the map at that tilt.
+
+## D109. Light-off pair in 8 ms (2026-11-11)
+
+D105 put a light-off pair at about 62 ms of our measuring stage, by difference. Timed
+in place on that run's 1456 × 1088 pairs, `DepthFrame::dots` took 54 ms:
+
+| Step, both images | Time |
+|---|---|
+| Rectify | 1.2 ms |
+| `rectified_valid` masks | 32.8 ms |
+| `dot_centres` | 20.2 ms, of which `box_mean` 12.8 ms |
+| Surface disparity at each left dot | 0.2 ms |
+
+Three changes cut that to 8 ms, and none changes a result.
+
+- Masks depend on a pair of cameras and an image size. `dots::Valid` builds them, and
+  `DepthFrame` keeps one while both stay equal. A run's first light-off pair builds
+  them and takes 28 to 29 ms.
+- `find_dots_within` finds left and right dot centres on two threads.
+- `box_mean` summed each column down an image, a row apart in memory at every step. It
+  now adds and drops whole rows, and one image takes 2.7 ms against 6.4 ms.
+
+D105's stand-in run, three runs before and three after, on D108's code:
+
+| Measurement | Before | Now |
+|---|---|---|
+| Light-off pair in the measuring stage | 54.1 to 54.7 ms | 7.9 to 8.2 ms |
+| Lit pairs per second, every pair in order | 11.3 to 11.4 | 16.7 to 16.8 |
+| Lit pairs per second at 30 per second | 8.2 to 8.3 | 15.3 to 15.5 |
+| Lit pairs fused of 135 at 30 per second | 51 | 94 to 95 |
+| Result after arrival at 30 per second | 340 to 342 ms | 242 to 248 ms |
+| Lit pose error at 30 per second, largest | 0.137 to 0.144 mm | 0.136 to 0.148 mm |
+
+With every pair in order, each pose is equal to its last digit before and after.
+`sls-scan dot-check` finds Rust dots within 0.079 µm of NumPy's.
+
+Lit rates rose by more than those 46 ms explain. A lit pair's depth stages read 50 ms
+where they read 69 ms at 30 per second, and its TSDF step 16 ms against 44 ms. We did
+not trace why. Mask building wrote two 1.6 MB arrays and their temporaries for every
+light-off pair, which is one candidate.

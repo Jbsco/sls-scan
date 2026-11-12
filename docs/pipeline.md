@@ -330,6 +330,7 @@ light off. The worker finds that pair's dots against the next lit depth frame an
 it from them before the lit frame joins, and `sls-scan depth --dark-every 4` does the
 same without the window (D79). A light-off pair waits beside the lit pair offered after
 it, so it is placed in capture order when newer lit pairs replace older ones (D105).
+Finding its dots takes about 8 ms of the worker's measuring stage (D109).
 
 With that switch on, a lit frame starts between light-off poses: on a curve through the
 two before it and the one after. It is fused once that later pair is posed, so the model

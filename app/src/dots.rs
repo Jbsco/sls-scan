@@ -3,6 +3,7 @@
 
 use crate::depth;
 use crate::rectify::RectifyParams;
+use std::thread;
 
 /// Window of the local background mean, in pixels.
 const BACKGROUND: usize = 61;
@@ -45,13 +46,23 @@ fn box_mean(image: &[u8], width: usize, height: usize, size: usize) -> Vec<u8> {
     }
     let count = (size * size) as u32;
     let mut out = vec![0u8; width * height];
-    for x in 0..width {
-        let at = |y: isize| rows[reflect101(y, height as isize) * width + x];
-        let mut sum: u32 = (-half..=half).map(at).sum();
-        for y in 0..height {
-            out[y * width + x] = ((sum + count / 2) / count) as u8;
-            let y = y as isize;
-            sum = sum + at(y + half + 1) - at(y - half);
+    let row = |y: isize| {
+        let y = reflect101(y, height as isize);
+        &rows[y * width..(y + 1) * width]
+    };
+    let mut sums = vec![0u32; width];
+    for y in -half..=half {
+        for (sum, value) in sums.iter_mut().zip(row(y)) {
+            *sum += value;
+        }
+    }
+    for (y, line) in out.chunks_exact_mut(width).enumerate() {
+        for (mean, sum) in line.iter_mut().zip(&sums) {
+            *mean = ((sum + count / 2) / count) as u8;
+        }
+        let y = y as isize;
+        for ((sum, enters), leaves) in sums.iter_mut().zip(row(y + half + 1)).zip(row(y - half)) {
+            *sum = *sum + enters - leaves;
         }
     }
     out
@@ -107,6 +118,49 @@ pub fn rectified_valid(
         out
     };
     shrink(&shrink(&inside, true), false)
+}
+
+/// Where each rectified image of a pair can show a whole dot: `rectified_valid` of both
+/// cameras at one image size, which changes only with them.
+pub struct Valid {
+    left: RectifyParams,
+    right: RectifyParams,
+    width: usize,
+    height: usize,
+    masks: (Vec<bool>, Vec<bool>),
+}
+
+impl Valid {
+    pub fn new(left: &RectifyParams, right: &RectifyParams, width: usize, height: usize) -> Self {
+        let masks = thread::scope(|scope| {
+            let other = scope.spawn(|| rectified_valid(right, width, height, MARGIN));
+            let mine = rectified_valid(left, width, height, MARGIN);
+            (
+                mine,
+                other
+                    .join()
+                    .unwrap_or_else(|e| std::panic::resume_unwind(e)),
+            )
+        });
+        Self {
+            left: left.clone(),
+            right: right.clone(),
+            width,
+            height,
+            masks,
+        }
+    }
+
+    /// Whether these masks are those of this pair of cameras at this image size.
+    pub fn serves(
+        &self,
+        left: &RectifyParams,
+        right: &RectifyParams,
+        width: usize,
+        height: usize,
+    ) -> bool {
+        self.width == width && self.height == height && self.left == *left && self.right == *right
+    }
 }
 
 /// Centres (x, y) of dark dots in an 8-bit image under room light: 8-connected regions
@@ -236,10 +290,29 @@ pub fn find_dots(
     near_m: f64,
     far_m: f64,
 ) -> Vec<[f64; 3]> {
-    let valid_left = rectified_valid(left, width, height, MARGIN);
-    let valid_right = rectified_valid(right, width, height, MARGIN);
-    let cl = dot_centres(rectified.0, width, height, Some(&valid_left));
-    let cr = dot_centres(rectified.1, width, height, Some(&valid_right));
+    let valid = Valid::new(left, right, width, height);
+    find_dots_within(&valid, rectified, surface, near_m, far_m)
+}
+
+/// Dots as `find_dots` gives them, with the cameras, image size and masks of `valid`.
+pub fn find_dots_within(
+    valid: &Valid,
+    rectified: (&[u8], &[u8]),
+    surface: &[[f64; 3]],
+    near_m: f64,
+    far_m: f64,
+) -> Vec<[f64; 3]> {
+    let (left, right, width, height) = (&valid.left, &valid.right, valid.width, valid.height);
+    let (cl, cr) = thread::scope(|scope| {
+        let other = scope.spawn(|| dot_centres(rectified.1, width, height, Some(&valid.masks.1)));
+        let mine = dot_centres(rectified.0, width, height, Some(&valid.masks.0));
+        (
+            mine,
+            other
+                .join()
+                .unwrap_or_else(|e| std::panic::resume_unwind(e)),
+        )
+    });
     let expected = surface_disparity(left, right, surface, &cl);
     let mut matches = Vec::new();
     for (p, e) in cl.iter().zip(&expected) {
@@ -286,6 +359,26 @@ mod tests {
                 assert_eq!(u32::from(out[y * w + x]), (sum + 12) / 25);
             }
         }
+    }
+
+    #[test]
+    fn masks_serve_their_cameras_and_size_only() {
+        let camera = |shift: f32| RectifyParams {
+            inverse: [0.025, 0.0, -0.5, 0.0, 0.025, -0.5, 0.0, 0.0, 1.0],
+            focal: [40.0, 40.0],
+            centre: [20.0 + shift, 20.0],
+            distortion: [0.0; 5],
+            projection: [0.0; 12],
+            rotation: [0.0; 9],
+        };
+        let (left, right) = (camera(0.0), camera(10.0));
+        let valid = Valid::new(&left, &right, 40, 30);
+        assert!(valid.serves(&left, &right, 40, 30));
+        assert!(!valid.serves(&left, &right, 30, 40));
+        assert!(!valid.serves(&right, &left, 40, 30));
+        assert_eq!(valid.masks.0, rectified_valid(&left, 40, 30, MARGIN));
+        assert_eq!(valid.masks.1, rectified_valid(&right, 40, 30, MARGIN));
+        assert!(valid.masks.0[15 * 40 + 35] && !valid.masks.1[15 * 40 + 35]);
     }
 
     #[test]
