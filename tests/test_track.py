@@ -142,6 +142,20 @@ def test_lit_frames_follow_a_slide_that_speeds_up_and_slows_between_light_off_pa
     assert max(errors) < 0.0005
 
 
+def test_held_icp_turns_a_tilted_start_about_its_points():
+    rng = np.random.default_rng(3)
+    clouds, _, truth = synthetic.panel_frames_at(rng, [0.0, 0.0, 0.15])
+    model = track.voxel_average(np.vstack(clouds[:2]), 0.0005)
+    model_normals = track.normals(model)
+    source, middle = clouds[2], clouds[2].mean(axis=0)
+    for axis, limit in (((0.0, 1.0, 0.0), 2e-5), ((1.0, 0.0, 0.0), 2e-4)):
+        tilt = track.rodrigues(0.002 * np.array(axis))
+        start = truth[2] + middle - tilt @ middle
+        r, t, _ = track.icp(source, model, model_normals, tilt, start, hold_below=1e-4)
+        assert np.linalg.norm(r @ middle + t - (middle + truth[2])) < limit
+        assert np.linalg.norm(track.rotation_vector(r)) < 2e-4
+
+
 def test_capture_times_hold_tracking_when_lit_frames_are_left_out():
     clouds, dot_frames, truth = synthetic.panel_frames(np.random.default_rng(0), 40, 0.273)
     kept = [k for k in range(40) if k % 4 != 1]
