@@ -35,7 +35,7 @@ fn limit_label(value: f64, limit: f64, what: &str) -> egui::RichText {
 }
 
 /// With reference dots on, every this many-th stereo pair is taken with the pattern
-/// light off (`DESIGN.md` D77).
+/// light off unless the panel sets another count (`DESIGN.md` D77, D114).
 const DARK_EVERY: u32 = 4;
 /// Points drawn in the scene at most, every so many of a larger cloud.
 const MAX_DRAWN: usize = 20_000;
@@ -76,8 +76,10 @@ pub struct ScanApp {
     stereo_frames: u32,
     /// Stereo pairs per second asked of the node, or 0 for as fast as it can.
     stereo_rate: u32,
-    /// Take every `DARK_EVERY`-th stereo pair with the pattern light off for reference dots.
+    /// Take stereo pairs with the pattern light off for reference dots.
     dots: bool,
+    /// With `dots`, every this many-th stereo pair is light-off.
+    dark_every: u32,
     depth: Option<DepthWorker>,
     pending_left: Option<Vec<u8>>,
     cloud: Vec<[f64; 3]>,
@@ -134,6 +136,7 @@ impl Default for ScanApp {
             stereo_frames: 30,
             stereo_rate: 0,
             dots: false,
+            dark_every: DARK_EVERY,
             depth: None,
             pending_left: None,
             cloud: Vec::new(),
@@ -235,7 +238,11 @@ impl ScanApp {
             steps: self.steps,
             frames: if stereo { self.stereo_frames } else { 1 },
             rate_hz: if stereo { self.stereo_rate } else { 0 },
-            dark_every: if stereo && self.dots { DARK_EVERY } else { 0 },
+            dark_every: if stereo && self.dots {
+                self.dark_every
+            } else {
+                0
+            },
             exposures: self
                 .scan_params
                 .as_ref()
@@ -776,7 +783,19 @@ impl ScanApp {
             ui.label("Depth parameters");
             ui.text_edit_singleline(&mut self.params_path);
             ui.checkbox(&mut self.dots, "Reference dots (smooth panels)")
-                .on_hover_text("Take every 4th pair with the pattern light off and track from the dots seen in it");
+                .on_hover_text(
+                    "Take pairs with the pattern light off and track from the dots seen in them",
+                );
+            if self.dots {
+                ui.add(
+                    egui::DragValue::new(&mut self.dark_every)
+                        .range(2..=8)
+                        .prefix("light-off pair every "),
+                )
+                .on_hover_text(
+                    "Every 2nd follows quick moves closest and blinks the pattern light most",
+                );
+            }
         }
         if self.set == "scan" {
             ui.label("Scan parameters")
