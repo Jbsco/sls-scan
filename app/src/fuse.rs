@@ -497,8 +497,11 @@ fn posed_bounds(pose: &Pose, lo: &Vec3, hi: &Vec3) -> (Vec3, Vec3) {
 /// smooth surface leaves free. With `hold_below` above zero, each step holds the pose at
 /// `start` along directions whose normal-equation eigenvalue lies below `hold_below` times
 /// the largest, which the surface leaves nearly free, and solves the others from the
-/// surface. Returns the pose and the RMS
-/// point-to-plane residual of the last matched pairs.
+/// surface. Those motions turn about the centroid of `source` at `start`, and a turn
+/// counts by the shift it gives a point at `source`'s RMS distance from that centroid. A
+/// tilt the surface corrects then leaves the centroid's place along the surface as
+/// `start` gave it. Returns the pose and the RMS point-to-plane residual of the last
+/// matched pairs.
 pub(crate) fn icp_with(
     source: &[Vec3],
     target: &[Vec3],
@@ -538,6 +541,24 @@ fn icp_within(
     let mut pose = start;
     let mut rms = f64::INFINITY;
     let (source_lo, source_hi) = bounds(source);
+    let (centre, reach) = if hold_below > 0.0 && !source.is_empty() {
+        let count = source.len() as f64;
+        let mut middle = [0.0; 3];
+        for s in source {
+            middle = add(&middle, s);
+        }
+        let middle = [middle[0] / count, middle[1] / count, middle[2] / count];
+        let squares: f64 = source
+            .iter()
+            .map(|s| {
+                let d = sub(s, &middle);
+                dot(&d, &d)
+            })
+            .sum();
+        (start.apply(&middle), (squares / count).sqrt())
+    } else {
+        ([0.0; 3], 1.0)
+    };
     let grids: Vec<Grid> = thread::scope(|scope| {
         let handles: Vec<_> = limits
             .iter()
@@ -567,8 +588,8 @@ fn icp_within(
                     };
                     let n = &target_normals[j];
                     let residual = dot(&sub(&p, &target[j]), n);
-                    let c = cross(&p, n);
-                    let a = [c[0], c[1], c[2], n[0], n[1], n[2]];
+                    let c = cross(&sub(&p, &centre), n);
+                    let a = [c[0] / reach, c[1] / reach, c[2] / reach, n[0], n[1], n[2]];
                     for r in 0..6 {
                         for k in 0..6 {
                             ata[r][k] += a[r] * a[k];
@@ -598,12 +619,14 @@ fn icp_within(
             }
             for (s, q) in fixed {
                 let p = pose.apply(s);
+                let arm = sub(&p, &centre);
+                let arm = [arm[0] / reach, arm[1] / reach, arm[2] / reach];
                 for k in 0..3 {
                     let mut a = [0.0; 6];
                     a[..3].copy_from_slice(&match k {
-                        0 => [0.0, p[2], -p[1]],
-                        1 => [-p[2], 0.0, p[0]],
-                        _ => [p[1], -p[0], 0.0],
+                        0 => [0.0, arm[2], -arm[1]],
+                        1 => [-arm[2], 0.0, arm[0]],
+                        _ => [arm[1], -arm[0], 0.0],
                     });
                     a[3 + k] = 1.0;
                     let b = q[k] - p[k];
@@ -618,8 +641,18 @@ fn icp_within(
             let step = if hold_below > 0.0 {
                 let moved_by = mul(&pose.rotation, &transpose(&start.rotation));
                 let w = rotation_vector(&moved_by);
-                let shift = sub(&pose.translation, &mul_vec(&moved_by, &start.translation));
-                let away = [w[0], w[1], w[2], shift[0], shift[1], shift[2]];
+                let shift = sub(
+                    &sub(&pose.translation, &centre),
+                    &mul_vec(&moved_by, &sub(&start.translation, &centre)),
+                );
+                let away = [
+                    reach * w[0],
+                    reach * w[1],
+                    reach * w[2],
+                    shift[0],
+                    shift[1],
+                    shift[2],
+                ];
                 held_step(ata, atb, &away, hold_below)
             } else {
                 let Some(step) = solve6(ata, atb) else {
@@ -627,16 +660,17 @@ fn icp_within(
                 };
                 step
             };
-            let dr = rodrigues(&[step[0], step[1], step[2]]);
+            let turn = [step[0] / reach, step[1] / reach, step[2] / reach];
+            let dr = rodrigues(&turn);
             pose = Pose {
                 rotation: mul(&dr, &pose.rotation),
                 translation: add(
-                    &mul_vec(&dr, &pose.translation),
+                    &add(&mul_vec(&dr, &sub(&pose.translation, &centre)), &centre),
                     &[step[3], step[4], step[5]],
                 ),
             };
             rms = (squares / pairs as f64).sqrt();
-            let rotation_step = dot(&[step[0], step[1], step[2]], &[step[0], step[1], step[2]]);
+            let rotation_step = dot(&turn, &turn);
             let translation_step = dot(&[step[3], step[4], step[5]], &[step[3], step[4], step[5]]);
             if rotation_step.sqrt() < 1e-7 && translation_step.sqrt() < 1e-8 {
                 break;
@@ -1215,6 +1249,46 @@ mod tests {
             let x = pose.translation[0];
             assert!((x - speeding[i]).abs() < 1e-6, "frame {i} at {x}");
         }
+    }
+
+    #[test]
+    fn held_alignment_turns_a_tilted_start_about_its_points() {
+        let plate: Vec<Vec3> = (0..6000)
+            .map(|k| {
+                [
+                    f64::from(k % 100) * 0.006 - 0.3,
+                    f64::from(k / 100) * 0.006 - 0.18,
+                    1.0,
+                ]
+            })
+            .collect();
+        let plate_normals = vec![[0.0, 0.0, 1.0]; plate.len()];
+        let source: Vec<Vec3> = plate
+            .iter()
+            .map(|p| [p[0] - 0.05, p[1], p[2]])
+            .filter(|p| p[0].abs() < 0.2)
+            .collect();
+        let count = source.len() as f64;
+        let sum = source.iter().fold([0.0; 3], |a, p| add(&a, p));
+        let middle = [sum[0] / count, sum[1] / count, sum[2] / count];
+        let tilt = rodrigues(&[0.0, 0.002, 0.0]);
+        let start = Pose {
+            rotation: tilt,
+            translation: add(&sub(&middle, &mul_vec(&tilt, &middle)), &[0.05, 0.0, 0.0]),
+        };
+        let (pose, _) = icp_with(
+            &source,
+            &plate,
+            &plate_normals,
+            start,
+            &LIMITS,
+            &[],
+            HOLD_BELOW,
+        );
+        let off = sub(&pose.apply(&middle), &add(&middle, &[0.05, 0.0, 0.0]));
+        assert!(dot(&off, &off).sqrt() < 1e-7, "centroid moved {off:?}");
+        let turn = rotation_vector(&pose.rotation);
+        assert!(dot(&turn, &turn).sqrt() < 1e-6, "tilt left {turn:?}");
     }
 
     #[test]

@@ -57,7 +57,10 @@ def icp(source: np.ndarray, target: np.ndarray, target_normals: np.ndarray, rota
     motion a smooth surface leaves free. With hold_below above zero, each step holds the
     pose at the initial pose along directions of motion whose normal-equation eigenvalue
     lies below hold_below times the largest, which the surface leaves nearly free, and
-    solves the others from the surface. Returns the rotation and translation that take
+    solves the others from the surface. Those motions turn about the centroid of source at
+    the initial pose, and a turn counts by the shift it gives a point at source's RMS
+    distance from that centroid. A tilt the surface corrects then leaves the centroid's
+    place along the surface as the initial pose gave it. Returns the rotation and translation that take
     source into the target's frame, and the RMS point-to-plane residual of the last
     matched pairs.
     """
@@ -66,6 +69,11 @@ def icp(source: np.ndarray, target: np.ndarray, target_normals: np.ndarray, rota
     tree = cKDTree(target)
     r, t = rotation.copy(), translation.copy()
     r0, t0 = rotation.copy(), translation.copy()
+    centre, reach = np.zeros(3), 1.0
+    if hold_below > 0:
+        middle = source.mean(axis=0)
+        centre = middle @ r0.T + t0
+        reach = float(np.sqrt(np.mean(np.sum((source - middle) ** 2, axis=1))))
     rms = float("inf")
     for limit in max_distances:
         for _ in range(iterations):
@@ -76,10 +84,11 @@ def icp(source: np.ndarray, target: np.ndarray, target_normals: np.ndarray, rota
                 break
             p, q, n = moved[ok], target[idx[ok]], target_normals[idx[ok]]
             residual = np.einsum("ij,ij->i", p - q, n)
-            a = np.column_stack([np.cross(p, n), n])
+            a = np.column_stack([np.cross(p - centre, n) / reach, n])
             b = -residual
             if pairs is not None and len(pairs[0]):
-                s = pairs[0] @ r.T + t
+                placed = pairs[0] @ r.T + t
+                s = (placed - centre) / reach
                 zeros = np.zeros(len(s))
                 skew = [np.column_stack([zeros, s[:, 2], -s[:, 1]]),
                         np.column_stack([-s[:, 2], zeros, s[:, 0]]),
@@ -87,10 +96,11 @@ def icp(source: np.ndarray, target: np.ndarray, target_normals: np.ndarray, rota
                 rows = [np.column_stack([skew[k], np.tile(np.eye(3)[k], (len(s), 1))])
                         for k in range(3)]
                 a = np.vstack([a, *rows])
-                b = np.concatenate([b, *[-(s[:, k] - pairs[1][:, k]) for k in range(3)]])
+                b = np.concatenate([b, *[-(placed[:, k] - pairs[1][:, k]) for k in range(3)]])
             if hold_below > 0:
                 moved_by = r @ r0.T
-                away = np.concatenate([rotation_vector(moved_by), t - moved_by @ t0])
+                away = np.concatenate([reach * rotation_vector(moved_by),
+                                       (t - centre) - moved_by @ (t0 - centre)])
                 values, vectors = np.linalg.eigh(a.T @ a)
                 along = vectors.T @ (a.T @ b)
                 free = values < hold_below * values[-1]
@@ -99,10 +109,11 @@ def icp(source: np.ndarray, target: np.ndarray, target_normals: np.ndarray, rota
                 step = vectors @ along
             else:
                 step, *_ = np.linalg.lstsq(a, b, rcond=None)
-            dr = rodrigues(step[:3])
-            r, t = dr @ r, dr @ t + step[3:]
+            turn = step[:3] / reach
+            dr = rodrigues(turn)
+            r, t = dr @ r, dr @ (t - centre) + centre + step[3:]
             rms = float(np.sqrt(np.mean(residual ** 2)))
-            if np.linalg.norm(step[:3]) < 1e-7 and np.linalg.norm(step[3:]) < 1e-8:
+            if np.linalg.norm(turn) < 1e-7 and np.linalg.norm(step[3:]) < 1e-8:
                 break
     return r, t, rms
 
