@@ -303,8 +303,16 @@ pub fn find_dots_within(
     far_m: f64,
 ) -> Vec<[f64; 3]> {
     let (left, right, width, height) = (&valid.left, &valid.right, valid.width, valid.height);
-    let cl = dot_centres(rectified.0, width, height, Some(&valid.masks.0));
-    let cr = dot_centres(rectified.1, width, height, Some(&valid.masks.1));
+    let (cl, cr) = thread::scope(|scope| {
+        let other = scope.spawn(|| dot_centres(rectified.1, width, height, Some(&valid.masks.1)));
+        let mine = dot_centres(rectified.0, width, height, Some(&valid.masks.0));
+        (
+            mine,
+            other
+                .join()
+                .unwrap_or_else(|e| std::panic::resume_unwind(e)),
+        )
+    });
     let expected = surface_disparity(left, right, surface, &cl);
     let mut matches = Vec::new();
     for (p, e) in cl.iter().zip(&expected) {
