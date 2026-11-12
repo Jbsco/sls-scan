@@ -58,9 +58,10 @@ Given reference dots per frame, `track.fuse` pairs them with a map of dots seen 
 and adds point-to-point terms to ICP, which keeps tracking along smooth panels (D67).
 This serves smooth panels, and complex shapes stay geometry-only.
 
-A pair taken with the pattern light off is posed from its dots alone, and lit frames
-between such pairs keep a start from those poses along directions the surface leaves
-nearly free (D78, D107). ICP turns such a frame about its own points, so a tilt it
+A pair taken with the pattern light off is posed from its dots alone. After a quick
+turn a search over shifts finds its dots up to two spacings off, given dots off a
+regular grid (D110). Lit frames between such pairs keep a start from those poses along
+directions the surface leaves nearly free (D78, D107). ICP turns such a frame about its own points, so a tilt it
 corrects does not slide that frame along a panel (D108). That start follows capture
 time, which keeps it right when a live view leaves lit pairs out (D101).
 
