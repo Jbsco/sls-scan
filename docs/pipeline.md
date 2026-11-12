@@ -65,6 +65,10 @@ directions the surface leaves nearly free (D78, D107). ICP turns such a frame ab
 corrects does not slide that frame along a panel (D108). That start follows capture
 time, which keeps it right when a live view leaves lit pairs out (D101).
 
+Each map dot keeps its place along the surface from light-off pairs and takes its
+height from the fused model once that reaches it, so light-off poses do not tilt
+further along a long panel (D111).
+
 `stereo.find_dots` finds the dots in a pair taken with the pattern light off. It pairs
 left and right dots by the depth that the pattern-lit pair next to it measured (D68). The
 application's ports, `dots::find_dots` and `fuse::Fusion::add_with_dots`, are checked
