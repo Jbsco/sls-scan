@@ -331,12 +331,15 @@ window. The calibration panel captures board pairs, solves the stereo
 calibration through the Python tool and writes those parameters for the next run (D41).
 
 The "Reference dots (smooth panels)" switch takes every 4th stereo pair with the pattern
-light off. The worker finds that pair's dots against the next lit depth frame and poses
-it from them before the lit frame joins, and `sls-scan depth --dark-every 4` does the
-same without the window (D79). Light-off pairs wait beside the lit pair offered after
-them, so each is placed in capture order when newer lit pairs replace older ones, and
-none is dropped for a newer one (D105, D112). Finding one's dots takes about 8 ms of
-the worker's measuring stage (D109).
+light off, or every 2nd to 8th by a count beside it (D114). The worker finds that
+pair's dots against the next lit depth frame and poses it from them before the lit
+frame joins, and `sls-scan depth --dark-every 4` does the same without the window
+(D79).
+
+Light-off pairs wait beside the lit pair offered after them, so each is placed in
+capture order when newer lit pairs replace older ones, and none is dropped for a newer
+one (D105, D112). Finding one's dots takes about 8 ms of the worker's measuring stage
+(D109).
 
 With that switch on, a lit frame starts between light-off poses: on a curve through the
 two before it and the one after. It is fused once that later pair is posed, so the model
