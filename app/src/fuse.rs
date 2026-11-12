@@ -17,6 +17,15 @@ const MIN_PAIRS: usize = 50;
 const DOT_RADIUS: f64 = 0.03;
 /// Fewest dot pairs that join a frame's ICP.
 const MIN_DOT_PAIRS: usize = 3;
+/// A light-off pair's dots are sought up to this many map dot spacings from where its
+/// starting pose puts them.
+const DOT_REACH_SPACINGS: f64 = 2.0;
+/// A dot lies on a map dot within this share of the map's dot spacing.
+const DOT_ON_SPACINGS: f64 = 0.05;
+/// Fewest dots a shift must lay on map dots to be taken.
+const MIN_SHIFTED_DOTS: usize = 4;
+/// Most dots of a light-off pair that each propose shifts.
+const SHIFT_ANCHORS: usize = 8;
 /// Once pairs have been taken with the pattern light off, a lit frame's ICP holds its
 /// starting pose along directions whose normal-equation eigenvalue lies below this share
 /// of the largest, as `track.fuse` takes it.
@@ -793,9 +802,10 @@ impl Fusion {
         }
     }
 
-    /// Pose a pair taken with the pattern light off, which has dots and no points, by the
-    /// rigid fit of its dots to their map dots when three or more pair, and add its dots
-    /// to the map. Returns its pose.
+    /// Pose a pair taken with the pattern light off, which has dots and no points, and
+    /// add its dots to the map. Its start moves to the rigid fit of the pairs
+    /// `match_shifted` finds, when it finds them, and its pose is the rigid fit of its
+    /// dots to their map dots from there when three or more pair. Returns its pose.
     pub fn add_dark(&mut self, dots: &[Vec3]) -> Pose {
         self.add_dark_at(self.poses.len() as f64, dots)
     }
@@ -806,11 +816,17 @@ impl Fusion {
     /// every frame is added in capture order and none is left out.
     pub fn add_dark_at(&mut self, time: f64, dots: &[Vec3]) -> Pose {
         self.predict(time);
+        let fit = |matched: &[(usize, usize)], map: &[Vec3]| {
+            let source: Vec<Vec3> = matched.iter().map(|&(i, _)| dots[i]).collect();
+            let target: Vec<Vec3> = matched.iter().map(|&(_, j)| map[j]).collect();
+            crate::register::rigid_fit(&source, &target)
+        };
+        if let Some(shifted) = self.match_shifted(dots, &self.pose) {
+            self.pose = fit(&shifted, &self.dot_map);
+        }
         let matched = self.match_dots(dots, &self.pose);
         if matched.len() >= MIN_DOT_PAIRS {
-            let source: Vec<Vec3> = matched.iter().map(|&(i, _)| dots[i]).collect();
-            let target: Vec<Vec3> = matched.iter().map(|&(_, j)| self.dot_map[j]).collect();
-            self.pose = crate::register::rigid_fit(&source, &target);
+            self.pose = fit(&matched, &self.dot_map);
         }
         self.place_dots(dots);
         self.fixes.push((time, self.pose));
@@ -826,8 +842,14 @@ impl Fusion {
     /// Match radius: 0.4 of the map's median nearest-neighbour spacing, at most
     /// `DOT_RADIUS`.
     fn dot_radius(&self) -> f64 {
+        self.dot_spacing()
+            .map_or(DOT_RADIUS, |spacing| DOT_RADIUS.min(0.4 * spacing))
+    }
+
+    /// Median distance from each map dot to its nearest neighbour, with two dots or more.
+    fn dot_spacing(&self) -> Option<f64> {
         if self.dot_map.len() < 2 {
-            return DOT_RADIUS;
+            return None;
         }
         let mut nearest: Vec<f64> = self
             .dot_map
@@ -847,12 +869,86 @@ impl Fusion {
             .collect();
         nearest.sort_by(f64::total_cmp);
         let n = nearest.len();
-        let median = if n % 2 == 1 {
+        Some(if n % 2 == 1 {
             nearest[n / 2]
         } else {
             0.5 * (nearest[n / 2 - 1] + nearest[n / 2])
+        })
+    }
+
+    /// Pairs of a frame dot and its map dot when `pose` may put the frame up to
+    /// `DOT_REACH_SPACINGS` of dot spacing from its place. Up to `SHIFT_ANCHORS` dots,
+    /// spread through `dots`, each propose every shift that takes them onto a map dot
+    /// within that reach. The shift that lays most dots on map dots, within
+    /// `DOT_ON_SPACINGS` of spacing, gives the pairs, and of equal shifts the one with
+    /// the least squared distance. None when it lays fewer than `MIN_SHIFTED_DOTS`, or
+    /// when a shift farther than the match radius from it lays more than half as many,
+    /// as a regular grid of dots would.
+    fn match_shifted(&self, dots: &[Vec3], pose: &Pose) -> Option<Vec<(usize, usize)>> {
+        struct Shift {
+            by: Vec3,
+            squares: f64,
+            pairs: Vec<(usize, usize)>,
+        }
+        let spacing = self.dot_spacing()?;
+        let (reach, on) = (DOT_REACH_SPACINGS * spacing, DOT_ON_SPACINGS * spacing);
+        let placed: Vec<Vec3> = dots.iter().map(|d| pose.apply(d)).collect();
+        let anchors: Vec<usize> = if placed.len() <= SHIFT_ANCHORS {
+            (0..placed.len()).collect()
+        } else {
+            (0..SHIFT_ANCHORS)
+                .map(|k| k * (placed.len() - 1) / (SHIFT_ANCHORS - 1))
+                .collect()
         };
-        DOT_RADIUS.min(0.4 * median)
+        let mut tried: Vec<(Vec3, usize)> = Vec::new();
+        let mut best: Option<Shift> = None;
+        for &anchor in &anchors {
+            for onto in &self.dot_map {
+                let by = sub(onto, &placed[anchor]);
+                if dot(&by, &by).sqrt() > reach {
+                    continue;
+                }
+                let mut pairs = Vec::new();
+                let mut squares = 0.0;
+                for (k, q) in placed.iter().enumerate() {
+                    let moved = add(q, &by);
+                    let nearest = self
+                        .dot_map
+                        .iter()
+                        .enumerate()
+                        .map(|(j, m)| {
+                            let e = sub(m, &moved);
+                            (dot(&e, &e), j)
+                        })
+                        .min_by(|a, b| a.0.total_cmp(&b.0));
+                    if let Some((d2, j)) = nearest.filter(|(d2, _)| d2.sqrt() <= on) {
+                        pairs.push((k, j));
+                        squares += d2;
+                    }
+                }
+                tried.push((by, pairs.len()));
+                let better = best.as_ref().is_none_or(|b| {
+                    pairs.len() > b.pairs.len()
+                        || (pairs.len() == b.pairs.len() && squares < b.squares)
+                });
+                if better {
+                    best = Some(Shift { by, squares, pairs });
+                }
+            }
+        }
+        let best = best?;
+        let radius = self.dot_radius();
+        let rival = tried
+            .iter()
+            .filter(|(by, _)| {
+                let e = sub(by, &best.by);
+                dot(&e, &e).sqrt() > radius
+            })
+            .map(|&(_, count)| count)
+            .max()
+            .unwrap_or(0);
+        let count = best.pairs.len();
+        (count >= MIN_SHIFTED_DOTS && count >= 2 * rival).then_some(best.pairs)
     }
 
     /// Pairs of a frame dot and the nearest map dot within `dot_radius` after `pose`.
@@ -1289,6 +1385,53 @@ mod tests {
         assert!(dot(&off, &off).sqrt() < 1e-7, "centroid moved {off:?}");
         let turn = rotation_vector(&pose.rotation);
         assert!(dot(&turn, &turn).sqrt() < 1e-6, "tilt left {turn:?}");
+    }
+
+    #[test]
+    fn light_off_pairs_are_found_far_from_their_start() {
+        let grid = |jitter: f64| -> Vec<Vec3> {
+            (0..77)
+                .map(|k: i32| {
+                    let moved = |n: i32| {
+                        let mixed = (n as u32)
+                            .wrapping_mul(2_654_435_761)
+                            .rotate_left(13)
+                            .wrapping_mul(2_246_822_519);
+                        jitter * (f64::from(mixed >> 8) / f64::from(1u32 << 23) - 1.0)
+                    };
+                    [
+                        f64::from(k % 11) * 0.04 - 0.2 + moved(k),
+                        f64::from(k / 11) * 0.04 - 0.12 + moved(7 * k + 3),
+                        1.0,
+                    ]
+                })
+                .collect()
+        };
+        let slide = |dots: &[Vec3]| -> Vec<f64> {
+            let mut fusion = Fusion::new(0.004);
+            [0.0, 0.02, 0.04, 0.02, 0.0]
+                .iter()
+                .enumerate()
+                .map(|(i, &shift)| {
+                    let seen: Vec<Vec3> = dots
+                        .iter()
+                        .map(|p| [p[0] - shift, p[1], p[2]])
+                        .filter(|p| p[0].abs() < 0.1)
+                        .collect();
+                    fusion.add_dark_at(i as f64, &seen).translation[0]
+                })
+                .collect()
+        };
+        for (i, x) in slide(&grid(0.004)).iter().enumerate() {
+            let truth = [0.0, 0.02, 0.04, 0.02, 0.0][i];
+            assert!((x - truth).abs() < 1e-9, "light-off pair {i} at {x}");
+        }
+        let regular = slide(&grid(0.0));
+        assert!(
+            regular[1].abs() < 1e-9,
+            "regular grid moved to {}",
+            regular[1]
+        );
     }
 
     #[test]
