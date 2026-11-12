@@ -139,6 +139,59 @@ def match_dots(dots: np.ndarray, rotation: np.ndarray, translation: np.ndarray,
     return np.nonzero(ok)[0], idx[ok]
 
 
+DOT_REACH_SPACINGS = 2.0
+DOT_ON_SPACINGS = 0.05
+MIN_SHIFTED_DOTS = 4
+SHIFT_ANCHORS = 8
+
+
+def match_shifted(dots: np.ndarray, rotation: np.ndarray, translation: np.ndarray,
+                  dot_map: np.ndarray, radius: float):
+    """Pair dots (in their frame) with map dots when a pose may put that frame up to
+    DOT_REACH_SPACINGS of the map's dot spacing from its place.
+
+    Up to SHIFT_ANCHORS dots, spread through dots, each propose every shift that takes
+    them onto a map dot within that reach. The shift that lays most dots on map dots,
+    within DOT_ON_SPACINGS of spacing, gives the pairs, and of equal shifts the one with
+    the least squared distance. Returns the indices of paired dots and of their map dots,
+    or None when that shift lays fewer than MIN_SHIFTED_DOTS, or when a shift farther
+    than radius from it lays more than half as many, as a regular grid of dots would.
+    """
+    if len(dots) == 0 or len(dot_map) < 2:
+        return None
+    spacing = dot_spacing(dot_map)
+    reach, on = DOT_REACH_SPACINGS * spacing, DOT_ON_SPACINGS * spacing
+    placed = dots @ rotation.T + translation
+    count = len(placed)
+    anchors = (range(count) if count <= SHIFT_ANCHORS else
+               [k * (count - 1) // (SHIFT_ANCHORS - 1) for k in range(SHIFT_ANCHORS)])
+    tried, best = [], None
+    for anchor in anchors:
+        for onto in dot_map:
+            by = onto - placed[anchor]
+            if np.sqrt(by @ by) > reach:
+                continue
+            apart = (((placed + by)[:, np.newaxis, :] - dot_map[np.newaxis, :, :]) ** 2).sum(axis=2)
+            nearest = apart.argmin(axis=1)
+            least = apart[np.arange(count), nearest]
+            ok = np.sqrt(least) <= on
+            squares = 0.0
+            for value in least[ok]:
+                squares += value
+            laid = int(np.count_nonzero(ok))
+            tried.append((by, laid))
+            if best is None or laid > best[0] or (laid == best[0] and squares < best[1]):
+                best = (laid, squares, by, np.nonzero(ok)[0], nearest[ok])
+    if best is None:
+        return None
+    laid, _, by, mine, theirs = best
+    rival = max((n for other, n in tried if np.sqrt((other - by) @ (other - by)) > radius),
+                default=0)
+    if laid < MIN_SHIFTED_DOTS or laid < 2 * rival:
+        return None
+    return mine, theirs
+
+
 def fixes_around(now: float, fixes: list) -> tuple[list, bool]:
     """Return the light-off poses a frame at time now starts from, and whether a later
     light-off pair could still change that choice. fixes are (time, rotation, translation)
@@ -181,8 +234,9 @@ def fuse(frames, voxel: float = 0.0005, dots=None, dot_radius: float = 0.03,
     with a map dot within 0.4 of the map's median dot spacing, at most dot_radius.
 
     A frame of None is a pair taken with the pattern light off, which has dots and no
-    points. It starts on the curve through the last three such pairs, and its pose is the
-    rigid fit of its dots to their map dots when three or more pair, and otherwise that
+    points. It starts on the curve through the last three such pairs, moved to the rigid
+    fit of the pairs match_shifted finds, when it finds them. Its pose is the rigid fit of
+    its dots to their map dots from there when three or more pair, and otherwise that
     start. Once one has been seen, a lit frame waits for the light-off pairs of
     fixes_around and starts on the curve through their poses, and its ICP holds that start
     along directions with eigenvalues below hold_below times the largest. Lit frames still
@@ -212,6 +266,9 @@ def fuse(frames, voxel: float = 0.0005, dots=None, dot_radius: float = 0.03,
         seen = dots[k] if dots is not None else np.empty((0, 3))
         if points is None:
             if len(dot_map):
+                shifted = match_shifted(seen, r, t, dot_map, radius)
+                if shifted is not None:
+                    r, t = geometry.rigid_fit(seen[shifted[0]], dot_map[shifted[1]])
                 mine, theirs = match_dots(seen, r, t, dot_map, radius)
                 if len(mine) >= 3:
                     r, t = geometry.rigid_fit(seen[mine], dot_map[theirs])

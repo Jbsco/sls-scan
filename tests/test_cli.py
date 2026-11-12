@@ -359,6 +359,20 @@ def test_dot_fusion_vectors_command_eases_a_slide(tmp_path):
     assert np.max(np.abs(poses[:, 9] - truth)) < 0.002
 
 
+def test_dot_fusion_vectors_command_turns_a_slide_back(tmp_path):
+    out = str(tmp_path / "turned")
+    assert cli.main(["dot-fusion-vectors", "--out", out, "--frames", "17", "--slide-mm", "40",
+                     "--dot-pitch-mm", "40", "--dot-jitter-mm", "4", "--dark-every", "4",
+                     "--ease", "--back"]) == 0
+    poses = np.fromfile(os.path.join(out, "poses.bin"), dtype="<f8").reshape(-1, 12)
+    positions = np.array(synthetic.eased_slide(17, 0.04, back=True))
+    truth = positions - positions[0]
+    assert abs(truth[8] - 0.04) < 1e-12 and abs(truth[16]) < 1e-12
+    assert np.max(np.abs(poses[::4, 9] - truth[::4])) < 0.0002
+    assert cli.main(["dot-fusion-vectors", "--out", out, "--frames", "16", "--ease",
+                     "--back"]) == 2
+
+
 def test_dot_fusion_vectors_command_leaves_out_dropped_frames(tmp_path):
     out = str(tmp_path / "dropped")
     assert cli.main(["dot-fusion-vectors", "--out", out, "--frames", "12", "--slide-mm", "77",

@@ -100,7 +100,9 @@ on a stiff bar, a pattern light between them, and a Raspberry Pi 5 as the captur
   on the part.
 - Long smooth panels give tracking nothing to hold along their surface. Removable dots on
   their featureless spans, one every 100 to 150 mm, fix that and peel off afterwards
-  (D64). Shapes with relief need nothing.
+  (D64). Shapes with relief need nothing. Dots go on by hand without measuring: uneven
+  spacing lets tracking find them again after a quick move, and a regular grid does not
+  (D110).
 
 ## Phase-shift option
 

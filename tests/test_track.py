@@ -156,6 +156,32 @@ def test_held_icp_turns_a_tilted_start_about_its_points():
         assert np.linalg.norm(track.rotation_vector(r)) < 2e-4
 
 
+def test_light_off_pairs_are_found_when_a_stroke_turns_back():
+    positions = synthetic.eased_slide(17, 0.04, back=True)
+    clouds, dot_frames, truth = synthetic.panel_frames_at(np.random.default_rng(0), positions,
+                                                          0.04, 0.004)
+    frames = [None if k % 4 == 0 else c for k, c in enumerate(clouds)]
+    seen = [d if k % 4 == 0 else np.empty((0, 3)) for k, d in enumerate(dot_frames)]
+    poses, _ = track.fuse(frames, 0.006, dots=seen)
+    assert max(np.linalg.norm(poses[k][1] - truth[k]) for k in range(0, 17, 4)) < 0.0002
+
+
+def test_shifted_match_finds_hand_placed_dots_and_refuses_a_regular_grid():
+    rng = np.random.default_rng(1)
+    gx, gy = np.meshgrid(np.arange(-0.2, 0.2001, 0.04), np.arange(-0.12, 0.1201, 0.04))
+    grid = np.column_stack([gx.ravel(), gy.ravel(), np.ones(gx.size)])
+    placed = grid + np.column_stack([rng.uniform(-0.004, 0.004, (len(grid), 2)),
+                                     np.zeros(len(grid))])
+    off = np.array([0.03, 0.0, 0.0])
+    for dot_map, found in ((placed, True), (grid, False)):
+        seen = dot_map[np.abs(dot_map[:, 0]) < 0.1]
+        pairs = track.match_shifted(seen - off, np.eye(3), np.zeros(3), dot_map, 0.016)
+        assert (pairs is not None) == found
+        if found:
+            assert len(pairs[0]) == len(seen)
+            assert np.allclose(dot_map[pairs[1]], seen, atol=1e-12)
+
+
 def test_capture_times_hold_tracking_when_lit_frames_are_left_out():
     clouds, dot_frames, truth = synthetic.panel_frames(np.random.default_rng(0), 40, 0.273)
     kept = [k for k in range(40) if k % 4 != 1]
