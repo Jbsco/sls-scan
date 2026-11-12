@@ -643,16 +643,24 @@ def cmd_dot_fusion_vectors(args: argparse.Namespace) -> int:
     every that many-th frame from the first is a light-off pair with dots and no points,
     and lit frames have no dots. With drop, those frames are left out and the others keep
     their capture times, as a live view does with pairs it skips. With ease, the slide
-    starts and ends at rest."""
+    starts and ends at rest, and with back it then returns the same way. With
+    dot_jitter_mm, each dot lies up to that far from its grid place."""
     import json
 
     from . import track
 
     rng, slide, pitch = np.random.default_rng(args.seed), args.slide_mm / 1000.0, \
         args.dot_pitch_mm / 1000.0
+    if args.back and not (args.ease and args.frames % 2):
+        print("--back takes --ease and an odd count of frames", file=sys.stderr)
+        return 2
     if args.ease:
         clouds, dot_frames, _ = synthetic.panel_frames_at(
-            rng, synthetic.eased_slide(args.frames, slide), pitch)
+            rng, synthetic.eased_slide(args.frames, slide, args.back), pitch,
+            args.dot_jitter_mm / 1000.0)
+    elif args.dot_jitter_mm > 0:
+        print("--dot-jitter-mm takes --ease", file=sys.stderr)
+        return 2
     else:
         clouds, dot_frames, _ = synthetic.panel_frames(rng, args.frames, slide, pitch)
     dark = [args.dark_every > 0 and k % args.dark_every == 0 for k in range(len(clouds))]
@@ -1592,6 +1600,10 @@ def main(argv=None) -> int:
                         "capture times")
     p.add_argument("--ease", action="store_true",
                    help="start and end the slide at rest, in place of one speed")
+    p.add_argument("--back", action="store_true",
+                   help="with --ease, return along the slide after its middle frame")
+    p.add_argument("--dot-jitter-mm", type=float, default=0.0,
+                   help="with --ease, move each dot up to this far from its grid place")
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_dot_fusion_vectors)
 
