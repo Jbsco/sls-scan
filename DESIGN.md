@@ -2522,3 +2522,53 @@ Three limits remain as measured, and none is changed here.
 By interpolation alone, a parabola through poses every 4th pair is 4.1 mm off at most
 on a 40 mm stroke of 8 pairs, 1.25 mm of 12 pairs and 0.58 mm of 16 pairs. Poses every
 2nd pair divide each by 7 to 8.
+
+## D111. Map dots seated on the model (2026-11-12)
+
+D108 left light-off poses tilted by up to 2 mrad. We measured where that comes from. On
+D105's run each pair's dots lie within 0.045 mm of their true places across the view,
+and their depth errors tilt one pair's set by 0.28 mrad, as a spread over pairs. So
+2 mrad is built up in the dot map: a pose fitted to map dots takes their error, dots
+first seen join at that pose, and later pairs are fitted to them.
+
+A longer slide shows it grow. We rendered 800 mm at 5 mm per pair along a 1.2 m panel
+with D78's dots, every 4th pair light-off. Light-off tilt read 0.9 mrad at 80 mm,
+3.8 mrad at 400 mm and 6 mrad past 560 mm, and the dot map lay 2 mm off the surface at
+its far end. Lit frames still read 0.14 mm, since ICP sets their tilt and height again.
+That margin ends once a start lies past ICP's first match distance of 4 mm.
+
+`track.seat_dots` and `Fusion::seat_dots` now move each map dot onto the model once. A
+dot goes along the normal of a plane through model points within the larger of 10 mm
+and three voxels. That needs 12 points or more, with their mean within a quarter of
+that distance, so the model lies around the dot. A light-off pair seats dots it pairs
+with before its fit, and dots it adds once the model reaches them. Along the surface a
+dot stays where light-off pairs put it.
+
+Every pair in order, largest and median:
+
+| Run | Code | Light-off camera position | Light-off turn | Light-off view centre at the panel | Lit camera position |
+|---|---|---|---|---|---|
+| 800 mm slide | D110 | 3.418 mm, 1.705 mm | 6.601 mrad, 3.332 mrad | 2.026 mm, 0.201 mm | 0.140 mm, 0.098 mm |
+| 800 mm slide | Now | 1.150 mm, 0.331 mm | 2.211 mrad, 0.626 mrad | 0.119 mm, 0.054 mm | 0.140 mm, 0.093 mm |
+| D105's run | D110 | 1.003 mm, 0.300 mm | 1.972 mrad, 0.613 mrad | 0.044 mm, 0.021 mm | 0.145 mm, 0.045 mm |
+| D105's run | Now | 0.800 mm, 0.189 mm | 1.559 mrad, 0.359 mrad | 0.038 mm, 0.016 mm | 0.145 mm, 0.045 mm |
+
+Along that 800 mm slide, light-off tilt now reads 0.3 to 1.0 mrad at every 80 mm and
+does not grow. `sls-scan fusion-check` finds Rust equal to NumPy on our gate's seven
+sets. Posing a light-off pair takes 0.3 to 2.6 ms where it took 0.1 ms.
+
+Rates at 30 pairs per second are from four runs each, taken in turn on a host busy
+with other work. On that slide 14.2 to 14.4 lit pairs per second passed against 14.2 to
+14.6, and on D105's run 14.6 to 15.2 against 15.0 to 15.2. One earlier-code run of each
+read 11.3 and 11.5 under that load.
+
+What remains is one pair's own dots. Largest values come from a dot near an image
+border: within 30 px of one, dot depth is 0.156 mm off in RMS against 0.02 to 0.04 mm
+elsewhere, since its background window is cut. Leaving such dots out cut that 2.2 mrad
+to 1.4 mrad, and lit frames then turned up to 1.6 mrad against 0.4 mrad. Near that
+slide's end those turns were about the view axis, where border dots have the longest
+arms. We kept them.
+
+On D110's fast run, light-off poses read 0.207 mm at most as before, and 0.132 mm
+median against 0.077 mm. That run plays three light-off images again and again, and we
+take its earlier median as a map fitted to their repeated errors.
