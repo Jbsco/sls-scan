@@ -23,6 +23,8 @@ pub const IN_FLIGHT: usize = 3;
 /// Measured lit pairs the fusing stage keeps for a later light-off pair at most. Beyond
 /// that it fuses the oldest from the light-off poses there are.
 pub const WAITING_AT_MOST: usize = 8;
+/// Most light-off pairs that wait for the measuring stage. Older ones are dropped.
+const DARK_WAITING_AT_MOST: usize = 8;
 
 pub enum Job {
     /// A lit stereo pair: its name, its capture time in seconds, and its left and right
@@ -61,7 +63,9 @@ pub struct LiveFrame {
     pub depth: Result<DepthResult, String>,
     /// Isolated points left out of fusion.
     pub dropped: usize,
-    pub dark: Option<Dark>,
+    /// Light-off pairs taken before this pair and after the lit pair measured before it,
+    /// in capture order.
+    pub darks: Vec<Dark>,
     /// Milliseconds in fusion and in the TSDF volume.
     pub fuse_ms: f64,
     pub tsdf_ms: f64,
@@ -100,13 +104,13 @@ struct DarkPair {
 struct Waiting {
     /// The newest offered lit pair.
     lit: Option<Arrival>,
-    /// The newest offered light-off pair.
-    dark: Option<DarkPair>,
-    /// `dark` was offered after `lit`, so it goes with a later lit pair.
-    dark_after_lit: bool,
+    /// Offered light-off pairs in capture order, at most `DARK_WAITING_AT_MOST`.
+    darks: VecDeque<DarkPair>,
+    /// How many of `darks` were offered before `lit`. Later ones go with a later lit pair.
+    before_lit: usize,
     /// Offered lit pairs replaced by a newer one since a pair was last taken.
     replaced: usize,
-    /// Offered light-off pairs replaced by a newer one.
+    /// Offered light-off pairs dropped for newer ones.
     unused_dark: usize,
 }
 
@@ -115,34 +119,35 @@ impl Waiting {
     fn offer(&mut self, pair: Arrival) -> bool {
         let first = self.lit.replace(pair).is_none();
         self.replaced += usize::from(!first);
-        self.dark_after_lit = false;
+        self.before_lit = self.darks.len();
         first
     }
 
-    /// Keep a light-off pair in place of one still waiting.
+    /// Keep a light-off pair after those still waiting, and drop the oldest of them
+    /// beyond `DARK_WAITING_AT_MOST`.
     fn offer_dark(&mut self, pair: DarkPair) {
-        self.unused_dark += usize::from(self.dark.replace(pair).is_some());
-        self.dark_after_lit = self.lit.is_some();
+        self.darks.push_back(pair);
+        if self.darks.len() > DARK_WAITING_AT_MOST {
+            self.darks.pop_front();
+            self.unused_dark += 1;
+            self.before_lit = self.before_lit.saturating_sub(1);
+        }
     }
 
-    /// The waiting lit pair, the light-off pair offered before it, and the count of lit
-    /// pairs it replaced.
-    fn take(&mut self) -> Option<(Arrival, Option<DarkPair>, usize)> {
+    /// The waiting lit pair, the light-off pairs offered before it in capture order, and
+    /// the count of lit pairs it replaced.
+    fn take(&mut self) -> Option<(Arrival, Vec<DarkPair>, usize)> {
         let lit = self.lit.take()?;
-        let dark = if self.dark_after_lit {
-            None
-        } else {
-            self.dark.take()
-        };
-        self.dark_after_lit = false;
-        Some((lit, dark, std::mem::take(&mut self.replaced)))
+        let darks = self.darks.drain(..self.before_lit).collect();
+        self.before_lit = 0;
+        Some((lit, darks, std::mem::take(&mut self.replaced)))
     }
 
-    /// Drop both waiting pairs, as a reset does.
+    /// Drop every waiting pair, as a reset does.
     fn clear(&mut self) {
         self.lit = None;
-        self.dark = None;
-        self.dark_after_lit = false;
+        self.darks.clear();
+        self.before_lit = 0;
         self.replaced = 0;
     }
 }
@@ -172,8 +177,8 @@ struct Measured {
     depth: Result<DepthResult, String>,
     /// Points to fuse, when the pair was measured in full.
     points: Option<Vec<Vec3>>,
-    /// Name, capture time and dots of a light-off pair before this one.
-    dark: Option<(String, f64, Result<Vec<Vec3>, String>)>,
+    /// Name, capture time and dots of each light-off pair taken before this one.
+    darks: Vec<(String, f64, Result<Vec<Vec3>, String>)>,
 }
 
 /// A measured lit pair in the fusing stage, until it is fused and its result sent.
@@ -245,19 +250,15 @@ impl Pipeline {
         let measuring = thread::spawn(move || {
             let params = measure_params;
             let cameras = (&cameras.left, &cameras.right);
-            let mut pending: Option<DarkPair> = None;
-            let mut unused = 0;
+            let mut pending: Vec<DarkPair> = Vec::new();
             for message in jobs_rx {
                 let (pair, skipped) = match message {
                     Message::Offered => {
                         let taken = shared.waiting.lock().ok().and_then(|mut w| w.take());
-                        let Some((pair, dark, skipped)) = taken else {
+                        let Some((pair, darks, skipped)) = taken else {
                             continue;
                         };
-                        if let Some(dark) = dark {
-                            unused += usize::from(pending.is_some());
-                            pending = Some(dark);
-                        }
+                        pending.extend(darks);
                         (pair, skipped)
                     }
                     Message::Job(Job::Pair(name, time, left, right), arrived, epoch) => {
@@ -273,8 +274,7 @@ impl Pipeline {
                         (pair, 0)
                     }
                     Message::Job(Job::Dark(name, time, left, right), _, epoch) => {
-                        unused += usize::from(pending.is_some());
-                        pending = Some(DarkPair {
+                        pending.push(DarkPair {
                             name,
                             time,
                             epoch,
@@ -284,7 +284,7 @@ impl Pipeline {
                         continue;
                     }
                     Message::Job(Job::Reset, _, epoch) => {
-                        pending = None;
+                        pending.clear();
                         if measured_tx.send(Fuse::Reset(epoch)).is_err() {
                             break;
                         }
@@ -315,14 +315,15 @@ impl Pipeline {
                     )),
                     _ => None,
                 };
-                if pending.as_ref().is_some_and(|d| d.epoch != pair.epoch) {
-                    pending = None;
-                }
-                let dark = points.as_ref().and_then(|points| {
-                    pending.take().map(|d| {
-                        let dots = frame.dots(&params, cameras, &d.left, &d.right, points);
-                        (d.name, d.time, dots)
-                    })
+                pending.retain(|d| d.epoch == pair.epoch);
+                let darks = points.as_ref().map_or_else(Vec::new, |points| {
+                    pending
+                        .drain(..)
+                        .map(|d| {
+                            let dots = frame.dots(&params, cameras, &d.left, &d.right, points);
+                            (d.name, d.time, dots)
+                        })
+                        .collect()
                 });
                 let sent = measured_tx.send(Fuse::Frame(Measured {
                     name: pair.name,
@@ -333,7 +334,7 @@ impl Pipeline {
                     epoch: pair.epoch,
                     depth,
                     points,
-                    dark,
+                    darks,
                 }));
                 shared.busy.store(false, Ordering::Release);
                 if sent.is_err() {
@@ -343,8 +344,8 @@ impl Pipeline {
             let waiting = shared
                 .waiting
                 .lock()
-                .map_or(0, |w| w.unused_dark + usize::from(w.dark.is_some()));
-            unused + usize::from(pending.is_some()) + waiting
+                .map_or(0, |w| w.unused_dark + w.darks.len());
+            pending.len() + waiting
         });
         let fusing = thread::spawn(move || {
             let mut fusion = Fusion::new(FUSION_VOXEL_M);
@@ -453,7 +454,7 @@ impl Pipeline {
                         skipped: measured.skipped,
                         latency_ms: 0.0,
                         dropped: 0,
-                        dark: None,
+                        darks: Vec::new(),
                         fuse_ms: 0.0,
                         tsdf_ms: 0.0,
                         rms: None,
@@ -468,16 +469,16 @@ impl Pipeline {
                 };
                 if let (Ok(d), Some(points)) = (&pair.live.depth, measured.points) {
                     pair.live.dropped = d.points.len() - points.len();
-                    pair.live.dark = measured.dark.map(|(name, at, found)| {
+                    for (name, at, found) in measured.darks {
                         dark_times = [dark_times[1], at];
                         let before = fusion.dots().len();
                         let found = found.map(|dots| (dots.len(), fusion.add_dark_at(at, &dots)));
-                        Dark {
+                        pair.live.darks.push(Dark {
                             name,
                             found,
                             mapped: (before, fusion.dots().len()),
-                        }
-                    });
+                        });
+                    }
                     pair.points = Some(points);
                 }
                 waiting.push_back(pair);
@@ -614,8 +615,11 @@ mod tests {
         }
     }
 
-    fn names(taken: Option<(Arrival, Option<DarkPair>, usize)>) -> Option<(String, String, usize)> {
-        taken.map(|(l, d, n)| (l.name, d.map_or_else(String::new, |d| d.name), n))
+    fn names(taken: Option<(Arrival, Vec<DarkPair>, usize)>) -> Option<(String, String, usize)> {
+        taken.map(|(l, d, n)| {
+            let darks: Vec<String> = d.into_iter().map(|d| d.name).collect();
+            (l.name, darks.join(","), n)
+        })
     }
 
     fn took(lit: &str, dark: &str, replaced: usize) -> Option<(String, String, usize)> {
@@ -660,15 +664,32 @@ mod tests {
     }
 
     #[test]
-    fn newer_light_off_pair_replaces_one_still_waiting() {
+    fn every_light_off_pair_waits_for_a_lit_pair_after_it() {
         let mut waiting = Waiting::default();
         waiting.offer_dark(dark("0"));
         waiting.offer(lit("1"));
+        waiting.offer_dark(dark("2"));
+        waiting.offer(lit("3"));
         waiting.offer_dark(dark("4"));
-        assert_eq!(waiting.unused_dark, 1);
-        assert_eq!(names(waiting.take()), took("1", "", 0));
+        assert_eq!(waiting.unused_dark, 0);
+        assert_eq!(names(waiting.take()), took("3", "0,2", 1));
         waiting.offer(lit("5"));
         assert_eq!(names(waiting.take()), took("5", "4", 0));
+    }
+
+    #[test]
+    fn oldest_light_off_pairs_are_dropped_beyond_the_most_kept() {
+        let mut waiting = Waiting::default();
+        for k in 0..DARK_WAITING_AT_MOST + 2 {
+            waiting.offer_dark(dark(&k.to_string()));
+        }
+        assert_eq!(waiting.unused_dark, 2);
+        waiting.offer(lit("lit"));
+        let Some((_, darks, _)) = waiting.take() else {
+            panic!("no lit pair waits");
+        };
+        assert_eq!(darks.len(), DARK_WAITING_AT_MOST);
+        assert_eq!(darks[0].name, "2");
     }
 
     #[test]
