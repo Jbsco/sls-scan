@@ -2572,3 +2572,32 @@ arms. We kept them.
 On D110's fast run, light-off poses read 0.207 mm at most as before, and 0.132 mm
 median against 0.077 mm. That run plays three light-off images again and again, and we
 take its earlier median as a map fitted to their repeated errors.
+
+## D112. Every light-off pair kept for the measuring stage (2026-11-12)
+
+D105 kept one light-off pair beside a waiting lit pair, and a newer one replaced it.
+With every 2nd pair light-off, D110's fast run lost 3 to 12 of 60 that way in three
+live runs, most at a run's start. Lit frames between those left read up to 5.8 mm off.
+
+A light-off pair costs 8 ms since D109, so none needs to go. `live::Waiting` now keeps
+light-off pairs in capture order, eight at most, and the measuring stage takes all
+those offered before the lit pair it measures. It finds each one's dots against that
+lit pair's points. Our fusing stage poses them in order before that lit pair waits, and
+`LiveFrame::darks` lists them.
+
+Three runs of each at 30 pairs per second, largest and median:
+
+| Run | Code | Light-off pairs placed | Lit pose error between light-off pairs | Result after arrival |
+|---|---|---|---|---|
+| Fast, every 2nd pair light-off | D111 | 48 to 57 of 60 | 5.73 to 5.84 mm, 0.186 to 0.197 mm | 205 to 241 ms |
+| Fast, every 2nd pair light-off | Now | 60 of 60 | 0.505 mm, 0.319 mm | 189 to 192 ms |
+| Fast, every 4th | D111 | 30 of 30 | 1.390 to 1.391 mm, 0.843 to 0.858 mm | 246 to 248 ms |
+| Fast, every 4th | Now | 30 of 30 | 1.389 to 1.390 mm, 0.841 to 0.856 mm | 247 to 255 ms |
+| D105's run | D111 | 45 of 45 | 0.076 to 0.083 mm, 0.044 to 0.050 mm | 249 to 254 ms |
+| D105's run | Now | 45 of 45 | 0.075 to 0.092 mm, 0.045 to 0.048 mm | 249 to 251 ms |
+
+That 0.319 mm median is a camera position. Its lit frames all turn 0.63 mrad one way
+against our first light-off pose, which moves a camera 0.5 m away by 0.32 mm. Their
+view centre at the panel reads 0.145 mm median, against 0.133 to 0.173 mm before. A
+model's first lit frame has nothing to align to, and takes its tilt from light-off
+poses around it.
