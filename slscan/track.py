@@ -128,6 +128,37 @@ def match_dots(dots: np.ndarray, rotation: np.ndarray, translation: np.ndarray,
     return np.nonzero(ok)[0], idx[ok]
 
 
+def fixes_around(now: float, fixes: list) -> tuple[list, bool]:
+    """Return the light-off poses a frame at time now starts from, and whether a later
+    light-off pair could still change that choice. fixes are (time, rotation, translation)
+    in time order. The choice is the two before now and the one after; with one before,
+    that one and the two after; and with none after, the last three."""
+    before = [f for f in fixes if f[0] < now]
+    after = [f for f in fixes if f[0] > now]
+    if len(before) >= 2 and after:
+        return before[-2:] + after[:1], False
+    if len(before) == 1 and after:
+        return before + after[:2], len(after) < 2
+    return before[-3:], True
+
+
+def start_on_curve(now: float, used: list, rotation: np.ndarray, translation: np.ndarray):
+    """Return the pose at time now on the curve through the light-off poses used: a
+    parabola through three, a line through two, and the pose given for fewer."""
+    if len(used) < 2:
+        return rotation, translation
+    reference = used[-1][1]
+    turn, t = np.zeros(3), np.zeros(3)
+    for i, (ti, ri, pi) in enumerate(used):
+        weight = 1.0
+        for j, (tj, _, _) in enumerate(used):
+            if j != i:
+                weight *= (now - tj) / (ti - tj)
+        turn = turn + weight * rotation_vector(ri @ reference.T)
+        t = t + weight * pi
+    return rodrigues(turn) @ reference, t
+
+
 def fuse(frames, voxel: float = 0.0005, dots=None, dot_radius: float = 0.03,
          hold_below: float = 1e-4, times=None) -> tuple[list, np.ndarray]:
     """Track and fuse a sequence of point sets (each in its own camera frame).
@@ -139,47 +170,50 @@ def fuse(frames, voxel: float = 0.0005, dots=None, dot_radius: float = 0.03,
     with a map dot within 0.4 of the map's median dot spacing, at most dot_radius.
 
     A frame of None is a pair taken with the pattern light off, which has dots and no
-    points. Its pose is the rigid fit of its dots to their map dots when three or more
-    pair, and otherwise the pose it starts from. Once such pairs have been seen, each lit
-    frame's ICP holds its starting pose along directions with eigenvalues below hold_below
-    times the largest, and once two have been seen, that pose continues the motion between
-    the last two at constant velocity. With times, each frame's capture time in one unit,
-    that motion continues by time, and without them by frame count, which is right only
-    when no frame between is left out.
+    points. It starts on the curve through the last three such pairs, and its pose is the
+    rigid fit of its dots to their map dots when three or more pair, and otherwise that
+    start. Once one has been seen, a lit frame waits for the light-off pairs of
+    fixes_around and starts on the curve through their poses, and its ICP holds that start
+    along directions with eigenvalues below hold_below times the largest. Lit frames still
+    waiting at the end start from the pairs there are. With times, each frame's capture
+    time in one unit, those curves run by time, and without them by frame count, which is
+    right only when no frame between is left out.
     Returns each frame's pose (rotation, translation into the world) and the fused model
     as voxel averages.
     """
     from . import geometry
 
-    poses, model, raw, fixes = [], None, [], []
+    poses, model, model_normals, raw, fixes, waiting = [None] * len(frames), None, None, [], [], []
     r, t = np.eye(3), np.zeros(3)
     dot_map, dot_counts = np.empty((0, 3)), np.empty(0)
     limit = dot_radius
-    for k, points in enumerate(frames):
-        now = k if times is None else times[k]
-        if len(dot_map) >= 2:
-            dot_radius = min(limit, 0.4 * dot_spacing(dot_map))
-        if len(fixes) >= 2 and fixes[-1][0] > fixes[-2][0]:
-            (k0, r0, t0), (k1, r1, t1) = fixes[-2], fixes[-1]
-            ahead = (now - k1) / (k1 - k0)
-            r = rodrigues(ahead * rotation_vector(r1 @ r0.T)) @ r1
-            t = t1 + ahead * (t1 - t0)
+
+    def at(k):
+        return k if times is None else times[k]
+
+    def place(k):
+        """Pose frame k from its start on the curve through fixes and add its dots and
+        points."""
+        nonlocal r, t, model, model_normals, dot_map, dot_counts
+        points = frames[k]
+        r, t = start_on_curve(at(k), fixes_around(at(k), fixes)[0], r, t)
+        radius = min(limit, 0.4 * dot_spacing(dot_map)) if len(dot_map) >= 2 else limit
         seen = dots[k] if dots is not None else np.empty((0, 3))
         if points is None:
             if len(dot_map):
-                mine, theirs = match_dots(seen, r, t, dot_map, dot_radius)
+                mine, theirs = match_dots(seen, r, t, dot_map, radius)
                 if len(mine) >= 3:
                     r, t = geometry.rigid_fit(seen[mine], dot_map[theirs])
         elif len(points) == 0:
-            poses.append((r, t))
-            continue
+            poses[k] = (r, t)
+            return
         elif model is not None:
-            mine, theirs = match_dots(seen, r, t, dot_map, dot_radius)
+            mine, theirs = match_dots(seen, r, t, dot_map, radius)
             pairs = (seen[mine], dot_map[theirs]) if len(mine) >= 3 else None
             r, t, _ = icp(points, model, model_normals, r, t, pairs=pairs,
                           hold_below=hold_below if fixes else 0.0)
         if len(seen):
-            mine, theirs = match_dots(seen, r, t, dot_map, dot_radius)
+            mine, theirs = match_dots(seen, r, t, dot_map, radius)
             placed = seen @ r.T + t
             for i, j in zip(mine, theirs):
                 dot_map[j] = (dot_map[j] * dot_counts[j] + placed[i]) / (dot_counts[j] + 1)
@@ -187,13 +221,23 @@ def fuse(frames, voxel: float = 0.0005, dots=None, dot_radius: float = 0.03,
             fresh = np.setdiff1d(np.arange(len(seen)), mine)
             dot_map = np.vstack([dot_map, placed[fresh]])
             dot_counts = np.concatenate([dot_counts, np.ones(len(fresh))])
-        poses.append((r, t))
+        poses[k] = (r, t)
         if points is None:
-            fixes.append((now, r, t))
-            continue
+            fixes.append((at(k), r, t))
+            return
         raw.append(points @ r.T + t)
         model = voxel_average(np.vstack(raw), voxel)
         model_normals = normals(model)
+
+    for k, points in enumerate(frames):
+        if points is not None and fixes:
+            waiting.append(k)
+            continue
+        place(k)
+        while waiting and not fixes_around(at(waiting[0]), fixes)[1]:
+            place(waiting.pop(0))
+    for k in waiting:
+        place(k)
     return poses, (model if model is not None else np.empty((0, 3)))
 
 

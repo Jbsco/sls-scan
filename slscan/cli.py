@@ -642,14 +642,19 @@ def cmd_dot_fusion_vectors(args: argparse.Namespace) -> int:
     their NumPy tracking and fusion, for the application's fusion-check. With dark_every,
     every that many-th frame from the first is a light-off pair with dots and no points,
     and lit frames have no dots. With drop, those frames are left out and the others keep
-    their capture times, as a live view does with pairs it skips."""
+    their capture times, as a live view does with pairs it skips. With ease, the slide
+    starts and ends at rest."""
     import json
 
     from . import track
 
-    clouds, dot_frames, _ = synthetic.panel_frames(np.random.default_rng(args.seed), args.frames,
-                                                   args.slide_mm / 1000.0,
-                                                   args.dot_pitch_mm / 1000.0)
+    rng, slide, pitch = np.random.default_rng(args.seed), args.slide_mm / 1000.0, \
+        args.dot_pitch_mm / 1000.0
+    if args.ease:
+        clouds, dot_frames, _ = synthetic.panel_frames_at(
+            rng, synthetic.eased_slide(args.frames, slide), pitch)
+    else:
+        clouds, dot_frames, _ = synthetic.panel_frames(rng, args.frames, slide, pitch)
     dark = [args.dark_every > 0 and k % args.dark_every == 0 for k in range(len(clouds))]
     if args.dark_every > 0:
         clouds = [np.empty((0, 3)) if d else c for c, d in zip(clouds, dark)]
@@ -1585,6 +1590,8 @@ def main(argv=None) -> int:
     p.add_argument("--drop", default="",
                    help="lit frames to leave out, comma separated; the others keep their "
                         "capture times")
+    p.add_argument("--ease", action="store_true",
+                   help="start and end the slide at rest, in place of one speed")
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_dot_fusion_vectors)
 

@@ -362,6 +362,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
     let pipeline = live::Pipeline::start(&setup, frame, preview, || {});
     let mut left: Option<Vec<u8>> = None;
     let (mut sent, mut dark_pairs, mut in_flight) = (0usize, 0usize, 0usize);
+    let in_flight_limit = live::IN_FLIGHT + live::WAITING_AT_MOST * usize::from(dark_every > 0);
     let captured = client::capture(&node, &request, wait, |event| match event {
         Event::Connected(hello) => println!("connected to {} at {node}", hello.node),
         Event::Frame {
@@ -380,7 +381,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
                 } else if pipeline.send(live::Job::Pair(pair, time, l, pixels)) {
                     sent += 1;
                     in_flight += 1;
-                    while in_flight >= live::IN_FLIGHT {
+                    while in_flight >= in_flight_limit {
                         let Ok(live) = pipeline.results.recv() else {
                             break;
                         };
@@ -396,6 +397,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
         eprintln!("capture failed: {e}");
         return ExitCode::FAILURE;
     }
+    pipeline.send(live::Job::Flush);
     while report.frames < sent {
         let Ok(live) = pipeline.results.recv() else {
             break;
@@ -1788,6 +1790,8 @@ fn replay_live(
     };
     let pipeline = live::Pipeline::start(setup, frame, preview, || {});
     let offered = pairs.iter().filter(|p| !p.0.starts_with("dark_")).count();
+    let in_flight_limit =
+        live::IN_FLIGHT + live::WAITING_AT_MOST * usize::from(offered < pairs.len());
     let mut sent = 0usize;
     let mut frames: Vec<live::LiveFrame> = Vec::new();
     let start = Instant::now();
@@ -1799,7 +1803,7 @@ fn replay_live(
                 pipeline.send(live::Job::Dark(name, time, left, right));
                 continue;
             }
-            while sent - frames.len() >= live::IN_FLIGHT {
+            while sent - frames.len() >= in_flight_limit {
                 let Ok(live) = pipeline.results.recv() else {
                     break;
                 };
@@ -1820,6 +1824,7 @@ fn replay_live(
             pipeline.offer(name, time, left, right);
         }
     }
+    pipeline.send(live::Job::Flush);
     while rate.is_none() && frames.len() < sent {
         let Ok(live) = pipeline.results.recv() else {
             break;
@@ -2734,7 +2739,7 @@ fn fusion_check(args: &[String]) -> ExitCode {
     }
     let mut fusion = fuse::Fusion::new(meta.voxel);
     let (mut offset, mut dot_offset) = (0, 0);
-    let mut times = Vec::new();
+    let (mut clouds, mut seen_dots) = (Vec::new(), Vec::new());
     for (k, &count) in meta.counts.iter().enumerate() {
         let points: Vec<fuse::Vec3> = frames[offset..offset + 3 * count]
             .chunks_exact(3)
@@ -2747,20 +2752,24 @@ fn fusion_check(args: &[String]) -> ExitCode {
             .map(|c| [c[0], c[1], c[2]])
             .collect();
         dot_offset += 3 * dot_count;
-        let start = Instant::now();
-        match (
-            meta.dark.get(k).copied().unwrap_or(false),
-            meta.times.get(k),
-        ) {
-            (true, Some(&time)) => fusion.add_dark_at(time, &seen),
-            (true, None) => fusion.add_dark(&seen),
-            (false, Some(&time)) => fusion.add_at(time, &points, &seen),
-            (false, None) => fusion.add_with_dots(&points, &seen),
-        };
-        times.push(start.elapsed().as_secs_f64() * 1000.0);
+        clouds.push(points);
+        seen_dots.push(seen);
     }
+    let sequence: Vec<fuse::Frame> = clouds
+        .iter()
+        .zip(&seen_dots)
+        .enumerate()
+        .map(|(k, (points, seen))| fuse::Frame {
+            time: meta.times.get(k).copied().unwrap_or(k as f64),
+            points: (!meta.dark.get(k).copied().unwrap_or(false)).then_some(points.as_slice()),
+            dots: seen,
+        })
+        .collect();
+    let start = Instant::now();
+    let tracked = fusion.track(&sequence);
+    let total = start.elapsed().as_secs_f64() * 1000.0;
     let (mut translation, mut rotation) = (0.0f64, 0.0f64);
-    for (pose, reference) in fusion.poses.iter().zip(poses.chunks_exact(12)) {
+    for (pose, reference) in tracked.iter().zip(poses.chunks_exact(12)) {
         let r = &pose.rotation;
         let trace: f64 = (0..3)
             .map(|i| (0..3).map(|k| r[i][k] * reference[i * 3 + k]).sum::<f64>())
@@ -2786,11 +2795,10 @@ fn fusion_check(args: &[String]) -> ExitCode {
     }
     let differing = fusion.model().len() + expected.len() - 2 * found;
     let fraction = differing as f64 / expected.len().max(1) as f64;
-    let total: f64 = times.iter().sum();
     println!(
-        "{} frames tracked and fused in {total:.1} ms, {:.1} ms per frame at most, {} model points",
+        "{} frames tracked and fused in {total:.1} ms, {:.1} ms per frame, {} model points",
         meta.counts.len(),
-        times.iter().copied().fold(0.0, f64::max),
+        total / meta.counts.len().max(1) as f64,
         fusion.model().len()
     );
     println!(

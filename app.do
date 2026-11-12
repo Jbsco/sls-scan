@@ -95,6 +95,9 @@ $RUN fusion-check "$SESSION/dense-fusion"
 python3 -m slscan.cli dot-fusion-vectors --out "$SESSION/dropped-fusion" --frames 24 \
     --slide-mm 161 --dark-every 4 --drop 1,5,6,10,13,15,18,22 >/dev/null
 $RUN fusion-check "$SESSION/dropped-fusion"
+python3 -m slscan.cli dot-fusion-vectors --out "$SESSION/eased-fusion" --frames 25 \
+    --slide-mm 150 --dark-every 4 --ease >/dev/null
+$RUN fusion-check "$SESSION/eased-fusion"
 python3 -m slscan.cli tsdf-vectors --out "$SESSION/tsdf" >/dev/null
 $RUN tsdf-check "$SESSION/tsdf"
 python3 -m slscan.cli register-vectors --out "$SESSION/register" >/dev/null

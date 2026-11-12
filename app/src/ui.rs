@@ -730,6 +730,9 @@ impl ScanApp {
                     if self.set == "scan" {
                         self.start_scan(ctx);
                     }
+                    if let Some(worker) = &self.depth {
+                        worker.pipeline.send(Job::Flush);
+                    }
                 }
                 Event::Failed(message) => {
                     self.status = format!("failed: {message}");
