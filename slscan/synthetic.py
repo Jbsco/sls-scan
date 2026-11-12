@@ -769,9 +769,13 @@ def panel_frames(rng: np.random.Generator, frames: int = 24, slide: float = 0.24
                            dot_pitch)
 
 
-def eased_slide(frames: int, slide: float) -> list:
+def eased_slide(frames: int, slide: float, back: bool = False) -> list:
     """Camera positions of a slide of slide metres about 0 that starts and ends at rest,
-    with its highest speed halfway."""
+    with its highest speed halfway. With back, an odd count of frames slides there by its
+    middle frame and returns the same way."""
+    if back:
+        there = eased_slide(frames // 2 + 1, slide)
+        return there + there[-2::-1]
     return [slide * ((1.0 - math.cos(math.pi * i / (frames - 1))) / 2.0 - 0.5)
             for i in range(frames)]
 
