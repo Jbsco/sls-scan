@@ -2466,3 +2466,59 @@ Lit rates rose by more than those 46 ms explain. A lit pair's depth stages read 
 where they read 69 ms at 30 per second, and its TSDF step 16 ms against 44 ms. We did
 not trace why. Mask building wrote two 1.6 MB arrays and their temporaries for every
 light-off pair, which is one candidate.
+
+## D110. Light-off dots found far from their start (2026-11-11)
+
+D107 left a quick stroke reading as one speed. We measured one on a faster stand-in: 11
+poses, so 25 mm strokes of 10 pairs with 1.1 m/s² at their ends, 120 pairs at 30 per
+second, with every 4th or every 2nd pair light-off.
+
+That run lost tracking. A light-off pair starts on a curve continued from the last
+three, and at a turn that start lay 19 mm past its place. A dot pairs with a map dot
+within 0.4 of dot spacing, 14 mm here, so none paired. The start then stood as that
+pair's pose, and its dots joined the map there. With every 2nd pair light-off the same
+happened live once a run's first light-off pairs were replaced by newer ones.
+
+`track.match_shifted` and `Fusion::match_shifted` now look farther. Up to eight dots of
+a pair each propose every shift that takes them onto a map dot within two dot spacings.
+A shift counts dots it lays within 0.05 of spacing of a map dot. One is taken when it
+lays four or more, and twice as many as any shift farther off than the match radius.
+The start moves to a rigid fit of those pairs, and pairing and fit follow as before.
+
+Where a start was near, those pairs are equal to earlier ones: D105's run gives each
+pose equal to its last digit. This needs dots off a regular grid, as hand-placed ones
+are. On a grid, a shift by one spacing lays as many dots, and no shift is taken. Our
+stand-in's dots lie up to 3 mm from a 35 mm grid. At each turn one shift laid every
+dot of a pair, 12 or 15, against 4 at most for any other.
+
+`synthetic.eased_slide` can return along its slide, and `panel_frames_at` can move dots
+off their grid. On a 40 mm stroke there and back in 16 frames, with dots 40 mm apart
+and up to 4 mm off, `track.fuse` put light-off poses 33 to 77 mm off before and within
+0.05 mm now. `dot-fusion-vectors --back --dot-jitter-mm` writes that set, our gate
+checks it, and `sls-scan fusion-check` finds Rust equal to NumPy on all seven sets.
+
+That fast stand-in run, three runs at 30 per second, largest and median:
+
+| Light-off pair | Code | Light-off pose error | Lit pose error between light-off pairs | Lit pairs per second | Result after arrival |
+|---|---|---|---|---|---|
+| Every 4th | D109 | 2338 mm, 489 mm | lost | 14.1 to 14.4 | 256 to 258 ms |
+| Every 4th | Now | 0.207 mm, 0.077 mm | 1.388 to 1.390 mm, 0.843 to 0.850 mm | 15.4 to 15.8 | 243 to 246 ms |
+| Every 2nd | D109 | 3524 to 9223 mm at most | lost | 14.7 | 196 to 198 ms |
+| Every 2nd | Now | 0.486 mm, 0.188 mm | 2.727 mm, 0.145 mm | 14.7 | 195 to 197 ms |
+
+Three limits remain as measured, and none is changed here.
+
+- Lit frames between light-off pairs follow a parabola, 1.39 mm off at most on this
+  stroke. A cubic through two poses before and two after read 1.06 to 1.28 mm at most
+  and 0.38 to 0.41 mm median, with each result 120 ms later.
+- Every 2nd pair light-off read 0.50 mm at most with every pair in order. Live, lit
+  frames 1 to 5 read up to 2.7 mm, where light-off pairs 2 and 4 were replaced. Our
+  window keeps every 4th: that choice also sets how a pattern light blinks, which
+  waits on a rig.
+- After a run's last light-off pair, lit frames continue a curve. This run ended as
+  its head slowed for a turn and those frames read 11.6 mm off, where D105's read
+  0.145 mm.
+
+By interpolation alone, a parabola through poses every 4th pair is 4.1 mm off at most
+on a 40 mm stroke of 8 pairs, 1.25 mm of 12 pairs and 0.58 mm of 16 pairs. Poses every
+2nd pair divide each by 7 to 8.
