@@ -2628,3 +2628,34 @@ Every pair in order:
 
 At 30 pairs per second those runs left out 2, 1 and 3. A stream gives up at most three
 lit pairs at every 4th pair light-off, 0.1 s of a scan.
+
+## D114. Light-off cadence set in the window (2026-11-12)
+
+D77 fixed our window's light-off pair at every 4th. With D109, D112 and D113 in place
+we measured every 2nd, 3rd and 4th pair at 30 pairs per second, three runs each. Two
+stand-in motions were used: D105's 150 mm strokes of 2 s, and D110's 25 mm strokes of
+0.33 s. Lit error is D108's view centre at the panel, largest and median.
+
+| Strokes | Light-off pair | Lit error at the panel | Result after arrival | Lit pairs fused per second, of those arriving |
+|---|---|---|---|---|
+| 150 mm in 2 s | Every 2nd | 0.023 to 0.024 mm, 0.008 to 0.009 mm | 187 ms | 14.6 of 15 |
+| 150 mm in 2 s | Every 3rd | 0.039 to 0.044 mm, 0.021 to 0.024 mm | 234 to 236 ms | 15.3 to 15.4 of 20 |
+| 150 mm in 2 s | Every 4th | 0.044 to 0.050 mm, 0.029 to 0.030 mm | 241 to 245 ms | 14.9 to 15.2 of 22.5 |
+| 25 mm in 0.33 s | Every 2nd | 0.194 mm, 0.130 to 0.145 mm | 187 to 190 ms | 14.5 to 14.7 of 15 |
+| 25 mm in 0.33 s | Every 3rd | 0.610 mm, 0.395 to 0.436 mm | 229 to 236 ms | 15.3 to 15.6 of 20 |
+| 25 mm in 0.33 s | Every 4th | 1.402 mm, 0.828 to 0.905 mm | 242 to 253 ms | 15.1 to 15.4 of 22.5 |
+
+Two runs are left out of those ranges. On the slower strokes, one at every 2nd pair and
+one at every 3rd fused 12.7 and 11.4 lit pairs per second while other work loaded our
+host.
+
+Every 2nd pair follows a head twice as closely on slow strokes and seven times on quick
+ones, and each result comes about 55 ms sooner. Here it costs 2 to 5% of fused lit
+pairs, since this machine fuses about 15 a second whatever arrives. A faster one would
+give up more, with 15 lit pairs arriving at most. It also turns a pattern light off
+every other frame, where every 4th leaves it on for three frames in four. Whether that
+blink suits a person at work is for a rig to show.
+
+Our window now has a count beside its dots switch, from 2 to 8, and it starts at 4 as
+before. `sls-scan depth --dark-every` and `sls-scan capture --dark-every` took a count
+already.
