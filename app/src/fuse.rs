@@ -17,6 +17,11 @@ const MIN_PAIRS: usize = 50;
 const DOT_RADIUS: f64 = 0.03;
 /// Fewest dot pairs that join a frame's ICP.
 const MIN_DOT_PAIRS: usize = 3;
+/// A map dot moves onto the plane of the model points within the larger of this distance
+/// and `DOT_SEAT_VOXELS` voxels of it, when `DOT_SEAT_POINTS` or more lie there.
+const DOT_SEAT_RADIUS: f64 = 0.01;
+const DOT_SEAT_VOXELS: f64 = 3.0;
+const DOT_SEAT_POINTS: usize = 12;
 /// A light-off pair's dots are sought up to this many map dot spacings from where its
 /// starting pose puts them.
 const DOT_REACH_SPACINGS: f64 = 2.0;
@@ -711,6 +716,8 @@ pub struct Fusion {
     pub last_rms: Option<f64>,
     dot_map: Vec<Vec3>,
     dot_counts: Vec<f64>,
+    /// Map dots that `seat_dots` has moved onto the model.
+    dot_seated: Vec<bool>,
     /// Frame time and pose of each pair taken with the pattern light off.
     fixes: Vec<(f64, Pose)>,
 }
@@ -729,6 +736,7 @@ impl Fusion {
             last_rms: None,
             dot_map: Vec::new(),
             dot_counts: Vec::new(),
+            dot_seated: Vec::new(),
             fixes: Vec::new(),
         }
     }
@@ -787,25 +795,92 @@ impl Fusion {
 
     /// Refine paired map dots by averaging with a frame's dots placed at the current pose,
     /// and add its unpaired dots to the map.
-    fn place_dots(&mut self, dots: &[Vec3]) {
+    /// Returns the map dots it paired with, then those it added.
+    fn place_dots(&mut self, dots: &[Vec3]) -> Vec<usize> {
         let mut paired = vec![false; dots.len()];
+        let mut touched = Vec::with_capacity(dots.len());
         for (i, j) in self.match_dots(dots, &self.pose) {
             let placed = self.pose.apply(&dots[i]);
             let n = self.dot_counts[j];
             self.dot_map[j] = [0, 1, 2].map(|k| (self.dot_map[j][k] * n + placed[k]) / (n + 1.0));
             self.dot_counts[j] = n + 1.0;
             paired[i] = true;
+            touched.push(j);
         }
         for (d, _) in dots.iter().zip(&paired).filter(|(_, &p)| !p) {
+            touched.push(self.dot_map.len());
             self.dot_map.push(self.pose.apply(d));
             self.dot_counts.push(1.0);
+            self.dot_seated.push(false);
+        }
+        touched
+    }
+
+    /// Move map dots onto the model's surface: those of `which` not yet seated, each along
+    /// the normal of the plane through the model points within the larger of
+    /// `DOT_SEAT_RADIUS` and `DOT_SEAT_VOXELS` voxels of it. A dot is seated once, when
+    /// `DOT_SEAT_POINTS` or more such points lie around it, with their mean within a
+    /// quarter of that distance. It keeps its place along the surface, which light-off
+    /// pairs measure well, and takes its height from the model, which lit frames measure
+    /// better than a pair's few dots.
+    fn seat_dots(&mut self, which: &[usize]) {
+        let radius = DOT_SEAT_RADIUS.max(DOT_SEAT_VOXELS * self.voxel);
+        let cells = (radius / self.voxel).ceil() as i64;
+        for &j in which {
+            if self.dot_seated[j] {
+                continue;
+            }
+            let q = self.dot_map[j];
+            let centre = Grid::key_of(&q, self.voxel);
+            let mut near: Vec<Vec3> = Vec::new();
+            for dx in -cells..=cells {
+                for dy in -cells..=cells {
+                    for dz in -cells..=cells {
+                        let key = [centre[0] + dx, centre[1] + dy, centre[2] + dz];
+                        let Some((sum, count)) = self.sums.get(&key) else {
+                            continue;
+                        };
+                        let p = sum.map(|v| v / f64::from(*count));
+                        let e = sub(&p, &q);
+                        if dot(&e, &e).sqrt() <= radius {
+                            near.push(p);
+                        }
+                    }
+                }
+            }
+            if near.len() < DOT_SEAT_POINTS {
+                continue;
+            }
+            let count = near.len() as f64;
+            let mean = near
+                .iter()
+                .fold([0.0; 3], |sum, p| add(&sum, p))
+                .map(|v| v / count);
+            let away = sub(&mean, &q);
+            if dot(&away, &away).sqrt() > radius / 4.0 {
+                continue;
+            }
+            let mut cov = [[0.0; 3]; 3];
+            for p in &near {
+                let d = sub(p, &mean);
+                for r in 0..3 {
+                    for c in 0..3 {
+                        cov[r][c] += d[r] * d[c];
+                    }
+                }
+            }
+            let normal = smallest_eigenvector(&cov);
+            let off = dot(&sub(&q, &mean), &normal);
+            self.dot_map[j] = [0, 1, 2].map(|k| q[k] - off * normal[k]);
+            self.dot_seated[j] = true;
         }
     }
 
     /// Pose a pair taken with the pattern light off, which has dots and no points, and
     /// add its dots to the map. Its start moves to the rigid fit of the pairs
     /// `match_shifted` finds, when it finds them, and its pose is the rigid fit of its
-    /// dots to their map dots from there when three or more pair. Returns its pose.
+    /// dots to their map dots from there when three or more pair. Map dots it pairs with
+    /// or adds are moved onto the model once, by `seat_dots`. Returns its pose.
     pub fn add_dark(&mut self, dots: &[Vec3]) -> Pose {
         self.add_dark_at(self.poses.len() as f64, dots)
     }
@@ -825,10 +900,13 @@ impl Fusion {
             self.pose = fit(&shifted, &self.dot_map);
         }
         let matched = self.match_dots(dots, &self.pose);
+        let theirs: Vec<usize> = matched.iter().map(|&(_, j)| j).collect();
+        self.seat_dots(&theirs);
         if matched.len() >= MIN_DOT_PAIRS {
             self.pose = fit(&matched, &self.dot_map);
         }
-        self.place_dots(dots);
+        let touched = self.place_dots(dots);
+        self.seat_dots(&touched);
         self.fixes.push((time, self.pose));
         self.poses.push(self.pose);
         self.pose
@@ -1432,6 +1510,33 @@ mod tests {
             "regular grid moved to {}",
             regular[1]
         );
+    }
+
+    #[test]
+    fn seat_dots_moves_a_dot_onto_the_model_once() {
+        let plate: Vec<Vec3> = (0..10_201)
+            .map(|k| {
+                let x = f64::from(k % 101) * 0.001 - 0.05;
+                [x, f64::from(k / 101) * 0.001 - 0.05, 1.0 + 0.1 * x]
+            })
+            .collect();
+        let mut fusion = Fusion::new(0.0005);
+        fusion.add(&plate);
+        let scale = 0.1f64.hypot(1.0);
+        let normal = [-0.1 / scale, 0.0, 1.0 / scale];
+        let on = [0.01, -0.02, 1.001];
+        let lifted = |by: f64| [0, 1, 2].map(|k| on[k] + by * normal[k]);
+        fusion.dot_map = vec![lifted(0.0003), [0.2, 0.0, 1.02], [0.049, 0.0, 1.0049]];
+        fusion.dot_counts = vec![1.0; 3];
+        fusion.dot_seated = vec![false; 3];
+        fusion.seat_dots(&[0, 1, 2]);
+        assert_eq!(fusion.dot_seated, [true, false, false]);
+        let off = sub(&fusion.dot_map[0], &on);
+        assert!(dot(&off, &off).sqrt() < 1e-12, "seated dot is {off:?} off");
+        fusion.dot_map[0] = lifted(0.0002);
+        fusion.seat_dots(&[0]);
+        let moved = sub(&fusion.dot_map[0], &lifted(0.0002));
+        assert!(dot(&moved, &moved).sqrt() < 1e-15, "seated dot moved again");
     }
 
     #[test]
