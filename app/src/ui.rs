@@ -644,7 +644,7 @@ impl ScanApp {
             let rms = live
                 .rms
                 .map_or_else(String::new, |r| format!(", ICP residual {:.1} µm", r * 1e6));
-            let rms = match live.dark.as_ref().map(|d| (&d.found, d.mapped.1)) {
+            let rms = match live.darks.last().map(|d| (&d.found, d.mapped.1)) {
                 Some((Ok((found, _)), map)) => format!("{rms}, {found} dots seen, {map} in map"),
                 Some((Err(e), _)) => format!("{rms}, dot finding failed: {e}"),
                 None => rms,

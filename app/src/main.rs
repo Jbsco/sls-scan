@@ -171,7 +171,7 @@ impl LiveReport {
     fn take(&mut self, live: live::LiveFrame) {
         self.frames += 1;
         let pair = &live.name;
-        if let Some(dark) = &live.dark {
+        for dark in &live.darks {
             match &dark.found {
                 Ok((found, pose)) => {
                     if dark.mapped.0 > 0 && *found < 3 {
@@ -1862,13 +1862,17 @@ fn replay_live(
         latency / n,
         frames.iter().filter(|f| f.held).count()
     );
-    let placed = frames.iter().filter(|f| f.dark.is_some()).count();
+    let placed: usize = frames.iter().map(|f| f.darks.len()).sum();
     let mut in_order = true;
     let mut last = None;
     for f in &frames {
         let lit = pair_number(&f.name);
-        let dark = f.dark.as_ref().and_then(|d| pair_number(&d.name));
-        in_order &= dark.is_none_or(|d| last < Some(d) && Some(d) < lit) && last < lit;
+        in_order &= last < lit;
+        for dark in &f.darks {
+            let dark = pair_number(&dark.name);
+            in_order &= last < dark && dark < lit;
+            last = dark;
+        }
         last = lit;
     }
     if placed > 0 || !in_order {
