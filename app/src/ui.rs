@@ -92,6 +92,8 @@ pub struct ScanApp {
     depth_status: String,
     depth_frames: usize,
     depth_skipped: usize,
+    /// Lit pairs measured after a stream's last light-off pair, which the model leaves out.
+    depth_left_out: usize,
     mesh_path: String,
     mesh_fill_mm: f64,
     mesh_faces: u32,
@@ -143,6 +145,7 @@ impl Default for ScanApp {
             depth_status: String::new(),
             depth_frames: 0,
             depth_skipped: 0,
+            depth_left_out: 0,
             mesh_path: "data/scan.stl".to_owned(),
             mesh_fill_mm: 10.0,
             mesh_faces: 0,
@@ -197,6 +200,7 @@ impl ScanApp {
         self.pending_left = None;
         self.depth_frames = 0;
         self.depth_skipped = 0;
+        self.depth_left_out = 0;
         if let Some(worker) = &self.depth {
             worker.pipeline.send(Job::Reset);
         }
@@ -649,17 +653,21 @@ impl ScanApp {
                 Some((Err(e), _)) => format!("{rms}, dot finding failed: {e}"),
                 None => rms,
             };
-            let (model, kind) = match live.model {
-                Ok(surface) => (surface, "TSDF surface".to_owned()),
-                Err((e, fused)) => (fused, format!("fused points (TSDF failed: {e})")),
-            };
-            self.fusion_status = format!(
-                "model: {} {kind}, fused in {:.0} ms{rms}, {:.0} ms after arrival",
-                model.len(),
-                live.fuse_ms + live.tsdf_ms,
-                live.latency_ms
-            );
-            self.cloud = model;
+            if live.left_out {
+                self.depth_left_out += 1;
+            } else {
+                let (model, kind) = match live.model {
+                    Ok(surface) => (surface, "TSDF surface".to_owned()),
+                    Err((e, fused)) => (fused, format!("fused points (TSDF failed: {e})")),
+                };
+                self.fusion_status = format!(
+                    "model: {} {kind}, fused in {:.0} ms{rms}, {:.0} ms after arrival",
+                    model.len(),
+                    live.fuse_ms + live.tsdf_ms,
+                    live.latency_ms
+                );
+                self.cloud = model;
+            }
             if let (Ok(d), Some(pose)) = (&live.depth, &live.pose) {
                 let stride = d.points.len().div_ceil(MAX_NEWEST).max(1);
                 self.newest = d
@@ -949,8 +957,12 @@ impl ScanApp {
                 hi[i] = hi[i].max(*v);
             }
         }
+        let left_out = match self.depth_left_out {
+            0 => String::new(),
+            n => format!(", {n} after the last light-off pair left out"),
+        };
         ui.label(format!(
-            "{} points, depth {:.3} to {:.3} m, {} frames, {} skipped",
+            "{} points, depth {:.3} to {:.3} m, {} frames, {} skipped{left_out}",
             self.cloud.len(),
             lo[2],
             hi[2],

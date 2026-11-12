@@ -161,6 +161,8 @@ struct LiveReport {
     fused: bool,
     ok: bool,
     frames: usize,
+    /// Lit pairs after a stream's last light-off pair, which the model leaves out.
+    left_out: usize,
     /// Points of the last pair measured.
     last: Vec<[f64; 3]>,
     /// The last TSDF surface.
@@ -207,7 +209,10 @@ impl LiveReport {
             .iter()
             .map(|(name, ms)| format!("{name} {ms:.1}"))
             .collect();
-        let fused = if self.fused {
+        let fused = if live.left_out {
+            self.left_out += 1;
+            ", left out of the model: no light-off pair after it".to_owned()
+        } else if self.fused {
             let rms = live
                 .rms
                 .map_or_else(String::new, |r| format!(", ICP residual {:.1} µm", r * 1e6));
@@ -356,6 +361,7 @@ fn headless_depth(args: &[String]) -> ExitCode {
         fused: preview.is_none(),
         ok: true,
         frames: 0,
+        left_out: 0,
         last: Vec::new(),
         surface: Vec::new(),
     };
@@ -477,6 +483,12 @@ fn headless_depth(args: &[String]) -> ExitCode {
         println!(
             "{} light-off pairs had no lit depth frame after them",
             finished.unused_dark
+        );
+    }
+    if report.left_out > 0 {
+        println!(
+            "{} lit pairs after the last light-off pair left out of the model",
+            report.left_out
         );
     }
     println!("depth: {sent} pairs, {dark_pairs} light-off");
@@ -1883,6 +1895,12 @@ fn replay_live(
             } else {
                 "out of capture order"
             }
+        );
+    }
+    let left_out = frames.iter().filter(|f| f.left_out).count();
+    if left_out > 0 {
+        println!(
+            "live{pace}: {left_out} lit pairs after the last light-off pair left out of the model"
         );
     }
     let measured = frames.iter().all(|f| f.depth.is_ok());
