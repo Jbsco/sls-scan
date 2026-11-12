@@ -45,13 +45,23 @@ fn box_mean(image: &[u8], width: usize, height: usize, size: usize) -> Vec<u8> {
     }
     let count = (size * size) as u32;
     let mut out = vec![0u8; width * height];
-    for x in 0..width {
-        let at = |y: isize| rows[reflect101(y, height as isize) * width + x];
-        let mut sum: u32 = (-half..=half).map(at).sum();
-        for y in 0..height {
-            out[y * width + x] = ((sum + count / 2) / count) as u8;
-            let y = y as isize;
-            sum = sum + at(y + half + 1) - at(y - half);
+    let row = |y: isize| {
+        let y = reflect101(y, height as isize);
+        &rows[y * width..(y + 1) * width]
+    };
+    let mut sums = vec![0u32; width];
+    for y in -half..=half {
+        for (sum, value) in sums.iter_mut().zip(row(y)) {
+            *sum += value;
+        }
+    }
+    for (y, line) in out.chunks_exact_mut(width).enumerate() {
+        for (mean, sum) in line.iter_mut().zip(&sums) {
+            *mean = ((sum + count / 2) / count) as u8;
+        }
+        let y = y as isize;
+        for ((sum, enters), leaves) in sums.iter_mut().zip(row(y + half + 1)).zip(row(y - half)) {
+            *sum = *sum + enters - leaves;
         }
     }
     out
