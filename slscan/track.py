@@ -139,6 +139,38 @@ def match_dots(dots: np.ndarray, rotation: np.ndarray, translation: np.ndarray,
     return np.nonzero(ok)[0], idx[ok]
 
 
+DOT_SEAT_RADIUS = 0.01
+DOT_SEAT_VOXELS = 3.0
+DOT_SEAT_POINTS = 12
+
+
+def seat_dots(dot_map: np.ndarray, seated: np.ndarray, which, model, voxel: float) -> None:
+    """Move map dots onto the model's surface, in place: those of which not yet seated,
+    each along the normal of the plane through the model points within the larger of
+    DOT_SEAT_RADIUS and DOT_SEAT_VOXELS voxels of it. A dot is seated once, when
+    DOT_SEAT_POINTS or more such points lie around it, with their mean within a quarter
+    of that distance. It keeps its place along the surface, which light-off pairs measure
+    well, and takes its height from the model, which lit frames measure better than a
+    pair's few dots."""
+    which = [j for j in which if not seated[j]]
+    if model is None or len(model) < DOT_SEAT_POINTS or not which:
+        return
+    from scipy.spatial import cKDTree
+
+    radius = max(DOT_SEAT_RADIUS, DOT_SEAT_VOXELS * voxel)
+    tree = cKDTree(model)
+    for j in which:
+        near = model[sorted(tree.query_ball_point(dot_map[j], radius))]
+        if len(near) < DOT_SEAT_POINTS:
+            continue
+        mean = near.mean(axis=0)
+        if np.linalg.norm(mean - dot_map[j]) > radius / 4.0:
+            continue
+        normal = np.linalg.svd(near - mean, full_matrices=False)[2][2]
+        dot_map[j] = dot_map[j] - ((dot_map[j] - mean) @ normal) * normal
+        seated[j] = True
+
+
 DOT_REACH_SPACINGS = 2.0
 DOT_ON_SPACINGS = 0.05
 MIN_SHIFTED_DOTS = 4
@@ -237,7 +269,8 @@ def fuse(frames, voxel: float = 0.0005, dots=None, dot_radius: float = 0.03,
     points. It starts on the curve through the last three such pairs, moved to the rigid
     fit of the pairs match_shifted finds, when it finds them. Its pose is the rigid fit of
     its dots to their map dots from there when three or more pair, and otherwise that
-    start. Once one has been seen, a lit frame waits for the light-off pairs of
+    start. Map dots it pairs with or adds are moved onto the model once, by seat_dots.
+    Once one has been seen, a lit frame waits for the light-off pairs of
     fixes_around and starts on the curve through their poses, and its ICP holds that start
     along directions with eigenvalues below hold_below times the largest. Lit frames still
     waiting at the end start from the pairs there are. With times, each frame's capture
@@ -250,7 +283,7 @@ def fuse(frames, voxel: float = 0.0005, dots=None, dot_radius: float = 0.03,
 
     poses, model, model_normals, raw, fixes, waiting = [None] * len(frames), None, None, [], [], []
     r, t = np.eye(3), np.zeros(3)
-    dot_map, dot_counts = np.empty((0, 3)), np.empty(0)
+    dot_map, dot_counts, dot_seated = np.empty((0, 3)), np.empty(0), np.empty(0, dtype=bool)
     limit = dot_radius
 
     def at(k):
@@ -259,7 +292,7 @@ def fuse(frames, voxel: float = 0.0005, dots=None, dot_radius: float = 0.03,
     def place(k):
         """Pose frame k from its start on the curve through fixes and add its dots and
         points."""
-        nonlocal r, t, model, model_normals, dot_map, dot_counts
+        nonlocal r, t, model, model_normals, dot_map, dot_counts, dot_seated
         points = frames[k]
         r, t = start_on_curve(at(k), fixes_around(at(k), fixes)[0], r, t)
         radius = min(limit, 0.4 * dot_spacing(dot_map)) if len(dot_map) >= 2 else limit
@@ -270,6 +303,7 @@ def fuse(frames, voxel: float = 0.0005, dots=None, dot_radius: float = 0.03,
                 if shifted is not None:
                     r, t = geometry.rigid_fit(seen[shifted[0]], dot_map[shifted[1]])
                 mine, theirs = match_dots(seen, r, t, dot_map, radius)
+                seat_dots(dot_map, dot_seated, theirs, model, voxel)
                 if len(mine) >= 3:
                     r, t = geometry.rigid_fit(seen[mine], dot_map[theirs])
         elif len(points) == 0:
@@ -289,6 +323,10 @@ def fuse(frames, voxel: float = 0.0005, dots=None, dot_radius: float = 0.03,
             fresh = np.setdiff1d(np.arange(len(seen)), mine)
             dot_map = np.vstack([dot_map, placed[fresh]])
             dot_counts = np.concatenate([dot_counts, np.ones(len(fresh))])
+            dot_seated = np.concatenate([dot_seated, np.zeros(len(fresh), dtype=bool)])
+            if points is None:
+                added = range(len(dot_map) - len(fresh), len(dot_map))
+                seat_dots(dot_map, dot_seated, [*theirs, *added], model, voxel)
         poses[k] = (r, t)
         if points is None:
             fixes.append((at(k), r, t))

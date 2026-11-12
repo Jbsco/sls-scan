@@ -182,6 +182,21 @@ def test_shifted_match_finds_hand_placed_dots_and_refuses_a_regular_grid():
             assert np.allclose(dot_map[pairs[1]], seen, atol=1e-12)
 
 
+def test_seat_dots_moves_a_dot_onto_the_model_once():
+    gx, gy = np.meshgrid(np.arange(-0.05, 0.0501, 0.001), np.arange(-0.05, 0.0501, 0.001))
+    model = np.column_stack([gx.ravel(), gy.ravel(), 1.0 + 0.1 * gx.ravel()])
+    normal = np.array([-0.1, 0.0, 1.0]) / np.hypot(0.1, 1.0)
+    on = np.array([0.01, -0.02, 1.001])
+    dot_map = np.array([on + 0.0003 * normal, [0.2, 0.0, 1.02], [0.049, 0.0, 1.0049]])
+    seated = np.zeros(3, dtype=bool)
+    track.seat_dots(dot_map, seated, [0, 1, 2], model, 0.0005)
+    assert seated.tolist() == [True, False, False]
+    assert np.allclose(dot_map[0], on, atol=1e-12)
+    dot_map[0] += 0.0002 * normal
+    track.seat_dots(dot_map, seated, [0], model, 0.0005)
+    assert np.allclose(dot_map[0], on + 0.0002 * normal, atol=1e-12)
+
+
 def test_capture_times_hold_tracking_when_lit_frames_are_left_out():
     clouds, dot_frames, truth = synthetic.panel_frames(np.random.default_rng(0), 40, 0.273)
     kept = [k for k in range(40) if k % 4 != 1]
