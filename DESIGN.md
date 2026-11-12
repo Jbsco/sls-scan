@@ -2601,3 +2601,30 @@ against our first light-off pose, which moves a camera 0.5 m away by 0.32 mm. Th
 view centre at the panel reads 0.145 mm median, against 0.133 to 0.173 mm before. A
 model's first lit frame has nothing to align to, and takes its tilt from light-off
 poses around it.
+
+## D113. Lit pairs after a stream's last light-off pair left out (2026-11-12)
+
+On a smooth panel a lit frame takes its place along the surface from light-off poses
+on both sides (D107). After a stream's last light-off pair none follows, and D107
+continued a curve from the last three. D110 measured 11.6 mm that way on a run that
+ended as its head slowed for a turn, against 0.145 mm on D105's.
+
+At a stream's end, which callers mark with `Job::Flush`, our fusing stage now leaves
+such pairs out of the model. `Fusion::after_last_light_off` tells them: light-off pairs
+have been posed, and none after that pair. Each still gives a result with its depth
+frame and `LiveFrame::left_out` set. The window and both commands keep their model,
+and count those pairs. With dots off nothing is left out.
+
+`track.fuse` and `Fusion::track` still place every frame of a sequence, which
+`sls-scan fusion-check` compares.
+
+Every pair in order:
+
+| Run | Lit pairs left out | Largest lit pose error, D112 | Now |
+|---|---|---|---|
+| Fast, every 4th pair light-off | 3 | 11.599 mm | 1.387 mm |
+| Fast, every 2nd pair light-off | 1 | 1.123 mm | 0.504 mm |
+| D105's run | 3 | 0.145 mm | 0.079 mm |
+
+At 30 pairs per second those runs left out 2, 1 and 3. A stream gives up at most three
+lit pairs at every 4th pair light-off, 0.1 s of a scan.

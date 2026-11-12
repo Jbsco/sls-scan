@@ -340,7 +340,8 @@ the worker's measuring stage (D109).
 
 With that switch on, a lit frame starts between light-off poses: on a curve through the
 two before it and the one after. It is fused once that later pair is posed, so the model
-follows the head about 140 ms later than without dots (D107).
+follows the head about 140 ms later than without dots (D107). Lit pairs after a stream's
+last light-off pair are measured and left out of the model (D113).
 
 On a software adapter such as lavapipe, the worker and `sls-scan depth` run previews in
 place of depth frames and leave them out of the fused model (D50). Each depth frame drops

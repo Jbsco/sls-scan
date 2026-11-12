@@ -765,6 +765,12 @@ impl Fusion {
         !self.fixes.is_empty() && self.fixes_around(time).1
     }
 
+    /// Whether light-off pairs have been posed and none of them after `time`, so a lit
+    /// frame captured then has no light-off pose after it to start from.
+    pub fn after_last_light_off(&self, time: f64) -> bool {
+        self.fixes.last().is_some_and(|(last, _)| *last < time)
+    }
+
     /// Move to the starting pose of a frame at `time`, on the curve through the light-off
     /// poses of `fixes_around`: a parabola through three and a line through two. With
     /// fewer the pose stays.
@@ -1537,6 +1543,21 @@ mod tests {
         fusion.seat_dots(&[0]);
         let moved = sub(&fusion.dot_map[0], &lifted(0.0002));
         assert!(dot(&moved, &moved).sqrt() < 1e-15, "seated dot moved again");
+    }
+
+    #[test]
+    fn lit_frames_after_the_last_light_off_pair_are_told_apart() {
+        let dots: Vec<Vec3> = (0..12)
+            .map(|k| [f64::from(k % 4) * 0.03, f64::from(k / 4) * 0.03, 1.0])
+            .collect();
+        let mut fusion = Fusion::new(0.004);
+        assert!(!fusion.after_last_light_off(1.0));
+        fusion.add_dark_at(4.0, &dots);
+        assert!(fusion.after_last_light_off(5.0));
+        assert!(!fusion.after_last_light_off(3.0));
+        fusion.add_dark_at(8.0, &dots);
+        assert!(!fusion.after_last_light_off(5.0));
+        assert!(fusion.after_last_light_off(9.0));
     }
 
     #[test]

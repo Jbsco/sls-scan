@@ -66,6 +66,9 @@ pub struct LiveFrame {
     /// Light-off pairs taken before this pair and after the lit pair measured before it,
     /// in capture order.
     pub darks: Vec<Dark>,
+    /// Measured and not fused: its stream ended with no light-off pair posed after it,
+    /// so nothing places it along a smooth surface.
+    pub left_out: bool,
     /// Milliseconds in fusion and in the TSDF volume.
     pub fuse_ms: f64,
     pub tsdf_ms: f64,
@@ -353,11 +356,16 @@ impl Pipeline {
             let size = (params.coarse.width, params.coarse.height);
             let mut epoch = 0;
             let mut waiting: VecDeque<Unfused> = VecDeque::new();
-            // Fuse a pair that has points, and send its result. False once nobody takes
-            // results.
-            let complete = |fusion: &mut Fusion, volume: &mut tsdf::Live, pair: Unfused| {
+            // Fuse a pair that has points, unless `at_end` and no light-off pair was posed
+            // after it, and send its result. False once nobody takes results.
+            let complete = |fusion: &mut Fusion,
+                            volume: &mut tsdf::Live,
+                            pair: Unfused,
+                            at_end: bool| {
                 let mut live = pair.live;
-                if let Some(points) = &pair.points {
+                live.left_out =
+                    at_end && pair.points.is_some() && fusion.after_last_light_off(pair.time);
+                if let Some(points) = pair.points.as_ref().filter(|_| !live.left_out) {
                     let start = Instant::now();
                     let pose = fusion.add_at(pair.time, points, &[]);
                     live.fuse_ms = start.elapsed().as_secs_f64() * 1000.0;
@@ -381,8 +389,9 @@ impl Pipeline {
             };
             // Complete waiting pairs from the oldest on: down to `keep` of them, then those
             // that no later light-off pair would start differently, and those captured
-            // before `passed`, which two light-off pairs have followed. After each one,
-            // take what the measuring stage has ready into `inbox`, so that stage goes on.
+            // before `passed`, which two light-off pairs have followed. An infinite
+            // `passed` is a stream's end. After each one, take what the measuring stage
+            // has ready into `inbox`, so that stage goes on.
             let release = |fusion: &mut Fusion,
                            volume: &mut tsdf::Live,
                            waiting: &mut VecDeque<Unfused>,
@@ -396,7 +405,7 @@ impl Pipeline {
                     }
                     let done = waiting
                         .pop_front()
-                        .is_none_or(|pair| complete(fusion, volume, pair));
+                        .is_none_or(|pair| complete(fusion, volume, pair, passed.is_infinite()));
                     if !done {
                         return false;
                     }
@@ -455,6 +464,7 @@ impl Pipeline {
                         latency_ms: 0.0,
                         dropped: 0,
                         darks: Vec::new(),
+                        left_out: false,
                         fuse_ms: 0.0,
                         tsdf_ms: 0.0,
                         rms: None,
